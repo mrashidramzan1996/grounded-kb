@@ -15,12 +15,12 @@ _SECRETS = [
     ("stripe-live-key", r"sk_live_[0-9A-Za-z]{16,}"),
     ("github-token", r"(?:gh[pousr]_[0-9A-Za-z]{36,}|github_pat_[0-9A-Za-z_]{22,})"),
 ]
-_EMAIL = r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,7}"
+_EMAIL_LOCAL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+-")
+_EMAIL_DOMAIN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-")
+EMAIL_SIDE_CAP = 512  # characters taken either side of an '@'; a longer token is masked up to the cap
 _PRIVATE_KEY = re.compile(r"-----BEGIN (?:[A-Z]+ ){0,3}PRIVATE KEY-----")
 _PRIVATE_KEY_END = re.compile(r"-----END (?:[A-Z]+ ){0,3}PRIVATE KEY-----")
-_MASK = re.compile(
-    "|".join([f"(?P<s{i}>{rx})" for i, (_, rx) in enumerate(_SECRETS)] + [f"(?P<email>{_EMAIL})"]), re.DOTALL
-)
+_SECRET = re.compile("|".join(f"(?P<s{i}>{rx})" for i, (_, rx) in enumerate(_SECRETS)))
 _INJECTION = re.compile(
     r"ignore (?:all|any|previous|your) instructions|disregard (?:the|all|previous)|you are now|system prompt",
     re.IGNORECASE,
@@ -60,33 +60,60 @@ def _private_keys(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _email_spans(text: str, lo: int, hi: int) -> list[tuple[int, int]]:
+    """Tokens around each '@' in text[lo:hi]: linear, and over-long addresses are cut at the cap, never skipped."""
+    spans, last, at = [], lo, text.find("@", lo, hi)
+    while at != -1:
+        left = at
+        while left > last and at - left < EMAIL_SIDE_CAP and text[left - 1] in _EMAIL_LOCAL:
+            left -= 1
+        right = at + 1
+        while right < hi and right - at <= EMAIL_SIDE_CAP and text[right] in _EMAIL_DOMAIN:
+            right += 1
+        domain = text[at + 1 : right].rstrip(".-")
+        if left < at and any(domain.split(".")[1:]):
+            spans.append((left, at + 1 + len(domain)))
+            last = spans[-1][1]
+        at = text.find("@", max(at + 1, last), hi)
+    return spans
+
+
 def guard(text: str) -> GuardResult:
     keys = _private_keys(text)
-    found: list[tuple[int, int, str, str | None]] = [(s, e, "[SECRET:private-key]", "private-key") for s, e in keys]
-    emails: dict[str, int] = {}
-    key_at = 0
-    for m in _MASK.finditer(text):
-        while key_at < len(keys) and keys[key_at][1] <= m.start():
-            key_at += 1
-        if key_at < len(keys) and keys[key_at][0] < m.end():  # inside a private key block
-            continue
-        if m.group("email"):
-            found.append((m.start(), m.end(), "", None))
-        else:
-            kind = next(k for i, (k, _) in enumerate(_SECRETS) if m.group(f"s{i}"))
-            found.append((m.start(), m.end(), f"[SECRET:{kind}]", kind))
+    found: list[tuple[int, int, str | None]] = [(s, e, "private-key") for s, e in keys]
+    gaps, pos = [], 0
+    for s, e in keys:
+        gaps.append((pos, s))
+        pos = e
+    gaps.append((pos, len(text)))
+    for lo, hi in gaps:  # each gap is scanned on its own, so a match is cut at a key block's edge
+        cands: list[tuple[int, int, str | None]] = []
+        for m in _SECRET.finditer(text, lo, hi):
+            cands.append((m.start(), m.end(), next(k for i, (k, _) in enumerate(_SECRETS) if m.group(f"s{i}"))))
+        cands += [(s, e, None) for s, e in _email_spans(text, lo, hi)]
+        cands.sort(key=lambda c: (c[0], c[2] is None))
+        merged: list[list] = []
+        for s, e, kind in cands:
+            if merged and s < merged[-1][1]:  # overlapping matches become one mask
+                merged[-1][1] = max(merged[-1][1], e)
+                merged[-1][2] = merged[-1][2] or kind
+            else:
+                merged.append([s, e, kind])
+        found += [tuple(c) for c in merged]  # type: ignore[misc]
     found.sort(key=lambda f: f[0])
 
     out: list[str] = []
     edits: list[tuple[int, int, int]] = []
     kinds: set[str] = set()
+    emails: dict[str, int] = {}
     email_count = secret_count = last = 0
-    for start, end, mask, kind in found:
+    for start, end, kind in found:
         if kind is None:
             n = emails.setdefault(text[start:end].lower(), len(emails) + 1)
             mask = f"[EMAIL-{n}]"
             email_count += 1
         else:
+            mask = f"[SECRET:{kind}]"
             kinds.add(kind)
             secret_count += 1
         out.append(text[last:start])

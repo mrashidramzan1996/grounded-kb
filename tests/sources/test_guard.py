@@ -59,10 +59,32 @@ def test_guard_is_linear_on_pathological_input():
         assert time.perf_counter() - t < 1
 
 
-def test_email_not_matched_from_mid_token_and_bounded():
-    r = guard("x" * 100 + "@acme.example")
-    assert r.counts.emails == 0 or "[EMAIL-1]" in r.text
-    assert guard("a@b.example").text == "[EMAIL-1]"
+def test_long_local_part_is_masked():
+    local = "x" * 100
+    r = guard(f"mail {local}@acme.example now")
+    assert r.text == "mail [EMAIL-1] now" and local not in r.text
+
+
+def test_long_domain_label_is_masked():
+    label = "y" * 70
+    r = guard(f"a@{label}.example!")
+    assert r.text == "[EMAIL-1]!" and label not in r.text
+
+
+def test_over_cap_token_is_masked_up_to_the_cap():
+    r = guard("z" * 2000 + "@acme.example")
+    assert "[EMAIL-1]" in r.text and "@acme.example" not in r.text
+
+
+def test_email_next_to_private_key_is_masked():
+    k = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"
+    r = guard(f"a@b.com{k}c@d.org")
+    assert r.text == "[EMAIL-1][SECRET:private-key][EMAIL-2]" and r.counts.emails == 2
+
+
+def test_trailing_sentence_dot_is_kept_and_bare_at_is_not_an_email():
+    assert guard("write a@b.example.").text == "write [EMAIL-1]."
+    assert guard("@home and a@b and x@.").text == "@home and a@b and x@."
 
 
 def test_multiple_private_keys_each_masked():
