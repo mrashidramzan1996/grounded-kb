@@ -5,7 +5,6 @@ import stat
 import pytest
 
 from helpers import git, invoke, make_git_repo
-from kb import __version__
 from kb.config.load import load_config
 from kb.init.scaffold import init_repo
 
