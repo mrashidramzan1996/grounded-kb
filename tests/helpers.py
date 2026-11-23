@@ -321,3 +321,28 @@ def payload(fixtures: Path, name: str) -> str:
 
 
 SETTINGS_PATH = {"claude-code": ".claude/settings.json", "codex": ".codex/hooks.json"}
+
+
+# --- clean-KB helpers --------------------------------------------------------------------------
+
+SECRET_KEY = "AKIAIOSFODNN7EXAMPLE"
+
+
+def remove_secret_paragraph(path: Path) -> None:
+    """Fix the original: drop the paragraph holding the planted example key."""
+    from docx import Document
+
+    doc = Document(str(path))
+    hits = [p for p in doc.paragraphs if SECRET_KEY in p.text]
+    assert len(hits) == 1
+    hits[0]._element.getparent().remove(hits[0]._element)
+    doc.save(str(path))
+
+
+def clean_drafted_acme(repo: Path) -> None:
+    """Resolve what kb check reports on the drafted acme repo: drop the invented REQ-F-005 and the secret."""
+    (repo / "kb/requirements/REQ-F-005.yaml").unlink()
+    triage = repo / "kb/sources/SRC-pricing-spec-v3/triage.yaml"
+    triage.write_text(triage.read_text().replace("[REQ-F-005]", '"none: annual pricing is drafted elsewhere"'))
+    remove_secret_paragraph(repo / "docs/architecture-notes.docx")
+    assert invoke(repo, "source", "sync").exit_code == 0

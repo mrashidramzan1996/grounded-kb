@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from helpers import apply_drafts, git, invoke
+from helpers import apply_drafts, clean_drafted_acme, git, invoke
 from kb.gitfiles import GitError
 from kb.baseline import BaselineError, freeze_baseline
 from kb.records.repo import KbRepo
@@ -12,7 +12,9 @@ from kb.yamlio import load_yaml_strict
 
 @pytest.fixture
 def committed(acme_repo_ingested, fixtures):
+    """The drafted acme repo with what kb check reports resolved, committed on main."""
     apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    clean_drafted_acme(acme_repo_ingested)
     git(acme_repo_ingested, "add", "-A")
     git(acme_repo_ingested, "commit", "-m", "drafts")
     return acme_repo_ingested
@@ -156,3 +158,29 @@ def test_baseline_path_is_a_file(committed):
     git(committed, "commit", "-m", "f")
     with pytest.raises(BaselineError):
         freeze_baseline(committed, "v1")
+
+
+# --- I2: a baseline is frozen only from a clean default branch ----------------------------------
+
+def test_freeze_refuses_gate_errors(committed):
+    (committed / "kb/requirements/REQ-F-009.yaml").write_text(
+        "id: REQ-F-009\nstatement: Invented.\nmodules: [MOD-billing]\n"
+        "evidence:\n  quotes:\n  - source: SRC-pricing-spec-v3#seg-10\n    text: Nothing like this is in the spec.\n"
+    )
+    git(committed, "add", "-A")
+    git(committed, "commit", "-m", "invented")
+    with pytest.raises(BaselineError, match="quote.not_found"):
+        freeze_baseline(committed, "v1")
+    assert not (committed / "kb/baseline").exists() and git(committed, "tag", "-l") == ""
+    out = invoke(committed, "baseline", "freeze", "v1")
+    assert out.exit_code == 2 and "quote.not_found" in out.stderr and "Traceback" not in out.output
+
+
+def test_freeze_refuses_off_the_default_branch_unless_allowed(committed):
+    git(committed, "checkout", "-q", "-b", "feature")
+    git(committed, "commit", "--allow-empty", "-m", "unmerged")
+    with pytest.raises(BaselineError, match="default branch"):
+        freeze_baseline(committed, "v1")
+    out = invoke(committed, "baseline", "freeze", "v1")
+    assert out.exit_code == 2 and "--allow-branch" in out.stderr
+    assert invoke(committed, "baseline", "freeze", "v1", "--allow-branch").exit_code == 0

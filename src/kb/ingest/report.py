@@ -15,7 +15,7 @@ from kb.gates.ids import id_gate
 from kb.gates.quotes import missing_evidence, quote_gate
 from kb.gates.sources import STORE_FILE, bad_segment_ids, recover_hint, sha256_file, source_gate, stored_ids
 from kb.gitfiles import file_at, read_tree_files
-from kb.issues import Issue
+from kb.issues import Issue, new_since
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
@@ -56,15 +56,20 @@ def _base_config(root: Path, ref: str) -> KbConfig | None:
 
 
 def _config_issues(head: KbConfig, base: KbConfig | None) -> list[Issue]:
-    """Ingest may only add modules: everything else in the config must be as it was at base."""
+    """Ingest may only add modules, without paths: everything else in the config must be as it was at base."""
+    known = {m.id for m in base.modules} if base else set()
+    issues = [
+        Issue("ingest.module_paths", f"{m.id}: modules are proposed without paths; paths come from `kb module paths {m.id} --accept`",
+              path=CONFIG, record=m.id)
+        for m in head.modules if m.id not in known and m.paths
+    ]
     if base is None:
-        return []
-    known = {m.id for m in base.modules}
+        return issues
     now = head.model_dump()
     now["modules"] = [m for m in now["modules"] if m["id"] in known]
-    if now == base.model_dump():
-        return []
-    return [Issue("ingest.config_changed", f"{CONFIG} changed other than by adding modules; ingest may only add modules", path=CONFIG)]
+    if now != base.model_dump():
+        issues.append(Issue("ingest.config_changed", f"{CONFIG} changed other than by adding modules; ingest may only add modules", path=CONFIG))
+    return issues
 
 
 def _drafted_paths(head: KbRepo, before: KbRepo) -> set[str]:
@@ -113,10 +118,6 @@ def _untriaged(repo: KbRepo) -> list[str]:
     return out
 
 
-def _key(i: Issue) -> tuple:
-    return (i.code, i.record, i.path, i.message)
-
-
 def ingest_report(root: Path, base: str | None) -> IngestReport:
     """Gate the records added, changed or deleted since `base` (default HEAD), and the errors the change
     causes elsewhere. Unchanged records with unchanged problems are not reported."""
@@ -127,7 +128,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     base_config = _base_config(root, ref)
     issues = run_gates(GateContext(root, config, head, before, ref), GATES)
     # source issues are never "caused" (they are reported under Sources), so the base needs no source gate
-    at_base = {_key(i) for i in run_gates(GateContext(root, base_config or config, before), BASE_GATES)}
+    at_base = run_gates(GateContext(root, base_config or config, before), BASE_GATES)
 
     drafted = _drafted_paths(head, before)
     ids = {rid for rid, path in head.id_paths if path in drafted}
@@ -140,10 +141,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         if rid in ids and isinstance(rec, (Decision, Invariant)) and rec.evidence is None
     ]
     direct = [i for i in mine if i.severity == "error"]
-    caused = [
-        i for i in issues
-        if i.severity == "error" and i not in mine and not i.code.startswith("source.") and _key(i) not in at_base
-    ]
+    caused = new_since([i for i in issues if i.severity == "error" and i not in mine and not i.code.startswith("source.")], at_base)
 
     source_issues += [  # `kb ingest` never deletes a source
         Issue("source.tampered", f"kb/sources/{s} was deleted; {recover_hint(ref)}", path=f"kb/sources/{s}", record=s)

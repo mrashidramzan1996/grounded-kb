@@ -1,4 +1,9 @@
+import os
+import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -6,8 +11,16 @@ class GitError(Exception):
     pass
 
 
+# Set by git for hooks (pre-commit exports GIT_INDEX_FILE); every call here names its repository with -C.
+_SCRUBBED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def _env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in _SCRUBBED}
+
+
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False, env=_env())
     if check and r.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed: {r.stderr.decode(errors='replace').strip()}")
     return r
@@ -26,8 +39,9 @@ def _ref_exists(root: Path, ref: str) -> bool:
     return _git(root, "rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
-def default_branch(root: Path) -> str:
-    """A ref name that resolves: the local branch if it exists, else origin/<name>."""
+def find_default_branch(root: Path) -> str | None:
+    """The default branch as a ref name that resolves (the local branch, else origin/<name>), or None when
+    neither origin/HEAD's target, main nor master exists."""
     r = _git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False)
     candidates = []
     if r.returncode == 0 and r.stdout.strip():
@@ -38,7 +52,35 @@ def default_branch(root: Path) -> str:
             return name
         if _ref_exists(root, f"refs/remotes/origin/{name}"):
             return f"origin/{name}"
-    return _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.decode().strip()
+    return None
+
+
+def default_branch(root: Path) -> str:
+    """find_default_branch, falling back to the current branch."""
+    return find_default_branch(root) or _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.decode().strip()
+
+
+def has_commits(root: Path) -> bool:
+    return _ref_exists(root, "HEAD")
+
+
+def rev_parse(root: Path, ref: str) -> str | None:
+    """The commit `ref` names, or None."""
+    r = _git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    return r.stdout.decode().strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def is_ancestor(root: Path, ancestor: str, ref: str = "HEAD") -> bool:
+    return _git(root, "merge-base", "--is-ancestor", ancestor, ref, check=False).returncode == 0
+
+
+def resolve_base(root: Path) -> str | None:
+    """The merge-base of HEAD with the default branch, or None when no default branch (or no commit) exists."""
+    branch = find_default_branch(root)
+    if branch is None or not has_commits(root):
+        return None
+    r = _git(root, "merge-base", branch, "HEAD", check=False)
+    return r.stdout.decode().strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
 def merge_base(root: Path, base: str) -> str:
@@ -53,8 +95,12 @@ def merge_base(root: Path, base: str) -> str:
 
 
 def changed_files(root: Path, base: str | None = None) -> list[str]:
-    ref = merge_base(root, base or default_branch(root))
-    changed = _split(_git(root, "diff", "--name-only", "-z", ref).stdout)
+    return changed_since(root, merge_base(root, base or default_branch(root)))
+
+
+def changed_since(root: Path, commit: str) -> list[str]:
+    """Files changed in the working tree against `commit`, plus untracked files."""
+    changed = _split(_git(root, "diff", "--name-only", "-z", commit).stdout)
     untracked = _split(_git(root, "ls-files", "-z", "--others", "--exclude-standard").stdout)
     return sorted(set(changed) | set(untracked))
 
@@ -105,3 +151,37 @@ def delete_tag(root: Path, name: str) -> None:
 def is_dirty(root: Path, pathspec: str) -> bool:
     """Whether `git status --porcelain` reports anything under pathspec."""
     return bool(_git(root, "status", "--porcelain", "--", pathspec).stdout.strip())
+
+
+def toplevel(cwd: Path) -> Path | None:
+    """The working-tree root containing `cwd`, or None (not a repository, or git unusable)."""
+    try:
+        r = _git(cwd, "rev-parse", "--show-toplevel", check=False)
+    except OSError:
+        return None
+    out = r.stdout.decode(errors="replace").strip()
+    return Path(out) if r.returncode == 0 and out else None
+
+
+def git_path(root: Path, name: str) -> Path:
+    """Where git keeps `name` (e.g. hooks: honours worktrees and core.hooksPath)."""
+    return (root / _git(root, "rev-parse", "--git-path", name).stdout.decode().strip()).resolve()
+
+
+def git_common_dir(root: Path) -> Path:
+    """The repository's .git directory shared by all its worktrees."""
+    return (root / _git(root, "rev-parse", "--git-common-dir").stdout.decode().strip()).resolve()
+
+
+@contextmanager
+def checkout_at(root: Path, commit: str) -> Iterator[Path]:
+    """A temporary detached worktree of `commit`, removed afterwards. No hooks run (core.hooksPath=/dev/null)."""
+    tmp = Path(tempfile.mkdtemp(prefix="kb-base-"))
+    tree = tmp / "tree"
+    try:
+        _git(root, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", "--quiet", str(tree), commit)
+        yield tree
+    finally:
+        _git(root, "worktree", "remove", "--force", str(tree), check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
+        _git(root, "worktree", "prune", check=False)

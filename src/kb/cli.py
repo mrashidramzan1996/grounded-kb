@@ -2,7 +2,6 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import json
-import subprocess
 import sys
 
 import typer
@@ -17,7 +16,7 @@ from kb.hooks import run_hook
 from kb.safewrite import WriteRefused
 from kb.baseline import BaselineError, freeze_baseline
 from kb.init.scaffold import InitError, init_repo
-from kb.gitfiles import GitError, changed_files, repo_files
+from kb.gitfiles import GitError, changed_files, repo_files, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_brief
 from kb.ingest.report import ingest_report, render_report
@@ -242,11 +241,16 @@ app.add_typer(baseline_app, name="baseline")
 
 
 @baseline_app.command("freeze")
-def baseline_freeze(ctx: typer.Context, version: Annotated[str, typer.Argument(help="Baseline version, e.g. v1.")]) -> None:
-    """Write kb/baseline/VERSION.yaml and tag HEAD (the file is left for you to commit)."""
+def baseline_freeze(
+    ctx: typer.Context,
+    version: Annotated[str, typer.Argument(help="Baseline version, e.g. v1.")],
+    allow_branch: Annotated[bool, typer.Option("--allow-branch", help="Freeze even when HEAD is not the default branch's tip.")] = False,
+) -> None:
+    """Write kb/baseline/VERSION.yaml and tag HEAD (the file is left for you to commit). Refuses while
+    `kb check` reports errors, and off the default branch's tip unless --allow-branch."""
     try:
-        path = freeze_baseline(Path(ctx.obj["root"]), version)
-    except (BaselineError, GitError) as e:
+        path = freeze_baseline(Path(ctx.obj["root"]), version, allow_branch=allow_branch)
+    except (BaselineError, GitError, ConfigError) as e:
         raise _fail(e) from e
     rel = path.relative_to(Path(ctx.obj["root"])).as_posix()
     typer.echo(f"wrote {rel}; tagged HEAD as kb-baseline-{version}; commit the baseline file")
@@ -368,12 +372,7 @@ def hook(
     stdin = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
     root = Path(ctx.obj["root"])
     if not ctx.obj["root_explicit"]:
-        try:  # git missing or unusable: keep the current directory, hooks must fail safe
-            top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
-        except OSError:
-            top = None
-        if top is not None and top.returncode == 0 and top.stdout.strip():
-            root = Path(top.stdout.strip())
+        root = toplevel(Path(".")) or root  # git missing or unusable: keep the current directory (fail safe)
     try:
         out, code = run_hook(root, event, agent, stdin)
     except KeyError as e:

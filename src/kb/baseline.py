@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from kb.gitfiles import commit_time, create_tag, delete_tag, head_commit, is_dirty, tag_exists
+from kb.check import run_check
+from kb.gitfiles import commit_time, create_tag, delete_tag, find_default_branch, head_commit, is_dirty, rev_parse, tag_exists
 from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement
 from kb.records.repo import KbRepo
@@ -28,8 +29,30 @@ def _load_problems(repo: KbRepo) -> list[str]:
     return problems
 
 
-def freeze_baseline(root: Path, version: str) -> Path:
+_SHOWN_ERRORS = 5
+
+
+def _on_default_branch_tip(root: Path) -> None:
+    branch = find_default_branch(root)
+    if branch is None or rev_parse(root, branch) != head_commit(root):
+        where = f"the tip of the default branch ({branch})" if branch else "on a default branch (main, master or origin/HEAD)"
+        raise BaselineError(
+            f"HEAD is not {where}: a baseline records what was approved by merging (A-2). "
+            "Freeze it on the default branch after the merge, or pass --allow-branch to freeze this commit anyway"
+        )
+
+
+def _gate_errors(root: Path) -> None:
+    errors = [i for i in run_check(root).issues if i.severity == "error"]
+    if errors:
+        shown = [f"{i.code} {i.path or '-'} {i.record or '-'}: {' '.join(i.message.split())}" for i in errors[:_SHOWN_ERRORS]]
+        more = [f"... and {len(errors) - _SHOWN_ERRORS} more"] if len(errors) > _SHOWN_ERRORS else []
+        raise BaselineError(f"kb check reports {len(errors)} errors; fix them before freezing a baseline:\n" + "\n".join(shown + more))
+
+
+def freeze_baseline(root: Path, version: str, *, allow_branch: bool = False) -> Path:
     """Write kb/baseline/<version>.yaml (uncommitted) and tag HEAD as kb-baseline-<version>.
+    Refuses unless HEAD is the default branch's tip (or allow_branch) and `kb check` reports no error.
     Nothing is left behind if any step fails."""
     root = Path(root)
     if not _VERSION.fullmatch(version):
@@ -49,9 +72,12 @@ def freeze_baseline(root: Path, version: str) -> Path:
     if is_dirty(root, "kb/"):
         raise BaselineError("kb/ has uncommitted changes; commit them before freezing a baseline")
 
+    if not allow_branch:
+        _on_default_branch_tip(root)
     repo = KbRepo.load(root)
     if problems := _load_problems(repo):
         raise BaselineError("KB files have problems (run `kb check`):\n" + "\n".join(problems))
+    _gate_errors(root)
     live = live_ids(repo)
     reqs = [
         {"id": rid, "hash": hashlib.sha256(repo.raw[repo.paths[rid]]).hexdigest()}

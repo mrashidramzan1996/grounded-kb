@@ -138,3 +138,14 @@ def test_generic_install_refuses_symlinked_pre_commit(acme_repo):
     hook.symlink_to(target)
     assert invoke(acme_repo, "agents", "install", "generic").exit_code == 2
     assert target.read_text() == "x"
+
+
+def test_generic_install_refuses_a_hooks_dir_outside_the_repo(acme_repo, tmp_path):
+    from helpers import git
+
+    shared = tmp_path / "global-hooks"
+    shared.mkdir()
+    git(acme_repo, "config", "core.hooksPath", str(shared))
+    out = invoke(acme_repo, "agents", "install", "generic")
+    assert out.exit_code == 2 and not list(shared.iterdir())
+    assert "outside" in out.stderr and "kb hook pre-commit" in out.stderr

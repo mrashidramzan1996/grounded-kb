@@ -6,12 +6,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from docx import Document
-
-from helpers import apply_drafts, git, invoke, payload, write
+from helpers import SECRET_KEY, apply_drafts, git, invoke, payload, remove_secret_paragraph, write
 from kb.hooks import run_hook
-
-SECRET_KEY = "AKIAIOSFODNN7EXAMPLE"
 
 
 def commit(repo: Path, message: str) -> None:
@@ -22,15 +18,6 @@ def commit(repo: Path, message: str) -> None:
 def check_json(repo: Path, *args: str):
     r = invoke(repo, "check", "--format", "json", *args)
     return r, json.loads(r.stdout)["issues"]
-
-
-def remove_secret_paragraph(path: Path) -> None:
-    """Fix the original: drop the paragraph holding the planted example key."""
-    doc = Document(str(path))
-    hits = [p for p in doc.paragraphs if SECRET_KEY in p.text]
-    assert len(hits) == 1
-    hits[0]._element.getparent().remove(hits[0]._element)
-    doc.save(str(path))
 
 
 @pytest.fixture

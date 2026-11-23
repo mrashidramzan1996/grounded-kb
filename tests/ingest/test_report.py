@@ -268,3 +268,15 @@ def test_deleted_source_store_is_tampered(md_repo_ingested):
 
     shutil.rmtree(md_repo_ingested / "kb/sources/SRC-n")
     assert ("SRC-n", "source.tampered") in _pairs(ingest_report(md_repo_ingested, "HEAD").rejected)
+
+
+# --- I1: proposed modules carry no paths --------------------------------------------------------
+
+def test_proposed_module_with_guessed_paths_is_rejected(acme_repo_ingested, fixtures):
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    cfg = acme_repo_ingested / "kb.config.yaml"
+    cfg.write_text(cfg.read_text().replace('{id: MOD-web, owner: "@acme/web", risk: low}',
+                                           '{id: MOD-web, owner: "@acme/web", risk: low, paths: ["web/**"]}'))
+    r = ingest_report(acme_repo_ingested, "HEAD")
+    (issue,) = [i for i in r.rejected if i.code == "ingest.module_paths"]
+    assert issue.record == "MOD-web" and "kb module paths" in issue.message and r.failed

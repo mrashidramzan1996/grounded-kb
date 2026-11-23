@@ -1,8 +1,8 @@
 """Any other agent, or a human: a git pre-commit hook running `kb check --changed --strict`."""
 
-import subprocess
 from pathlib import Path
 
+from kb.gitfiles import GitError, git_common_dir, git_path
 from kb.ports.agents import EventKind, HookEvent, HookResult
 from kb.safewrite import WriteRefused, check_target, write_atomic
 
@@ -10,14 +10,19 @@ HOOK_LINE = "command -v kb >/dev/null 2>&1 && { kb hook pre-commit || exit $?; }
 
 
 def hooks_dir(root: Path) -> Path:
-    """Where git looks for hooks (honours worktrees and core.hooksPath)."""
+    """Where git looks for hooks (honours worktrees and core.hooksPath). Refuses a directory outside the
+    repository (and its .git): a global core.hooksPath would make every repository run kb."""
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--git-path", "hooks"], cwd=root, check=True, capture_output=True, text=True
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError) as e:
+        directory, common = git_path(root, "hooks"), git_common_dir(root)
+    except (OSError, GitError) as e:
         raise WriteRefused(f"{root} is not a git repository; cannot install a git hook") from e
-    return (root / out).resolve()
+    if not (directory.is_relative_to(Path(root).resolve()) or directory.is_relative_to(common)):
+        raise WriteRefused(
+            f"git's hooks directory {directory} is outside this repository (a global core.hooksPath?), so "
+            f"other repositories would run it; nothing written. To use it anyway, add this line to "
+            f"{directory / 'pre-commit'} yourself: {HOOK_LINE}"
+        )
+    return directory
 
 
 class Generic:
