@@ -64,3 +64,15 @@ def test_commands_needing_head_say_commit_first(tmp_path, args):
     r = invoke(tmp_path, *args)
     assert r.exit_code == 2 and "commit at least once first" in r.stderr, r.output
     assert "Traceback" not in r.output
+
+
+def test_readme_covers_install_every_command_and_posix():
+    """M5."""
+    from pathlib import Path
+
+    readme = (Path(__file__).parents[1] / "README.md").read_text()
+    assert "uv tool install" in readme and "POSIX" in readme
+    for cmd in ("kb init", "kb source add", "kb source sync", "kb ingest", "kb ingest --report", "kb module add",
+                "kb module paths", "kb check", "kb context", "kb trace", "kb status", "kb baseline freeze",
+                "kb agents install", "kb hook"):
+        assert f"`{cmd}" in readme, cmd
