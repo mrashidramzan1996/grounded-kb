@@ -6,7 +6,7 @@ from kb.issues import Issue
 from kb.sources.store import MAX_SOURCE_BYTES
 
 
-def _sha256(path: Path) -> str | None:
+def sha256_file(path: Path) -> str | None:
     """sha256 of the file, or None when it is missing; raises ValueError over MAX_SOURCE_BYTES."""
     if not path.is_file():
         return None
@@ -32,7 +32,7 @@ def source_gate(ctx: GateContext) -> list[Issue]:
             ))
             continue
         try:
-            digest = _sha256(original)
+            digest = sha256_file(original)
         except ValueError as e:
             issues.append(Issue("source.outdated", f"{src.original} is {e}", path=where, record=src_id))
         else:

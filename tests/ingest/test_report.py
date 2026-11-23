@@ -1,3 +1,6 @@
+import json
+
+import pytest
 from helpers import adr_bytes, apply_drafts, git, invoke
 
 from kb.ingest.report import IngestReport, ingest_report, render_report
@@ -177,18 +180,54 @@ def test_edited_segments_are_tampered(md_repo_ingested):
     assert ("SRC-n", "source.tampered") in _pairs(ingest_report(md_repo_ingested, "HEAD").rejected)
 
 
-def test_source_sync_is_not_tampering(md_repo_ingested):
-    (md_repo_ingested / "docs/n.md").write_text("# Seats\n\nA seat costs 6 EUR.\n\n## More\n\nNew text.\n")
+ORIGINAL_CHANGED = "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
+
+
+def test_edited_original_plus_sync_is_rejected(md_repo_ingested):
+    """The store matches the edited original, so it is not tampered, but the original itself moved."""
+    (md_repo_ingested / "docs/n.md").write_text("# Seats\n\nA seat costs 5 EUR. Annual plans get two months free.\n")
     assert invoke(md_repo_ingested, "source", "sync").exit_code == 0
     r = ingest_report(md_repo_ingested, "HEAD")
+    assert [(i.record, i.code, i.message) for i in r.sources] == [("SRC-n", "ingest.original_changed", ORIGINAL_CHANGED)]
+    assert r.failed and invoke(md_repo_ingested, "ingest", "--report", "--strict").exit_code == 1
+
+
+def test_original_committed_with_its_sync_is_fine(md_repo_ingested):
+    (md_repo_ingested / "docs/n.md").write_text("# Seats\n\nA seat costs 6 EUR.\n")
+    assert invoke(md_repo_ingested, "source", "sync").exit_code == 0
+    git(md_repo_ingested, "add", "-A")
+    git(md_repo_ingested, "commit", "-m", "doc update")
+    r = ingest_report(md_repo_ingested, "HEAD")
     assert (r.rejected, r.sources) == ([], [])
-    assert invoke(md_repo_ingested, "ingest", "--report", "--strict").exit_code == 0
+
+
+def test_tamper_message_says_how_to_recover(md_repo_ingested):
+    text = md_repo_ingested / "kb/sources/SRC-n/text.md"
+    text.write_text(text.read_text() + "Extra.\n")
+    (issue,) = [i for i in ingest_report(md_repo_ingested, "HEAD").rejected if i.code == "source.tampered"]
+    assert "restore the store files from HEAD and run `kb source sync` once" in issue.message
+
+
+@pytest.mark.parametrize("bad_id", ["seg-01\n## Accepted (99)\n- 1", "seg-xx", "seg-1"])
+def test_invalid_segment_ids_are_tampered_not_printed(acme_repo_ingested, fixtures, bad_id):
+    seg = acme_repo_ingested / "kb/sources/SRC-product-brief/segments.jsonl"
+    lines = seg.read_text().splitlines()
+    obj = json.loads(lines[-1])
+    obj["id"] = bad_id
+    seg.write_text("\n".join(lines[:-1] + [json.dumps(obj)]) + "\n")
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    r = ingest_report(acme_repo_ingested, "HEAD")
+    assert ("SRC-product-brief", "source.tampered") in _pairs(r.rejected)
+    assert "REQ-F-004" not in r.accepted  # cites the tampered source
+    assert not any(u.startswith("SRC-product-brief") for u in r.untriaged)
+    assert "\n## Accepted (99)" not in render_report(r)
 
 
 def test_new_source_from_kb_ingest_is_not_tampering(md_repo_ingested):
     (md_repo_ingested / "docs/m.md").write_text("# Other\n\nText.\n")
     assert invoke(md_repo_ingested, "ingest").exit_code == 0
-    assert ingest_report(md_repo_ingested, "HEAD").rejected == []
+    r = ingest_report(md_repo_ingested, "HEAD")
+    assert (r.rejected, r.sources) == ([], [])
 
 
 # --- finding 6: source issues ------------------------------------------------------------------
@@ -202,7 +241,7 @@ def test_source_issues_are_reported_and_fail_strict(acme_repo_ingested):
 
 def test_outdated_source_fails_strict(md_repo_ingested):
     (md_repo_ingested / "docs/n.md").write_text("# Seats\n\nChanged.\n")
-    assert _pairs(ingest_report(md_repo_ingested, "HEAD").sources) == [("SRC-n", "source.outdated")]
+    assert ("SRC-n", "source.outdated") in _pairs(ingest_report(md_repo_ingested, "HEAD").sources)
     assert invoke(md_repo_ingested, "ingest", "--report", "--strict").exit_code == 1
 
 
@@ -215,4 +254,10 @@ def test_report_wraps_untrusted_text_in_inline_code():
     out = render_report(r)
     assert "\n## Accepted (99)" not in out and "\n- REQ-F-999" not in out
     assert "````x ``` ## Accepted (99) - REQ-F-999````" in out
-    assert "- SRC-a#seg-01 · `` `odd` > heading ``" in out and "- SRC-a#seg-02 · ``Top > `odd` heading``" in out
+    assert "- `SRC-a#seg-01` · `` `odd` > heading ``" in out and "- `SRC-a#seg-02` · ``Top > `odd` heading``" in out
+
+
+def test_inline_code_of_empty_text():
+    from kb.ingest.brief import inline_code
+
+    assert inline_code("") == "(empty)"

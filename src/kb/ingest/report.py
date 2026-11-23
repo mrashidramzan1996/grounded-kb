@@ -1,5 +1,6 @@
 """`kb ingest --report`: gate whatever the agent drafted since `base` (A-16)."""
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,9 +14,9 @@ from kb.gates.base import GateContext, run_gates
 from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
-from kb.gates.sources import source_gate
+from kb.gates.sources import sha256_file, source_gate
 from kb.gitfiles import read_tree_files
-from kb.ingest.brief import inline_code
+from kb.ingest.brief import inline_code, valid_segment_id
 from kb.issues import Issue
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
@@ -25,6 +26,9 @@ from kb.yamlio import YamlError, load_yaml_strict
 
 GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]
 CONFIG = "kb.config.yaml"
+ORIGINAL_CHANGED = (
+    "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
+)
 # files `kb ingest` writes itself; the agent owns everything else under kb/
 _STORE_FILE = re.compile(r"kb/sources/(SRC-[^/]+)/(?:source\.yaml|text\.md|segments\.jsonl)")
 
@@ -36,7 +40,7 @@ class IngestReport:
     flagged: list[Issue]
     untriaged: list[str]
     proposed_modules: list[str]
-    sources: list[Issue] = field(default_factory=list)  # source_gate issues and source.tampered
+    sources: list[Issue] = field(default_factory=list)  # source_gate, source.tampered, ingest.original_changed
     caused: list[Issue] = field(default_factory=list)  # new errors on records the change did not touch
 
     @property
@@ -74,13 +78,24 @@ def _drafted_paths(head: KbRepo, before: KbRepo) -> set[str]:
     return {p for p in changed if not _STORE_FILE.fullmatch(p)}
 
 
-def _tampered(root: Path, config: KbConfig, head: KbRepo, before: KbRepo) -> list[Issue]:
-    """Store files may change only as `kb source sync` would change them: re-derive and compare bytes."""
+def _bad_segment_ids(repo: KbRepo) -> list[str]:
+    """Sources whose segments.jsonl holds ids that are not `seg-NN`."""
+    return sorted(s for s in repo.sources if not all(valid_segment_id(g.id) for g in repo.segments(s)))
+
+
+def _tampered(root: Path, config: KbConfig, head: KbRepo, before: KbRepo, ref: str) -> list[Issue]:
+    """Store files may change only as `kb source sync` would change them: re-derive and compare bytes.
+    Segment ids must be `seg-NN` whatever changed, since the report prints them."""
+    fix = f"restore the store files from {ref} and run `kb source sync` once"
+    issues = [
+        Issue("source.tampered", f"kb/sources/{s}/segments.jsonl holds invalid segment ids; {fix}",
+              path=f"kb/sources/{s}/segments.jsonl", record=s)
+        for s in _bad_segment_ids(head)
+    ]
     changed = sorted({
         m.group(1) for p in set(head.raw) | set(before.raw)
         if (m := _STORE_FILE.fullmatch(p)) and head.raw.get(p) != before.raw.get(p)
-    })
-    issues = []
+    } - {i.record for i in issues})
     for src_id in changed:
         old, new = before.sources.get(src_id), head.sources.get(src_id)
         original = old.original if old else new.original if new else None
@@ -92,16 +107,32 @@ def _tampered(root: Path, config: KbConfig, head: KbRepo, before: KbRepo) -> lis
             source, expected = derive_store(root, original, config, previous, next_seg)
             if source.id != src_id:
                 raise SourceError(f"{original} gives {source.id}")
-        except (SourceError, OSError) as e:
-            issues.append(Issue("source.tampered", f"{where} changed and cannot be re-derived: {e}", path=where, record=src_id))
+        except (SourceError, OSError, ValueError) as e:
+            issues.append(Issue("source.tampered", f"{where} changed and cannot be re-derived: {e}; {fix}", path=where, record=src_id))
             continue
         for name, data in expected.items():
             if head.raw.get(f"{where}/{name}") != data:
                 issues.append(Issue(
                     "source.tampered",
-                    f"{where}/{name} differs from what {original} gives; restore it or run `kb source sync`",
+                    f"{where}/{name} differs from what {original} gives; {fix}",
                     path=f"{where}/{name}", record=src_id,
                 ))
+    return issues
+
+
+def _originals_changed(root: Path, before: KbRepo, ref: str) -> list[Issue]:
+    """Sources stored at base whose original document differs at head (from base's source.yaml, or
+    from the original's bytes at base in git): drafts must not land together with document edits."""
+    issues = []
+    for src_id, src in sorted(before.sources.items()):
+        try:
+            now = sha256_file(root / src.original)
+        except (ValueError, OSError):
+            now = None
+        at_base = read_tree_files(root, ref, src.original).get(src.original)
+        git_sha = hashlib.sha256(at_base).hexdigest() if at_base is not None else None
+        if now != src.original_sha256 or (git_sha is not None and git_sha != now):
+            issues.append(Issue("ingest.original_changed", ORIGINAL_CHANGED, path=src.original, record=src_id))
     return issues
 
 
@@ -116,8 +147,10 @@ def _citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
 
 
 def _untriaged(repo: KbRepo) -> list[str]:
+    """Segments with no triage entry; sources with invalid segment ids are skipped (reported as tampered)."""
     out = []
-    for src_id in sorted(repo.sources):
+    bad = set(_bad_segment_ids(repo))
+    for src_id in sorted(set(repo.sources) - bad):
         tri = repo.triage(src_id)
         done = tri.segments if tri else {}
         for seg in sorted(repo.segments(src_id), key=lambda s: int(s.id.rsplit("-", 1)[1])):
@@ -151,7 +184,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         if i.severity == "error" and i not in mine and not i.code.startswith("source.") and _key(i) not in at_base
     ]
 
-    tampered = _tampered(root, config, head, before)
+    tampered = _tampered(root, config, head, before, ref)
     bad_sources = {i.record for i in tampered if i.record}
     tainted = [
         Issue("source.tampered", f"{rid} cites {src}, whose stored files were changed by hand", path=head.paths[rid], record=rid)
@@ -166,7 +199,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         flagged=[i for i in mine if i.severity == "warning"],
         untriaged=_untriaged(head),
         proposed_modules=sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])}),
-        sources=source_issues + tampered,
+        sources=source_issues + tampered + _originals_changed(root, before, ref),
         caused=caused,
     )
 
@@ -177,7 +210,7 @@ def _issue_lines(issues: list[Issue]) -> list[str]:
 
 def _untriaged_line(entry: str) -> str:
     ref, _, heading = entry.partition(" · ")
-    return f"- {ref} · {inline_code(heading)}"
+    return f"- {inline_code(ref)} · {inline_code(heading)}"
 
 
 def _section(title: str, lines: list[str], level: str = "##") -> list[str]:

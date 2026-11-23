@@ -14,6 +14,7 @@ from pathspec import GitIgnoreSpec
 
 from kb.config.schema import KbConfig
 from kb.gitfiles import repo_files
+from kb.records.ids import SEGMENT
 from kb.records.io import render_record
 from kb.records.models import Component, Decision, Feature, Invariant, Requirement, Source, Term
 from kb.records.repo import KbRepo
@@ -36,7 +37,7 @@ _NUMBERED = [
     ("Invariant", "INV", 3),
 ]
 _BACKTICKS = re.compile(r"`+")
-_SEG_ID = re.compile(r"seg-\d{2,}")
+_SEG_ID = re.compile(SEGMENT)
 
 
 # --- choosing and storing sources --------------------------------------------------------------
@@ -176,8 +177,14 @@ def _fence(text: str) -> str:
     return "`" * max(3, _longest_backticks(text) + 1)
 
 
+def valid_segment_id(seg_id: str) -> bool:
+    return _SEG_ID.fullmatch(seg_id) is not None
+
+
 def inline_code(text: str) -> str:
     """`text` on one line as inline code it cannot break out of (newlines become spaces)."""
+    if not text:
+        return "(empty)"
     flat = re.sub(r"\r\n|\r|\n", " ", text)
     ticks = "`" * (_longest_backticks(flat) + 1)
     pad = " " if flat.startswith("`") or flat.endswith("`") else ""
@@ -193,7 +200,7 @@ def _segments(repo: KbRepo, src_ids: list[str]) -> str:
         text = repo.source_text(src_id)
         flagged = set(source.guard.injection_segments)
         segments = repo.segments(src_id)
-        if bad := [s.id for s in segments if not _SEG_ID.fullmatch(s.id)]:
+        if bad := [s.id for s in segments if not valid_segment_id(s.id)]:
             raise SourceError(f"{src_id}: invalid segment ids {bad}")
         for seg in sorted(segments, key=lambda s: _seg_number(s.id)):
             # the heading is source text too, so it goes inside the fence, never in the ### line
