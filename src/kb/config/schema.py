@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Risk = Literal["low", "standard", "high"]
 FailOn = Literal["broken", "schema", "decision_guard", "missing_owner_approval", "stale_context"]
@@ -16,12 +16,29 @@ class Team(_Model):
     git_team: str
 
 
+_CATCH_ALL = {"**", "*", "**/*", ".", "./**"}
+
+
 class ModuleCfg(_Model):
     id: str = Field(pattern=r"^MOD-[a-z0-9][a-z0-9-]*$")
     title: str | None = None
     paths: list[str] = []  # empty: planned module, paths filled in later (A-9)
     owner: str
     risk: Risk = "standard"
+
+    @field_validator("paths")
+    @classmethod
+    def _safe_globs(cls, paths: list[str]) -> list[str]:
+        for g in paths:
+            if not g.strip():
+                raise ValueError("module path globs must not be empty")
+            if g.startswith("/") or "\\" in g:
+                raise ValueError(f"module path glob {g!r} must be relative and use '/' separators")
+            if ".." in g.split("/"):
+                raise ValueError(f"module path glob {g!r} must not contain '..'")
+            if g in _CATCH_ALL:
+                raise ValueError(f"module path glob {g!r} would match every file; name a directory")
+        return paths
 
 
 class SourceCfg(_Model):

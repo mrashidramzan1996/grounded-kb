@@ -91,7 +91,10 @@ def _suggestions(root: Path, config: KbConfig, repo: KbRepo, files: list[str]) -
     for f in candidates:
         claimed[f].update(modules_for(f, config))
     out: dict[str, tuple[list[str], int]] = {}
+    configured = {m.id for m in config.modules}
     for mod in sorted(evidence):
+        if mod not in configured:
+            continue  # unknown module ids are id_gate's business
         mine = {f for f in evidence[mod] if "/" in f}
         foreign = [f for f, owners in claimed.items() if owners - {mod}]
         dirs = _glob_dirs({f.rpartition("/")[0] for f in mine}, foreign)

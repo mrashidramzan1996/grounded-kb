@@ -2,6 +2,7 @@
 Every edit is validated by loading the result; an edit that does not load is never written."""
 
 import os
+import stat
 import tempfile
 from collections.abc import Callable, Sequence
 from io import StringIO
@@ -27,8 +28,14 @@ def _yaml() -> YAML:
     return y
 
 
+def _refuse_symlink(root: Path) -> None:
+    if (root / CONFIG_FILE).is_symlink():
+        raise ConfigError([f"{CONFIG_FILE} is a symlink; edit the target directly"])
+
+
 def _edit(root: Path, change: Callable[[CommentedMap], None]) -> None:
     path = Path(root) / CONFIG_FILE
+    _refuse_symlink(Path(root))
     try:
         data = _yaml().load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, YAMLError) as e:
@@ -46,6 +53,7 @@ def _edit(root: Path, change: Callable[[CommentedMap], None]) -> None:
             load_config(Path(tmp))
         except ConfigError as e:
             raise ConfigError([m.replace(tmp, str(path)) for m in e.messages]) from e
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -71,6 +79,7 @@ def _block_list(items: Sequence[str]) -> CommentedSeq:
 def add_module(
     root: Path, id: str, *, owner: str, risk: str = "standard", title: str | None = None, paths: Sequence[str] = ()
 ) -> None:
+    _refuse_symlink(Path(root))
     config = load_config(Path(root) / CONFIG_FILE)
     try:
         ModuleCfg.model_validate({"id": id, "owner": owner})
@@ -100,6 +109,7 @@ def add_module(
 
 
 def set_paths(root: Path, id: str, globs: list[str]) -> None:
+    _refuse_symlink(Path(root))
     config = load_config(Path(root) / CONFIG_FILE)
     if all(m.id != id for m in config.modules):
         raise ConfigError([f"unknown module {id}"])

@@ -146,3 +146,10 @@ def test_cli_errors_exit_2(acme_repo_ingested):
     assert invoke(acme_repo_ingested, "module", "add", "MOD-a", "--owner", "@a/b").exit_code == 0
     assert invoke(acme_repo_ingested, "module", "add", "MOD-a", "--owner", "@a/b").exit_code == 2
     assert invoke(acme_repo_ingested, "module", "paths", "MOD-a", "--accept", "--set", "x/**").exit_code == 2
+
+
+def test_unconfigured_module_gets_no_suggestion(built_acme):
+    _write(built_acme, {"x/y/z.py": "# r[impl FEAT-009]\n"})
+    (built_acme / "kb/features").mkdir(parents=True, exist_ok=True)
+    (built_acme / "kb/features/FEAT-009.md").write_text("---\nid: FEAT-009\ntitle: T\nmodule: MOD-ghost\n---\nb\n")
+    assert "MOD-ghost" not in suggest_paths(*ctx(built_acme))

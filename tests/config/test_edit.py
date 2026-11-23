@@ -70,3 +70,39 @@ def test_set_paths_replaces_and_keeps_comments(acme_repo):
 def test_set_paths_unknown_module(acme_repo):
     with pytest.raises(ConfigError, match="MOD-x"):
         set_paths(acme_repo, "MOD-x", ["a/**"])
+
+
+def test_edit_keeps_file_mode(acme_repo):
+    import os
+    cfg = acme_repo / "kb.config.yaml"
+    os.chmod(cfg, 0o644)
+    add_module(acme_repo, "MOD-a", owner="@a/b")
+    set_paths(acme_repo, "MOD-a", ["a/**"])
+    assert cfg.stat().st_mode & 0o777 == 0o644
+
+
+def test_symlinked_config_is_refused(acme_repo):
+    cfg = acme_repo / "kb.config.yaml"
+    (acme_repo / "real.yaml").write_text(cfg.read_text())
+    cfg.unlink()
+    cfg.symlink_to("real.yaml")
+    with pytest.raises(ConfigError, match="symlink"):
+        add_module(acme_repo, "MOD-a", owner="@a/b")
+    assert cfg.is_symlink() and "MOD-a" not in (acme_repo / "real.yaml").read_text()
+
+
+@pytest.mark.parametrize("bad", ["", "  ", "/abs/**", "../x/**", "a/../b/**", "a\\b", "**", "*", "**/*", ".", "./**"])
+def test_set_paths_rejects_unsafe_globs(acme_repo, bad):
+    add_module(acme_repo, "MOD-a", owner="@a/b")
+    before = (acme_repo / "kb.config.yaml").read_text()
+    with pytest.raises(ConfigError):
+        set_paths(acme_repo, "MOD-a", [bad])
+    with pytest.raises(ConfigError):
+        add_module(acme_repo, "MOD-b", owner="@a/b", paths=[bad])
+    assert (acme_repo / "kb.config.yaml").read_text() == before
+
+
+def test_hand_edited_catch_all_fails_to_load(acme_repo):
+    (acme_repo / "kb.config.yaml").write_text("version: 1\nmodules:\n  - {id: MOD-a, owner: '@a/b', paths: ['**']}\n")
+    with pytest.raises(ConfigError, match="every file"):
+        _cfg(acme_repo)
