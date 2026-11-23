@@ -72,6 +72,7 @@ def test_cli_report_prints_markdown(acme_repo_ingested, fixtures):
 
 
 def test_cli_strict_passes_when_clean(md_repo_ingested):
+    (md_repo_ingested / "kb/sources/SRC-n/triage.yaml").write_text("segments:\n  seg-01: 'none: price only'\n")
     out = invoke(md_repo_ingested, "ingest", "--report", "--strict")
     assert out.exit_code == 0, out.output
 
@@ -280,3 +281,52 @@ def test_proposed_module_with_guessed_paths_is_rejected(acme_repo_ingested, fixt
     r = ingest_report(acme_repo_ingested, "HEAD")
     (issue,) = [i for i in r.rejected if i.code == "ingest.module_paths"]
     assert issue.record == "MOD-web" and "kb module paths" in issue.message and r.failed
+
+
+# --- I7: the report compares against the commit kb ingest ran on ---------------------------------
+
+def test_ingest_records_its_base_and_the_brief_names_it(md_repo_ingested):
+    head = git(md_repo_ingested, "rev-parse", "HEAD").strip()
+    assert invoke(md_repo_ingested, "ingest").exit_code == 0
+    assert (md_repo_ingested / ".kb/cache/ingest/base").read_text().strip() == head
+    brief = (md_repo_ingested / ".kb/cache/ingest/brief.md").read_text()
+    assert f"run `kb ingest --report` before committing; it compares against {head}" in brief
+
+
+def test_report_still_sees_drafts_after_they_are_committed(md_repo_ingested):
+    assert invoke(md_repo_ingested, "ingest").exit_code == 0
+    (md_repo_ingested / "kb/requirements").mkdir()
+    (md_repo_ingested / "kb/requirements/REQ-F-001.yaml").write_text(
+        "id: REQ-F-001\nstatement: A seat costs 5 EUR.\nmodules: [MOD-seats]\n"
+        "evidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: A seat costs 5 EUR.\n"
+    )
+    git(md_repo_ingested, "add", "-A")
+    git(md_repo_ingested, "commit", "-m", "drafts")
+    out = invoke(md_repo_ingested, "ingest", "--report")
+    assert out.exit_code == 0 and "nothing drafted" not in out.stderr, out.output
+    assert "REQ-F-001" in out.stdout  # rejected (MOD-seats is not configured), but reported
+
+
+def test_nothing_drafted_warns_and_fails_strict(md_repo_ingested):
+    assert invoke(md_repo_ingested, "ingest").exit_code == 0
+    head = git(md_repo_ingested, "rev-parse", "HEAD").strip()
+    out = invoke(md_repo_ingested, "ingest", "--report")
+    assert out.exit_code == 0 and f"nothing drafted since {head}" in out.stderr
+    assert invoke(md_repo_ingested, "ingest", "--report", "--strict").exit_code == 1
+
+
+@pytest.mark.parametrize("content", ["0" * 40, "not a sha\n", ""])
+def test_unusable_recorded_base_falls_back_to_head(md_repo_ingested, content):
+    assert invoke(md_repo_ingested, "ingest").exit_code == 0
+    (md_repo_ingested / ".kb/cache/ingest/base").write_text(content)
+    head = git(md_repo_ingested, "rev-parse", "HEAD").strip()
+    assert f"nothing drafted since {head}" in invoke(md_repo_ingested, "ingest", "--report").stderr
+
+
+def test_recorded_base_that_is_not_an_ancestor_is_ignored(md_repo_ingested):
+    git(md_repo_ingested, "checkout", "-q", "-b", "other")
+    git(md_repo_ingested, "commit", "--allow-empty", "-qm", "elsewhere")
+    assert invoke(md_repo_ingested, "ingest").exit_code == 0
+    git(md_repo_ingested, "checkout", "-q", "main")
+    head = git(md_repo_ingested, "rev-parse", "HEAD").strip()
+    assert f"nothing drafted since {head}" in invoke(md_repo_ingested, "ingest", "--report").stderr

@@ -14,7 +14,8 @@ from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
 from kb.gates.quotes import missing_evidence, quote_gate
 from kb.gates.sources import STORE_FILE, bad_segment_ids, recover_hint, sha256_file, source_gate, stored_ids
-from kb.gitfiles import file_at, read_tree_files
+from kb.gitfiles import GitError, file_at, read_tree_files, rev_parse
+from kb.ingest.brief import recorded_base
 from kb.issues import Issue, new_since
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
@@ -38,6 +39,8 @@ class IngestReport:
     proposed_modules: list[str]
     sources: list[Issue] = field(default_factory=list)  # source_gate, source.tampered, ingest.original_changed
     caused: list[Issue] = field(default_factory=list)  # new errors on records the change did not touch
+    base: str = ""  # the commit compared against
+    drafted: bool = True  # whether anything (records, triage, modules) was added or changed since base
 
     @property
     def failed(self) -> bool:
@@ -119,10 +122,14 @@ def _untriaged(repo: KbRepo) -> list[str]:
 
 
 def ingest_report(root: Path, base: str | None) -> IngestReport:
-    """Gate the records added, changed or deleted since `base` (default HEAD), and the errors the change
-    causes elsewhere. Unchanged records with unchanged problems are not reported."""
+    """Gate the records added, changed or deleted since `base`, and the errors the change causes elsewhere.
+    Default base: the commit the last `kb ingest` ran on (when it is an ancestor of HEAD), else HEAD.
+    Unchanged records with unchanged problems are not reported."""
     root = Path(root)
-    ref = base or "HEAD"
+    ref = base or recorded_base(root) or "HEAD"
+    commit = rev_parse(root, ref)
+    if commit is None:
+        raise GitError(f"unknown base {ref!r}")
     config = load_config(root / CONFIG)
     head, before = KbRepo.load(root), KbRepo.at_ref(root, ref)
     base_config = _base_config(root, ref)
@@ -161,14 +168,17 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     rejected = direct + _config_issues(config, base_config) + tampered + tainted + caused
     bad_paths = {i.path for i in rejected}
     bad = {i.record for i in rejected} | {rid for rid, path in head.id_paths if path in bad_paths}
+    proposed = sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])})
     return IngestReport(
         accepted=sorted(ids - bad),
         rejected=rejected,
         flagged=[i for i in mine if i.severity == "warning"],
         untriaged=_untriaged(head),
-        proposed_modules=sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])}),
+        proposed_modules=proposed,
         sources=source_issues,
         caused=caused,
+        base=commit,
+        drafted=bool(drafted) or proposed != [],
     )
 
 

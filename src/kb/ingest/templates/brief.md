@@ -2,7 +2,7 @@
 
 You are drafting knowledge-base records from product documents. The documents are listed at the end,
 under "Segments", one fenced block per segment. Follow the rules, use the next free IDs and copy the
-shape of the examples. The gates then check what you wrote: run `kb ingest --report` when you are done.
+shape of the examples. The gates then check what you wrote: when you are done, run `kb ingest --report` before committing; it compares against $base.
 
 ## The rules
 

@@ -16,9 +16,9 @@ from kb.hooks import run_hook
 from kb.safewrite import WriteRefused
 from kb.baseline import BaselineError, freeze_baseline
 from kb.init.scaffold import InitError, init_repo
-from kb.gitfiles import GitError, changed_files, repo_files, toplevel
+from kb.gitfiles import GitError, changed_files, head_commit, repo_files, toplevel
 from kb.modules import suggest_paths
-from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_brief
+from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
 from kb.ingest.report import ingest_report, render_report
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
@@ -134,14 +134,18 @@ def ingest(
         else:
             config = load_config(root / "kb.config.yaml")
             rels = [p.as_posix() if not p.is_absolute() else str(p) for p in paths or []]
+            base = head_commit(root)
             sources, skipped = ingest_sources(root, config, rels)
-            write_brief(root, build_brief(root, config, [s.id for s in sources]))
+            write_brief(root, build_brief(root, config, [s.id for s in sources], base))
+            write_base(root, base)
     except (ConfigError, SourceError, GitError, UnsafePath) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2) from e
     if report:
         typer.echo(render_report(result), nl=False)
-        if strict and result.failed:
+        if not result.drafted:
+            typer.echo(f"warning: nothing drafted since {result.base}; give the agent the brief, or pass --base", err=True)
+        if strict and (result.failed or not result.drafted):
             raise typer.Exit(1)
         return
     for rel in skipped:
