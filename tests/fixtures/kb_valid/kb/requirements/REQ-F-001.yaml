@@ -1,0 +1,8 @@
+id: REQ-F-001
+statement: A removed seat stays active until the end of the billing cycle.
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-03
+    text: A removed seat stays active until the end of the billing cycle.
+modules:
+- MOD-billing

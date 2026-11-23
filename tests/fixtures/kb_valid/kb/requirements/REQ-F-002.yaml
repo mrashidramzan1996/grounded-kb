@@ -1,0 +1,10 @@
+id: REQ-F-002
+statement: No refund is given when a seat is removed.
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-03
+    text: No refund is given.
+features:
+- FEAT-001
+modules:
+- MOD-billing

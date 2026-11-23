@@ -1,0 +1,27 @@
+version: 1
+teams:
+  team-billing:
+    git_team: '@acme/billing'
+  team-platform:
+    git_team: '@acme/platform'
+  product-owners:
+    git_team: '@acme/product'
+  tech-leads:
+    git_team: '@acme/tech-leads'
+modules:
+- id: MOD-billing
+  paths:
+  - services/billing/**
+  owner: team-billing
+  risk: high
+- id: MOD-sessions
+  owner: team-platform
+sources:
+- paths:
+  - docs/**
+policy:
+  approvers:
+    intent:
+    - product-owners
+    decisions:
+    - tech-leads

@@ -1,0 +1,3 @@
+# r[verify FEAT-001.C1]
+def test_no_refund_on_removal():
+    ...

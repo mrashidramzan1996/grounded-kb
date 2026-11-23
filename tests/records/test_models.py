@@ -36,3 +36,17 @@ def test_triage_string_must_be_none_reason():
     assert Triage.model_validate({"segments": {"seg-01": ["REQ-F-001"], "seg-02": "none: boilerplate"}})
     with pytest.raises(ValidationError, match="none: "):
         Triage.model_validate({"segments": {"seg-01": "skipped"}})
+
+
+@pytest.mark.parametrize(
+    "val",
+    [[], ["not-an-id"], ["REQ-F-001", "oops"], "none:", "none: ", "none:   "],
+)
+def test_triage_rejects_bad_values(val):
+    with pytest.raises(ValidationError):
+        Triage.model_validate({"segments": {"seg-01": val}})
+
+
+def test_triage_accepts_ids_and_reasoned_none():
+    t = Triage.model_validate({"segments": {"seg-01": ["REQ-F-001", "ADR-0002"], "seg-02": "none: title"}})
+    assert t.segments["seg-02"] == "none: title"

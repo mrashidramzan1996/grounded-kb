@@ -44,3 +44,8 @@ def codes(issues) -> list[str]:
 
 def mod(id: str, paths: list[str] | None = None, owner: str = "team-a") -> ModuleCfg:
     return ModuleCfg(id=id, paths=paths or [], owner=owner)
+
+
+def load_dir(root: Path) -> dict[str, bytes]:
+    """Every file under root as {posix relative path: bytes}."""
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}

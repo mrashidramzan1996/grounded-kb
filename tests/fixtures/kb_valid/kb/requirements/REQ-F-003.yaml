@@ -1,0 +1,8 @@
+id: REQ-F-003
+statement: Adding a seat mid-cycle is charged pro-rata.
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-02
+    text: Adding a seat mid-cycle is charged pro-rata for the remaining days of the billing cycle.
+modules:
+- MOD-billing

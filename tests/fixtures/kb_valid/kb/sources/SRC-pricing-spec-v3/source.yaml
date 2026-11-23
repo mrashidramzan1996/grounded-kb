@@ -1,0 +1,12 @@
+id: SRC-pricing-spec-v3
+original: docs/pricing-spec-v3.md
+original_sha256: ca22015b36723ed5c2bbfd691e537623afeb790af46c32f8cb847076fc168899
+normaliser: text@1
+trust: spec
+visibility: internal
+guard:
+  emails: 0
+  secrets: 0
+  injections: 0
+  injection_segments: []
+next_seg: 5

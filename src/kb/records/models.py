@@ -12,6 +12,7 @@ from kb.records.ids import (
     SOURCE_ID,
     SOURCE_REF,
     TERM_ID,
+    parse_id,
 )
 
 
@@ -128,10 +129,19 @@ class Triage(_Model):
 
     @field_validator("segments")
     @classmethod
-    def _none_needs_reason(cls, v):
+    def _valid_triage_values(cls, v):
         for seg, val in v.items():
-            if isinstance(val, str) and not val.startswith("none: "):
-                raise ValueError(f"{seg}: a string value must start with 'none: ' (got {val!r})")
+            if isinstance(val, str):
+                if not val.startswith("none: ") or not val[len("none: ") :].strip():
+                    raise ValueError(f"{seg}: a string value must be 'none: <reason>' with a reason (got {val!r})")
+                continue
+            if not val:
+                raise ValueError(f"{seg}: a list value must not be empty; use 'none: <reason>'")
+            for item in val:
+                try:
+                    parse_id(item)
+                except ValueError as e:
+                    raise ValueError(f"{seg}: {e}") from e
         return v
 
 

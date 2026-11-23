@@ -1,0 +1,9 @@
+segments:
+  seg-01: 'none: document title'
+  seg-02:
+  - REQ-F-003
+  seg-03:
+  - REQ-F-001
+  - REQ-F-002
+  seg-04:
+  - ADR-0002
