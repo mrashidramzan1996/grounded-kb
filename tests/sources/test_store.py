@@ -257,7 +257,6 @@ def test_symlinked_triage_refuses_sync(acme_repo, tmp_path):
     (acme_repo / "kb/sources/SRC-a/triage.yaml").symlink_to(outside)
     with pytest.raises(SourceError, match="triage"):
         add_source(acme_repo, "docs/a.md", cfg)
-    assert not grep(acme_repo / "kb", r"AKIAIOSFODNN7EXAMPLE") or True
     assert (acme_repo / "kb/sources/SRC-a/triage.yaml").is_symlink()
 
 
