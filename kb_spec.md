@@ -93,7 +93,7 @@ These come out of three independent reviews of the implementation plan: simplici
   - `CLAUDE.md` imports them with `@AGENTS.md`.
   - The rules are cut to four: use the injected context, cite IDs, never act against a live ADR or INV (supersede it instead), and finish with `kb check --changed`.
   - Hooks call the CLI and take changed files from git, not from hook payloads.
-- **A-13 · Segment identity** (§11). Segment IDs stay stable across source refreshes. A segment is matched by heading path and occurrence first, then by hash. New segments get new numbers, and numbers are never reused.
+- **A-13 · Segment identity** (§11). Segment IDs stay stable across source refreshes. An unchanged segment (same hash) keeps its ID first. Remaining segments are then matched by heading path and occurrence, so an edited segment keeps its ID. New segments get new numbers, and numbers are never reused.
 - **A-14 · Invariants** are stored one per file in `kb/invariants/INV-*.md` (§10, §14).
 - **A-15 · Delivery order** (§20 milestones). The work is delivered in nine phases, each ending with a usable output, as set out in the plan. All spec components stay in scope.
 - **A-16 · Starting from documents only** (§6, §15, §16, overriding the owner-prefill part of A-9).
