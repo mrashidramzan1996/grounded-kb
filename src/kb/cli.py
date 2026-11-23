@@ -2,6 +2,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import json
+import sys
 
 import typer
 
@@ -10,6 +11,9 @@ from kb.config.edit import add_module, set_paths
 from kb.config.load import ConfigError, load_config
 from kb.check import run_check
 from kb.context import ContextError, governing, render_pack, session_brief
+from kb.agents.registry import agent_names, get_agent
+from kb.hooks import run_hook
+from kb.safewrite import WriteRefused
 from kb.baseline import BaselineError, freeze_baseline
 from kb.init.scaffold import InitError, init_repo
 from kb.gitfiles import GitError, changed_files, repo_files
@@ -351,3 +355,46 @@ def trace(ctx: typer.Context, id: Annotated[str, typer.Argument(help="A record i
         typer.echo(line)
     if not ok:
         raise typer.Exit(1)
+
+
+@app.command()
+def hook(
+    ctx: typer.Context,
+    event: Annotated[str, typer.Argument(help="session-start, stop or pre-commit.")],
+    agent: Annotated[str, typer.Option("--agent", help="claude-code, codex or generic.")] = "generic",
+) -> None:
+    """Agent hook entry point: reads the hook payload on stdin, answers in the agent's format."""
+    stdin = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
+    try:
+        out, code = run_hook(Path(ctx.obj["root"]), event, agent, stdin)
+    except KeyError as e:
+        typer.echo(e.args[0], err=True)
+        raise typer.Exit(2) from e
+    typer.echo(out, nl=False)
+    if code:
+        raise typer.Exit(code)
+
+
+agents_app = typer.Typer(help="Wire kb into coding agents.", no_args_is_help=True)
+app.add_typer(agents_app, name="agents")
+
+
+@agents_app.command("install")
+def agents_install(
+    ctx: typer.Context,
+    names: Annotated[list[str], typer.Argument(help=f"One or more of: {', '.join(agent_names())}.")],
+) -> None:
+    """Install the session-start and stop hooks (claude-code, codex) or a git pre-commit hook (generic)."""
+    try:
+        integrations = [get_agent(n) for n in names]
+    except KeyError as e:
+        typer.echo(e.args[0], err=True)
+        raise typer.Exit(2) from e
+    for integration in integrations:
+        try:
+            lines = integration.install(Path(ctx.obj["root"]))
+        except (WriteRefused, OSError) as e:
+            typer.echo(f"kb agents install {integration.name}: {e}", err=True)
+            raise typer.Exit(2) from e
+        for line in lines:
+            typer.echo(line)

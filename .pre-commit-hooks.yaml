@@ -1,0 +1,7 @@
+- id: kb-check
+  name: kb check
+  description: Fail the commit when the knowledge base has errors (kb check --changed --strict).
+  entry: kb hook pre-commit
+  language: system
+  pass_filenames: false
+  always_run: true

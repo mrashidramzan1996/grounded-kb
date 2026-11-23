@@ -312,3 +312,12 @@ def replace_doc_text(repo: Path, rel: str, old: str, new: str) -> None:
     text = path.read_text()
     assert old in text
     path.write_text(text.replace(old, new))
+
+
+# --- agent hook helpers ------------------------------------------------------------------------
+
+def payload(fixtures: Path, name: str) -> str:
+    return (fixtures / "hooks" / f"{name}.json").read_text()
+
+
+SETTINGS_PATH = {"claude-code": ".claude/settings.json", "codex": ".codex/hooks.json"}
