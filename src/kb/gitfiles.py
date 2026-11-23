@@ -19,9 +19,18 @@ def _env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in _SCRUBBED}
 
 
+NO_COMMITS = "this repository has no commits yet; commit at least once first"
+
+
+def _run(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False, env=_env())
+
+
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False, env=_env())
+    r = _run(root, *args)
     if check and r.returncode != 0:
+        if _run(root, "rev-parse", "--git-dir").returncode == 0 and _run(root, "rev-parse", "--verify", "--quiet", "HEAD").returncode:
+            raise GitError(NO_COMMITS)  # M3: whatever failed needed a commit
         raise GitError(f"git {' '.join(args)} failed: {r.stderr.decode(errors='replace').strip()}")
     return r
 
@@ -83,7 +92,14 @@ def resolve_base(root: Path) -> str | None:
     return r.stdout.decode().strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
+def require_commit(root: Path) -> None:
+    """Raise GitError(NO_COMMITS) in a repository without commits."""
+    if not has_commits(root) and _run(root, "rev-parse", "--git-dir").returncode == 0:
+        raise GitError(NO_COMMITS)
+
+
 def merge_base(root: Path, base: str) -> str:
+    require_commit(root)
     for ref in (base, f"origin/{base}"):
         r = _git(root, "merge-base", ref, "HEAD", check=False)
         if r.returncode == 0 and r.stdout.strip():

@@ -14,7 +14,7 @@ from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
 from kb.gates.quotes import missing_evidence, quote_gate
 from kb.gates.sources import STORE_FILE, bad_segment_ids, recover_hint, sha256_file, source_gate, stored_ids
-from kb.gitfiles import GitError, file_at, read_tree_files, rev_parse
+from kb.gitfiles import GitError, file_at, read_tree_files, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.issues import Issue, new_since
 from kb.records.models import Decision, Invariant, Requirement
@@ -126,6 +126,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     Default base: the commit the last `kb ingest` ran on (when it is an ancestor of HEAD), else HEAD.
     Unchanged records with unchanged problems are not reported."""
     root = Path(root)
+    require_commit(root)
     ref = base or recorded_base(root) or "HEAD"
     commit = rev_parse(root, ref)
     if commit is None:

@@ -20,14 +20,28 @@ from kb.gitfiles import GitError, changed_files, head_commit, repo_files, toplev
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
 from kb.ingest.report import ingest_report, render_report
+from kb.records.io import RecordError
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
 from kb.sources.readers import SourceError
 from kb.sources.store import add_sources, sync_sources
 from kb.status import requirement_status, summarize
 from kb.trace import TraceError, trace_chain
+from kb.yamlio import YamlError
 
 app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
+
+# What a command reports as a usage, config or tool error (exit 2, the message on stderr, no traceback).
+TOOL_ERRORS = (
+    ConfigError, SourceError, GitError, UnsafePath, RecordError, YamlError, OSError,
+    ContextError, TraceError, BaselineError, WriteRefused,
+)
+
+
+def _fail(e: Exception) -> typer.Exit:
+    """The one error exit: the message on stderr, exit 2."""
+    typer.echo(str(e) or type(e).__name__, err=True)
+    return typer.Exit(2)
 
 
 @app.callback()
@@ -77,9 +91,8 @@ def _run(ctx: typer.Context, action) -> None:
     root = Path(ctx.obj["root"])
     try:
         sources = action(root, load_config(root / "kb.config.yaml"))
-    except (ConfigError, SourceError) as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2) from e
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
     repo = KbRepo.load(root)
     for s in sources:
         g = s.guard
@@ -138,9 +151,8 @@ def ingest(
             sources, skipped = ingest_sources(root, config, rels)
             write_brief(root, build_brief(root, config, [s.id for s in sources], base))
             write_base(root, base)
-    except (ConfigError, SourceError, GitError, UnsafePath) as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(2) from e
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
     if report:
         typer.echo(render_report(result), nl=False)
         if not result.drafted:
@@ -159,11 +171,6 @@ module_app = typer.Typer(help="Manage modules; paths come later, from evidence."
 app.add_typer(module_app, name="module")
 
 
-def _fail(e: Exception) -> typer.Exit:
-    typer.echo(str(e), err=True)
-    return typer.Exit(2)
-
-
 @module_app.command("add")
 def module_add(
     ctx: typer.Context,
@@ -175,7 +182,7 @@ def module_add(
     """Add a module with no paths (planned)."""
     try:
         add_module(Path(ctx.obj["root"]), id, owner=owner, risk=risk, title=title)
-    except ConfigError as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     typer.echo(f"Added {id} (planned: no paths yet)")
 
@@ -206,7 +213,7 @@ def module_paths(
                 raise typer.Exit(1)
             globs = sorted({*module.paths, *suggested})
         set_paths(root, id, globs)
-    except (ConfigError, GitError) as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     typer.echo(f"{id}: paths = {', '.join(globs)}")
 
@@ -216,7 +223,7 @@ def module_list(ctx: typer.Context) -> None:
     """List modules and their paths."""
     try:
         config = load_config(Path(ctx.obj["root"]) / "kb.config.yaml")
-    except ConfigError as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     for m in config.modules:
         typer.echo(f"{m.id}  {', '.join(m.paths) if m.paths else '(planned: no paths yet)'}  owner: {m.owner}  risk: {m.risk}")
@@ -236,7 +243,7 @@ def status(
         config = load_config(root / "kb.config.yaml")
         repo = KbRepo.load(root)
         summary = summarize(config, repo, requirement_status(root, config, repo))
-    except (ConfigError, GitError) as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     failed = sorted({i.path for i in repo.errors if i.path})
     if repo.errors:
@@ -264,7 +271,7 @@ def baseline_freeze(
     `kb check` reports errors, and off the default branch's tip unless --allow-branch."""
     try:
         path = freeze_baseline(Path(ctx.obj["root"]), version, allow_branch=allow_branch)
-    except (BaselineError, GitError, ConfigError) as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     rel = path.relative_to(Path(ctx.obj["root"])).as_posix()
     typer.echo(f"wrote {rel}; tagged HEAD as kb-baseline-{version}; commit the baseline file")
@@ -288,7 +295,7 @@ def check(
         raise typer.Exit(2)
     try:
         report = run_check(root, base=base, changed_only=changed)
-    except (ConfigError, GitError, OSError) as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     errors = sum(i.severity == "error" for i in report.issues)
     warnings = len(report.issues) - errors
@@ -354,7 +361,7 @@ def context(
             files = changed_files(root) if changed else [_repo_rel(root, p) for p in paths or []]
             pack = governing(root, config, repo, paths=files, modules=module or (), features=feature or (), ids=id or ())
             out = render_pack(pack, format)
-    except (ConfigError, GitError, ContextError) as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     typer.echo(out, nl=False)
     if repo.errors:
@@ -368,7 +375,7 @@ def trace(ctx: typer.Context, id: Annotated[str, typer.Argument(help="A record i
     """Show the evidence chain of a record (re-checking its quotes), or every record resting on a segment."""
     try:
         lines, ok = trace_chain(Path(ctx.obj["root"]), id)
-    except TraceError as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     for line in lines:
         typer.echo(line)

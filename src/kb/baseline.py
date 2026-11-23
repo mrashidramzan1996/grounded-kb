@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from kb.check import run_check
-from kb.gitfiles import commit_time, create_tag, delete_tag, find_default_branch, head_commit, is_dirty, rev_parse, tag_exists
+from kb.gitfiles import (
+    commit_time, create_tag, delete_tag, find_default_branch, head_commit, is_dirty, require_commit, rev_parse, tag_exists,
+)
 from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement
 from kb.records.repo import KbRepo
@@ -72,6 +74,7 @@ def freeze_baseline(root: Path, version: str, *, allow_branch: bool = False) -> 
     if is_dirty(root, "kb/"):
         raise BaselineError("kb/ has uncommitted changes; commit them before freezing a baseline")
 
+    require_commit(root)
     if not allow_branch:
         _on_default_branch_tip(root)
     repo = KbRepo.load(root)
