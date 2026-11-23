@@ -52,7 +52,11 @@ class PythonPack:
     def handles(self, path: str) -> bool:
         return path.endswith(".py")
 
+    def has_syntax_errors(self, source: bytes) -> bool:
+        return Parser(_LANGUAGE).parse(source).root_node.has_error
+
     def symbols(self, path: str, source: bytes) -> list[Symbol]:
+        # on syntax errors tree-sitter still recovers most definitions; they are returned as found
         tree = Parser(_LANGUAGE).parse(source)
         test_file = _is_test_file(path)
         out: list[Symbol] = []

@@ -60,3 +60,18 @@ def test_markers_under_kb_are_not_scanned(valid_ctx_with):
 def test_marker_ids_may_be_records_or_claims(valid_ctx_with):
     ctx = valid_ctx_with(add_file("lib.js", "// r[impl REQ-F-001]\n// r[verify INV-001]\n// r[impl FEAT-001.C1]\n"))
     assert run_gates(ctx, [anchor_gate]) == []
+
+
+def test_unresolved_anchor_in_broken_file_hints_syntax_errors(valid_ctx_with):
+    ctx = valid_ctx_with(
+        add_file("lib/broken.py", "def good(): ...\ndef broken(:\n    pass\n"),
+        set_claim("FEAT-001", 0, code="lib/broken.py#lost"),
+    )
+    [issue] = [i for i in run_gates(ctx, [anchor_gate]) if i.code == "anchor.unresolved"]
+    assert "file has syntax errors; symbols may be missing" in issue.message
+
+
+def test_valid_ctx_with_calls_do_not_share_files(valid_ctx_with):
+    a = valid_ctx_with(add_file("only_a.txt", "x"))
+    b = valid_ctx_with()
+    assert (a.root / "only_a.txt").exists() and not (b.root / "only_a.txt").exists()

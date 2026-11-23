@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -69,7 +70,7 @@ def valid_ctx_with(fixtures, tmp_path):
         files = load_dir(fixtures / "kb_valid")
         for m in mutations:
             m(files)
-        root = tmp_path / "kb_valid_copy"
+        root = Path(tempfile.mkdtemp(dir=tmp_path, prefix="kb_valid_"))
         for rel, data in files.items():
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             (root / rel).write_bytes(data)

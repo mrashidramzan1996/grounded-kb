@@ -85,3 +85,22 @@ def test_symlinks_rejected(tmp_path):
         resolve_anchor(tmp_path, "link.py#f")
     with pytest.raises(UnsafePath):
         resolve_anchor(tmp_path, "dl/m.py#f")
+
+
+def test_symbols_recovered_before_syntax_error(tmp_path):
+    (tmp_path / "b.py").write_text("def good(): ...\ndef broken(:\n    pass\n")
+    assert resolve_anchor(tmp_path, "b.py#good") is not None
+
+
+def test_symbol_index_parses_each_file_once(tmp_path, monkeypatch):
+    from kb.code.registry import SymbolIndex
+
+    (tmp_path / "m.py").write_text("def a(): ...\ndef b(): ...\n")
+    calls = []
+    orig = PythonPack.symbols
+    monkeypatch.setattr(PythonPack, "symbols", lambda self, p, s: calls.append(p) or orig(self, p, s))
+    index = SymbolIndex(tmp_path)
+    assert resolve_anchor(tmp_path, "m.py#a", index) is not None
+    assert resolve_anchor(tmp_path, "m.py#b", index) is not None
+    assert resolve_anchor(tmp_path, "m.py#c", index) is None
+    assert calls == ["m.py"]
