@@ -21,10 +21,17 @@ EMAIL_SIDE_CAP = 512  # characters taken either side of an '@'; a longer token i
 _PRIVATE_KEY = re.compile(r"-----BEGIN (?:[A-Z]+ ){0,3}PRIVATE KEY-----")
 _PRIVATE_KEY_END = re.compile(r"-----END (?:[A-Z]+ ){0,3}PRIVATE KEY-----")
 _SECRET = re.compile("|".join(f"(?P<s{i}>{rx})" for i, (_, rx) in enumerate(_SECRETS)))
+_QUALIFIER = r"(?:all|any|previous|prior|your|the|above|earlier)"
 _INJECTION = re.compile(
-    r"ignore (?:all|any|previous|your) instructions|disregard (?:the|all|previous)|you are now|system prompt",
+    rf"\bignore(?:\s+{_QUALIFIER}){{0,3}}\s+instructions\b|\bdisregard\s+(?:the|all|previous)\b"
+    r"|\byou\s+are\s+now\b|\bsystem\s+prompt\b",
     re.IGNORECASE,
 )
+
+
+def has_injection(text: str) -> bool:
+    """Whether `text` contains instruction-like phrasing the guard flags."""
+    return _INJECTION.search(text) is not None
 
 
 @dataclass(frozen=True)
