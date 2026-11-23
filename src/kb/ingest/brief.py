@@ -18,6 +18,7 @@ from kb.records.io import render_record
 from kb.records.models import Component, Decision, Feature, Invariant, Requirement, Source, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
+from kb.sources.guard import has_injection
 from kb.sources.readers import SourceError
 from kb.sources.store import add_source
 from kb.yamlio import dump_yaml
@@ -35,6 +36,7 @@ _NUMBERED = [
     ("Invariant", "INV", 3),
 ]
 _BACKTICKS = re.compile(r"`+")
+_SEG_ID = re.compile(r"seg-\d{2,}")
 
 
 # --- choosing and storing sources --------------------------------------------------------------
@@ -48,11 +50,13 @@ def _restricted(rel: str, config: KbConfig) -> bool:
 
 
 def _candidates(rels: list[str], config: KbConfig) -> list[str]:
-    """The files among `rels` that config.sources names (kb/ and restricted files excluded)."""
+    """The files among `rels` that config.sources names. kb/, restricted files and anything under a
+    dot-directory (.kb/ holds the brief itself) are excluded."""
     spec = _source_spec(config)
     return [
         r for r in rels
-        if spec.match_file(r) and not _restricted(r, config) and r != "kb" and not r.startswith("kb/")
+        if spec.match_file(r) and not _restricted(r, config) and r.split("/", 1)[0] != "kb"
+        and not any(part.startswith(".") for part in r.split("/")[:-1])
     ]
 
 
@@ -163,10 +167,21 @@ def _examples() -> str:
     return "\n\n".join(blocks)
 
 
+def _longest_backticks(text: str) -> int:
+    return max((len(m.group()) for m in _BACKTICKS.finditer(text)), default=0)
+
+
 def _fence(text: str) -> str:
     """A backtick fence longer than any backtick run in `text`, so the text cannot close it."""
-    longest = max((len(m.group()) for m in _BACKTICKS.finditer(text)), default=0)
-    return "`" * max(3, longest + 1)
+    return "`" * max(3, _longest_backticks(text) + 1)
+
+
+def inline_code(text: str) -> str:
+    """`text` on one line as inline code it cannot break out of (newlines become spaces)."""
+    flat = re.sub(r"\r\n|\r|\n", " ", text)
+    ticks = "`" * (_longest_backticks(flat) + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{ticks}{pad}{flat}{pad}{ticks}"
 
 
 def _segments(repo: KbRepo, src_ids: list[str]) -> str:
@@ -177,11 +192,15 @@ def _segments(repo: KbRepo, src_ids: list[str]) -> str:
             raise SourceError(f"{src_id} is not a stored source")
         text = repo.source_text(src_id)
         flagged = set(source.guard.injection_segments)
-        for seg in sorted(repo.segments(src_id), key=lambda s: _seg_number(s.id)):
-            body = text[seg.start : seg.end]
+        segments = repo.segments(src_id)
+        if bad := [s.id for s in segments if not _SEG_ID.fullmatch(s.id)]:
+            raise SourceError(f"{src_id}: invalid segment ids {bad}")
+        for seg in sorted(segments, key=lambda s: _seg_number(s.id)):
+            # the heading is source text too, so it goes inside the fence, never in the ### line
+            body = f"heading: {seg.heading}\n{text[seg.start : seg.end]}"
             fence = _fence(body)
-            lines = [f"### {src_id}#{seg.id} · {seg.heading or '(no heading)'} · page {seg.page}"]
-            if seg.id in flagged:
+            lines = [f"### {src_id}#{seg.id} · page {seg.page}"]
+            if seg.id in flagged or has_injection(body):
                 lines.append(INJECTION_FLAG)
             lines.append(f"{fence}source\n{body}\n{fence}")
             blocks.append("\n".join(lines))

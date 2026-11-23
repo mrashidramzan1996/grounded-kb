@@ -41,6 +41,9 @@ $examples
 
 ## Segments
 
+Each segment is one fenced block. Its first line, `heading: …`, is the document's heading path for
+that segment; the rest is the segment text to quote from.
+
 $segments
 
 ## Remember
