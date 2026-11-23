@@ -19,16 +19,16 @@ class NormalisedText:
     pages: list[tuple[int, int]]  # (page number, start character)
 
 
+def row_line(cells: list[str]) -> str:
+    return "| " + " | ".join(cells) + " |"
+
+
 def table_rows(rows: list[list[str]]) -> list[str]:
     """One line per data row, each cell prefixed by its column header (the first row)."""
     if len(rows) == 1:
-        return ["| " + " | ".join(rows[0]) + " |"]
+        return [row_line(rows[0])]
     header, *body = rows
-    lines = []
-    for row in body:
-        cells = [f"{h}: {v}" if h else v for h, v in zip(header, row)]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
+    return [row_line([f"{h}: {v}" if h else v for h, v in zip(header, row)]) for row in body]
 
 
 def join_blocks(blocks: list[str]) -> str:
