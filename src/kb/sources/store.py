@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from pathspec import GitIgnoreSpec
@@ -12,9 +13,9 @@ from pathspec import GitIgnoreSpec
 from kb.config.schema import KbConfig, SourceCfg
 from kb.records.models import Source
 from kb.records.repo import KbRepo
-from kb.sources.guard import guard
+from kb.sources.guard import GuardResult, guard
 from kb.sources.readers import NormalisedText, SourceError, read_document
-from kb.sources.segment import assign_segment_ids, segment
+from kb.sources.segment import Segment, assign_segment_ids, segment
 from kb.yamlio import dump_yaml
 
 MAX_SOURCE_BYTES = 50_000_000
@@ -61,12 +62,18 @@ def _segments_jsonl(segments) -> str:
     )
 
 
-def add_source(root: Path, path: str, config: KbConfig) -> Source:
-    """Store `path` (relative to `root`) as a source; an existing source is re-synced, keeping segment ids.
+@dataclass(frozen=True)
+class _Read:
+    rel: str
+    cfg: SourceCfg
+    data: bytes
+    normaliser: str
+    guarded: GuardResult
+    masked: NormalisedText
 
-    Nothing is written until the document is read and guarded; the source directory is replaced atomically.
-    """
-    root = Path(root)
+
+def _read(root: Path, path: str, config: KbConfig) -> _Read:
+    """Read, normalise and guard the original; nothing is written."""
     rel = _relative(root, path)
     if rel == "kb" or rel.startswith("kb/"):
         raise SourceError(f"{rel} is under kb/, which holds the knowledge base itself and cannot be a source")
@@ -78,11 +85,47 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
         raise SourceError(f"{rel} is larger than {MAX_SOURCE_BYTES} bytes (MAX_SOURCE_BYTES)")
     data = file.read_bytes()
     normalised, normaliser = read_document(rel, data)
-
     guarded = guard(normalised.text)
     masked = NormalisedText(
         guarded.text, [(page, guarded.map_offset(start)) for page, start in normalised.pages]
     )
+    return _Read(rel, cfg, data, normaliser, guarded, masked)
+
+
+def _store_files(read: _Read, previous: list[Segment], next_seg: int) -> tuple[Source, dict[str, bytes]]:
+    """The source and the bytes of its source.yaml, text.md and segments.jsonl."""
+    segments, next_seg = assign_segment_ids(previous, segment(read.masked), next_seg)
+    spans = read.guarded.injection_spans
+    counts = read.guarded.counts.model_copy(update={
+        "injection_segments": [s.id for s in segments if any(s.start < e and a < s.end for a, e in spans)]
+    })
+    source = Source(
+        id=source_id(read.rel), original=read.rel, original_sha256=hashlib.sha256(read.data).hexdigest(),
+        normaliser=read.normaliser, trust=read.cfg.trust, visibility=read.cfg.visibility, guard=counts,
+        next_seg=next_seg,
+    )
+    return source, {
+        "source.yaml": dump_yaml(source.model_dump()).encode("utf-8"),
+        "text.md": read.masked.text.encode("utf-8"),
+        "segments.jsonl": _segments_jsonl(segments).encode("utf-8"),
+    }
+
+
+def derive_store(
+    root: Path, path: str, config: KbConfig, previous: list[Segment], next_seg: int
+) -> tuple[Source, dict[str, bytes]]:
+    """What add_source would store for `path` given the earlier segments and next_seg, computed in memory."""
+    return _store_files(_read(Path(root), path, config), previous, next_seg)
+
+
+def add_source(root: Path, path: str, config: KbConfig) -> Source:
+    """Store `path` (relative to `root`) as a source; an existing source is re-synced, keeping segment ids.
+
+    Nothing is written until the document is read and guarded; the source directory is replaced atomically.
+    """
+    root = Path(root)
+    read = _read(root, path, config)
+    rel = read.rel
     src_id = source_id(rel)
     target = root / "kb/sources" / src_id
     _check_store_dirs(root, target)
@@ -101,23 +144,14 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
         if old.original != rel:
             raise SourceError(f"{src_id} already belongs to {old.original}; {rel} has the same name")
         previous, next_seg = existing.segments(src_id), old.next_seg
-    segments, next_seg = assign_segment_ids(previous, segment(masked), next_seg)
-    spans = guarded.injection_spans
-    counts = guarded.counts.model_copy(update={
-        "injection_segments": [s.id for s in segments if any(s.start < e and a < s.end for a, e in spans)]
-    })
-    source = Source(
-        id=src_id, original=rel, original_sha256=hashlib.sha256(data).hexdigest(), normaliser=normaliser,
-        trust=cfg.trust, visibility=cfg.visibility, guard=counts, next_seg=next_seg,
-    )
+    source, store = _store_files(read, previous, next_seg)
 
     parent = target.parent
     parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=f".{src_id}.", dir=parent))
     try:
-        (tmp / "source.yaml").write_text(dump_yaml(source.model_dump()), encoding="utf-8")
-        (tmp / "text.md").write_text(masked.text, encoding="utf-8")
-        (tmp / "segments.jsonl").write_text(_segments_jsonl(segments), encoding="utf-8")
+        for name, data in store.items():
+            (tmp / name).write_bytes(data)
         if triage_data is not None:
             (tmp / "triage.yaml").write_bytes(triage_data)
         if target.exists():

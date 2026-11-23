@@ -1,7 +1,7 @@
 """`kb ingest --report`: gate whatever the agent drafted since `base` (A-16)."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -10,45 +10,109 @@ from kb.config.load import ConfigError, load_config
 from kb.config.schema import KbConfig
 from kb.gates.anchors import anchor_gate
 from kb.gates.base import GateContext, run_gates
+from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
 from kb.gates.sources import source_gate
 from kb.gitfiles import read_tree_files
+from kb.ingest.brief import inline_code
 from kb.issues import Issue
+from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
+from kb.sources.readers import SourceError
+from kb.sources.store import derive_store
 from kb.yamlio import YamlError, load_yaml_strict
 
-GATES = [id_gate, quote_gate, anchor_gate, source_gate]
+GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]
 CONFIG = "kb.config.yaml"
-# files `kb ingest` writes itself; everything else under kb/ is the agent's
-_STORE_FILE = re.compile(r"kb/sources/SRC-[^/]+/(?:source\.yaml|text\.md|segments\.jsonl)")
+# files `kb ingest` writes itself; the agent owns everything else under kb/
+_STORE_FILE = re.compile(r"kb/sources/(SRC-[^/]+)/(?:source\.yaml|text\.md|segments\.jsonl)")
 
 
 @dataclass
 class IngestReport:
     accepted: list[str]
-    rejected: list[Issue]
+    rejected: list[Issue]  # every error that fails --strict, including `caused`
     flagged: list[Issue]
     untriaged: list[str]
     proposed_modules: list[str]
+    sources: list[Issue] = field(default_factory=list)  # source_gate issues and source.tampered
+    caused: list[Issue] = field(default_factory=list)  # new errors on records the change did not touch
+
+    @property
+    def failed(self) -> bool:
+        """What --strict fails on."""
+        return bool(self.rejected) or any(i.severity == "error" for i in self.sources)
 
 
-def _base_modules(root: Path, ref: str) -> set[str]:
+def _base_config(root: Path, ref: str) -> KbConfig | None:
     data = read_tree_files(root, ref, CONFIG).get(CONFIG)
     if data is None:
-        return set()
+        return None
     try:
-        config = KbConfig.model_validate(load_yaml_strict(data.decode("utf-8")))
+        return KbConfig.model_validate(load_yaml_strict(data.decode("utf-8")))
     except (UnicodeDecodeError, YamlError, ValidationError) as e:
         raise ConfigError([f"{CONFIG} at {ref}: {e}"]) from e
-    return {m.id for m in config.modules}
+
+
+def _config_issues(head: KbConfig, base: KbConfig | None) -> list[Issue]:
+    """Ingest may only add modules: everything else in the config must be as it was at base."""
+    if base is None:
+        return []
+    known = {m.id for m in base.modules}
+    now = head.model_dump()
+    now["modules"] = [m for m in now["modules"] if m["id"] in known]
+    if now == base.model_dump():
+        return []
+    return [Issue("ingest.config_changed", f"{CONFIG} changed other than by adding modules; ingest may only add modules", path=CONFIG)]
 
 
 def _drafted_paths(head: KbRepo, before: KbRepo) -> set[str]:
-    """kb/ paths the agent added or changed since base, including ones that now fail to load."""
-    changed = {p for p, data in head.raw.items() if before.raw.get(p) != data}
+    """kb/ paths the agent added, changed or deleted since base, including ones that now fail to load."""
+    changed = {p for p in set(head.raw) | set(before.raw) if head.raw.get(p) != before.raw.get(p)}
     changed |= {i.path for i in head.errors if i.path} - {i.path for i in before.errors if i.path}
     return {p for p in changed if not _STORE_FILE.fullmatch(p)}
+
+
+def _tampered(root: Path, config: KbConfig, head: KbRepo, before: KbRepo) -> list[Issue]:
+    """Store files may change only as `kb source sync` would change them: re-derive and compare bytes."""
+    changed = sorted({
+        m.group(1) for p in set(head.raw) | set(before.raw)
+        if (m := _STORE_FILE.fullmatch(p)) and head.raw.get(p) != before.raw.get(p)
+    })
+    issues = []
+    for src_id in changed:
+        old, new = before.sources.get(src_id), head.sources.get(src_id)
+        original = old.original if old else new.original if new else None
+        where = f"kb/sources/{src_id}"
+        try:
+            if original is None:
+                raise SourceError("no valid source.yaml")
+            previous, next_seg = (before.segments(src_id), old.next_seg) if old else ([], 1)
+            source, expected = derive_store(root, original, config, previous, next_seg)
+            if source.id != src_id:
+                raise SourceError(f"{original} gives {source.id}")
+        except (SourceError, OSError) as e:
+            issues.append(Issue("source.tampered", f"{where} changed and cannot be re-derived: {e}", path=where, record=src_id))
+            continue
+        for name, data in expected.items():
+            if head.raw.get(f"{where}/{name}") != data:
+                issues.append(Issue(
+                    "source.tampered",
+                    f"{where}/{name} differs from what {original} gives; restore it or run `kb source sync`",
+                    path=f"{where}/{name}", record=src_id,
+                ))
+    return issues
+
+
+def _citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
+    """(record id, source) for records whose evidence cites one of `src_ids`."""
+    out = []
+    for rid, rec in sorted(repo.records.items()):
+        if isinstance(rec, (Requirement, Decision, Invariant)) and rec.evidence:
+            cited = sorted({q.source.partition("#")[0] for q in rec.evidence.quotes} & src_ids)
+            out.extend((rid, src) for src in cited)
+    return out
 
 
 def _untriaged(repo: KbRepo) -> list[str]:
@@ -62,18 +126,38 @@ def _untriaged(repo: KbRepo) -> list[str]:
     return out
 
 
+def _key(i: Issue) -> tuple:
+    return (i.code, i.record, i.path, i.message)
+
+
 def ingest_report(root: Path, base: str | None) -> IngestReport:
-    """Gate the records added or changed since `base` (default HEAD); unchanged records are not reported."""
+    """Gate the records added, changed or deleted since `base` (default HEAD), and the errors the change
+    causes elsewhere. Unchanged records with unchanged problems are not reported."""
     root = Path(root)
     ref = base or "HEAD"
     config = load_config(root / CONFIG)
     head, before = KbRepo.load(root), KbRepo.at_ref(root, ref)
+    base_config = _base_config(root, ref)
     issues = run_gates(GateContext(root, config, head, before), GATES)
+    at_base = {_key(i) for i in run_gates(GateContext(root, base_config or config, before), GATES)}
 
     drafted = _drafted_paths(head, before)
     ids = {rid for rid, path in head.id_paths if path in drafted}
-    mine = [i for i in issues if i.record in ids or i.path in drafted]
-    rejected = [i for i in mine if i.severity == "error"]
+    source_issues = [i for i in issues if i.code.startswith("source.")]
+    mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
+    direct = [i for i in mine if i.severity == "error"]
+    caused = [
+        i for i in issues
+        if i.severity == "error" and i not in mine and not i.code.startswith("source.") and _key(i) not in at_base
+    ]
+
+    tampered = _tampered(root, config, head, before)
+    bad_sources = {i.record for i in tampered if i.record}
+    tainted = [
+        Issue("source.tampered", f"{rid} cites {src}, whose stored files were changed by hand", path=head.paths[rid], record=rid)
+        for rid, src in _citers(head, bad_sources)
+    ]
+    rejected = direct + _config_issues(config, base_config) + tampered + tainted + caused
     bad_paths = {i.path for i in rejected}
     bad = {i.record for i in rejected} | {rid for rid, path in head.id_paths if path in bad_paths}
     return IngestReport(
@@ -81,23 +165,35 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         rejected=rejected,
         flagged=[i for i in mine if i.severity == "warning"],
         untriaged=_untriaged(head),
-        proposed_modules=sorted({m.id for m in config.modules} - _base_modules(root, ref)),
+        proposed_modules=sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])}),
+        sources=source_issues + tampered,
+        caused=caused,
     )
 
 
 def _issue_lines(issues: list[Issue]) -> list[str]:
-    return [f"- {i.record or i.path} · `{i.code}` · {i.message}" for i in issues]
+    return [f"- {inline_code(i.record or i.path or '')} · `{i.code}` · {inline_code(i.message)}" for i in issues]
+
+
+def _untriaged_line(entry: str) -> str:
+    ref, _, heading = entry.partition(" · ")
+    return f"- {ref} · {inline_code(heading)}"
+
+
+def _section(title: str, lines: list[str], level: str = "##") -> list[str]:
+    return [f"{level} {title} ({len(lines)})", "", *(lines or ["- none"]), ""]
 
 
 def render_report(r: IngestReport) -> str:
-    sections = [
-        ("Accepted", [f"- {rid}" for rid in r.accepted]),
-        ("Rejected", _issue_lines(r.rejected)),
-        ("Flagged", _issue_lines(r.flagged)),
-        ("Untriaged segments", [f"- {s}" for s in r.untriaged]),
-        ("Proposed modules", [f"- {m}" for m in r.proposed_modules]),
-    ]
+    """Markdown; every piece of untrusted text (headings, messages, paths) is one-line inline code."""
+    direct = [i for i in r.rejected if i not in r.caused]
     out = ["# Ingest report", ""]
-    for title, lines in sections:
-        out += [f"## {title} ({len(lines)})", "", *(lines or ["- none"]), ""]
+    out += _section("Accepted", [f"- {rid}" for rid in r.accepted])
+    out += [f"## Rejected ({len(r.rejected)})", "", *(_issue_lines(direct) or ["- none"]), ""]
+    if r.caused:
+        out += _section("Caused by this change", _issue_lines(r.caused), "###")
+    out += _section("Flagged", _issue_lines(r.flagged))
+    out += _section("Sources", _issue_lines(r.sources))
+    out += _section("Untriaged segments", [_untriaged_line(s) for s in r.untriaged])
+    out += _section("Proposed modules", [f"- {m}" for m in r.proposed_modules])
     return "\n".join(out)

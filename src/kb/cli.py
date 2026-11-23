@@ -73,7 +73,7 @@ def ingest(
     ctx: typer.Context,
     paths: Annotated[list[Path] | None, typer.Argument(help="Documents or directories; default: every configured source.")] = None,
     report: Annotated[bool, typer.Option("--report", help="Gate what the agent drafted and print a report.")] = False,
-    strict: Annotated[bool, typer.Option("--strict", help="With --report: exit 1 when anything was rejected.")] = False,
+    strict: Annotated[bool, typer.Option("--strict", help="With --report: exit 1 when anything was rejected or a source has an error.")] = False,
     base: Annotated[str | None, typer.Option("--base", help="With --report: compare against this ref (default HEAD).")] = None,
 ) -> None:
     """Store sources and write a drafting brief for your coding agent; --report gates what it drafted."""
@@ -97,7 +97,7 @@ def ingest(
         raise typer.Exit(2) from e
     if report:
         typer.echo(render_report(result), nl=False)
-        if strict and result.rejected:
+        if strict and result.failed:
             raise typer.Exit(1)
         return
     typer.echo(f"Brief: {BRIEF_PATH}")

@@ -151,3 +151,18 @@ def acme_repo_ingested(acme_repo):
     git(acme_repo, "add", "-A")
     git(acme_repo, "commit", "-m", "ingest sources")
     return acme_repo
+
+
+MD_CONFIG = 'version: 1\nsources:\n  - paths: ["docs/**"]\n'
+
+
+@pytest.fixture
+def md_repo_ingested(tmp_path):
+    """A repo with one clean Markdown doc, stored as a source and committed."""
+    from helpers import git, invoke, make_git_repo
+
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": MD_CONFIG, "docs/n.md": "# Seats\n\nA seat costs 5 EUR.\n"})
+    assert invoke(root, "ingest").exit_code == 0
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "ingest sources")
+    return root
