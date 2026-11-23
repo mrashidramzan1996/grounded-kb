@@ -133,3 +133,43 @@ def edit(ctx: GitCtx, path: str, text: str) -> None:
 
 def add_adr_file(ctx: GitCtx, id: str, **fields) -> None:
     (ctx.root / f"kb/decisions/{id}.md").write_bytes(adr_bytes(id, **fields))
+
+
+# --- document builders for reader tests --------------------------------------------------------
+
+def pdf_bytes(pages: list[list[tuple[str, int, str]]], header: str = "", footer: str = "") -> bytes:
+    """A PDF whose pages hold (font style, size, text) paragraphs; `{n}` in header/footer is the page number."""
+    from datetime import datetime, timezone
+
+    from fpdf import FPDF
+
+    class Doc(FPDF):
+        def header(self):
+            if header:
+                self.set_font("Helvetica", size=8)
+                self.cell(0, 6, header.format(n=self.page_no()), align="C")
+                self.ln(10)
+
+        def footer(self):
+            if footer:
+                self.set_y(-15)
+                self.set_font("Helvetica", size=8)
+                self.cell(0, 6, footer.format(n=self.page_no()), align="C")
+
+    pdf = Doc()
+    pdf.set_creation_date(datetime(2026, 11, 2, tzinfo=timezone.utc))
+    for paragraphs in pages:
+        pdf.add_page()
+        for style, size, text in paragraphs:
+            pdf.set_font("Helvetica", style=style, size=size)
+            pdf.multi_cell(0, 6, text)
+            pdf.ln(3)
+    return bytes(pdf.output())
+
+
+def docx_bytes(doc) -> bytes:
+    import io
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
