@@ -44,3 +44,16 @@ def test_dump_is_deterministic_and_keeps_order():
 def test_strict_yaml_errors():
     with pytest.raises(YamlError, match="duplicate key"):
         load_yaml_strict("a: 1\na: 2\n")
+
+
+def test_rejects_unknown_trust(tmp_path):
+    (p := tmp_path / "kb.config.yaml").write_text("version: 1\nsources: [{paths: [a], trust: specc}]\n")
+    with pytest.raises(ConfigError) as e:
+        load_config(p)
+    assert "trust" in str(e.value)
+
+
+def test_rejects_non_utf8_config(tmp_path):
+    (p := tmp_path / "kb.config.yaml").write_bytes(b"\xff\xfe version: 1")
+    with pytest.raises(ConfigError):
+        load_config(p)

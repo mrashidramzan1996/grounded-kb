@@ -26,8 +26,8 @@ class ModuleCfg(_Model):
 
 class SourceCfg(_Model):
     paths: list[str]
-    trust: str = "spec"
-    visibility: str = "internal"
+    trust: Literal["spec", "design", "discussion", "external"] = "spec"
+    visibility: str = "internal"  # open str: visibility labels are user-defined
     adapter: str | None = None
     mapping: dict[str, Any] | None = None
 

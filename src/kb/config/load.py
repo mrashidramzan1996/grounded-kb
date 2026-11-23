@@ -15,8 +15,8 @@ class ConfigError(Exception):
 def load_config(path: Path) -> KbConfig:
     path = Path(path)
     try:
-        data = load_yaml_strict(path.read_text())
-    except (OSError, YamlError) as e:
+        data = load_yaml_strict(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, YamlError) as e:
         raise ConfigError([f"{path}: {e}"]) from e
     if data is None:
         raise ConfigError([f"{path}: config is empty"])
