@@ -33,15 +33,52 @@ def test_expected_record_ids_exist_in_the_drafted_kb(fixtures):
     assert cited and cited <= existing
 
 
-def test_commands_are_read_only_and_headless():
-    claude = run.build_command("claude", "Q?", with_kb=True)
-    assert claude[:2] == ["claude", "-p"] and "json" in claude and "Write" not in claude[-1] and "Edit" not in claude[-1]
-    assert "Bash(kb context:*)" in claude[-1] and "Bash" not in run.build_command("claude", "Q?", with_kb=False)[-1]
+def flag(cmd, name):
+    """The values following --name up to the next flag."""
+    i = cmd.index(name) + 1
+    out = []
+    while i < len(cmd) and not cmd[i].startswith("--"):
+        out.append(cmd[i])
+        i += 1
+    return out
+
+
+def test_claude_command_is_sandboxed_with_kb():
+    cmd = run.build_command("claude", "Q?", with_kb=True)
+    assert cmd[:2] == ["claude", "-p"] and flag(cmd, "--output-format") == ["json"]
+    assert flag(cmd, "--permission-mode") == ["dontAsk"] and "--strict-mcp-config" in cmd and "--mcp-config" not in cmd
+    assert flag(cmd, "--tools") == ["Read,Grep,Glob,Bash"]
+    assert flag(cmd, "--allowedTools") == ["Read", "Grep", "Glob", "Bash(kb context:*)", "Bash(kb trace:*)"]
+    assert flag(cmd, "--disallowedTools") == ["Edit", "Write", "NotebookEdit"]
+
+
+def test_claude_command_without_kb_has_no_bash_and_cannot_read_kb():
+    cmd = run.build_command("claude", "Q?", with_kb=False)
+    assert flag(cmd, "--tools") == ["Read,Grep,Glob"] and flag(cmd, "--allowedTools") == ["Read", "Grep", "Glob"]
+    assert flag(cmd, "--disallowedTools") == ["Edit", "Write", "NotebookEdit", "Bash", "Read(kb/**)", "Grep(kb/**)", "Glob(kb/**)"]
+    assert flag(cmd, "--permission-mode") == ["dontAsk"] and "--strict-mcp-config" in cmd
+
+
+def test_codex_command_and_unknown_agent():
     codex = run.build_command("codex", "Q?", with_kb=False)
-    assert codex[:5] == ["codex", "exec", "--sandbox", "read-only", "--json"]
-    assert "kb/" in codex[-1] and "Q?" in codex[-1]
+    assert codex[:5] == ["codex", "exec", "--sandbox", "read-only", "--json"] and "Q?" in codex[-1]
     with pytest.raises(ValueError):
         run.build_command("gemini", "Q?", True)
+
+
+def test_codex_without_kb_runs_in_a_copy_without_kb(md_repo_ingested):
+    assert (md_repo_ingested / "kb").is_dir()
+    seen = []
+
+    def fake(cmd, cwd):
+        seen.append((cwd, sorted(p.name for p in cwd.iterdir()), cwd.is_dir()))
+        return json.dumps({"item": {"type": "agent_message", "text": "x"}})
+
+    run.run_eval(questions()[:1], "codex", False, md_repo_ingested, fake)
+    cwd, names, _ = seen[0]
+    assert cwd != md_repo_ingested and "kb" not in names and "docs" in names and not cwd.exists()
+    run.run_eval(questions()[:1], "codex", True, md_repo_ingested, lambda c, d: seen.append(d) or "")
+    assert seen[-1] == md_repo_ingested
 
 
 def test_extract_answer():
@@ -84,3 +121,49 @@ def test_main_writes_results_per_agent_and_mode(tmp_path):
     data = json.loads((tmp_path / "out/phase1-claude.json").read_text())
     assert data["agent"] == "claude" and set(data["runs"]) == {"with-kb", "without-kb"}
     assert data["runs"]["with-kb"]["questions"] == 20
+
+
+def test_scoring_is_whole_word():
+    q19 = next(q for q in questions() if q["id"] == "Q19")
+    assert run.is_wrong(q19, "I don't know. Note: not sure.")
+    assert run.is_wrong(q19, "Yes, it can.")
+    assert not run.is_wrong(q19, "No, it cannot: the plan minimum applies.")
+    q13 = next(q for q in questions() if q["id"] == "Q13")
+    assert run.is_wrong(q13, "I know nothing about it.") and run.is_wrong(q13, "Yes, two months free.")
+    assert not run.is_wrong(q13, "The document does not mention such an offer.")
+
+
+def test_failed_runs_are_recorded_and_the_rest_continue(tmp_path):
+    def flaky(cmd, cwd):
+        if "refund" in cmd[2]:
+            raise run.RunnerError("TimeoutExpired: 600s")
+        return json.dumps({"result": "7 years (REQ-NF-002)"})
+
+    qs = [q for q in questions() if q["id"] in {"Q01", "Q04"}]
+    result = run.run_eval(qs, "claude", True, tmp_path, flaky)
+    assert result["errors"] == 1 and result["results"][0]["error"].startswith("TimeoutExpired")
+    assert result["results"][0]["wrong"] and not result["results"][1]["wrong"]
+
+
+def test_subprocess_runner_raises_on_failure(tmp_path):
+    with pytest.raises(run.RunnerError):
+        run.subprocess_runner(["definitely-not-a-binary-xyz"], tmp_path)
+    with pytest.raises(run.RunnerError, match="exit 3"):
+        run.subprocess_runner(["sh", "-c", "exit 3"], tmp_path)
+
+
+def test_main_exits_1_with_partial_results_on_errors(md_repo_ingested, tmp_path):
+    def flaky(cmd, cwd):
+        if "?" in cmd[2] and "Question: Is a refund" in cmd[2]:
+            raise run.RunnerError("boom")
+        return "{}"
+
+    args = ["--agent", "claude", "--repo", str(md_repo_ingested), "--results-dir", str(tmp_path / "out")]
+    assert run.main(args, flaky) == 1
+    assert json.loads((tmp_path / "out/phase1-claude.json").read_text())["runs"]["with-kb"]["errors"] == 1
+
+
+def test_main_refuses_when_the_repo_holds_a_secret(acme_repo_ingested, tmp_path, capsys):
+    args = ["--agent", "claude", "--repo", str(acme_repo_ingested), "--results-dir", str(tmp_path / "out")]
+    assert run.main(args, lambda c, d: pytest.fail("agent must not run")) == 2
+    assert "source.secret_in_original" in capsys.readouterr().err and not (tmp_path / "out").exists()

@@ -6,7 +6,10 @@ Run by hand, never in CI (it calls a real agent):
     uv run python eval/run.py --agent claude --without-kb --repo /path/to/acme-billing
 
 --with-kb tells the agent to use `kb context` / `kb trace` and to cite record ids; --without-kb tells it to answer from
-the documents under docs/ and not to read kb/. Both modes run on the same checkout. Results are merged into
+the documents under docs/ with kb/ made unreadable (claude: deny rules on kb/**; codex: a temporary copy without kb/).
+The agent is sandboxed read-only: only Read, Grep and Glob (plus `kb context` / `kb trace` with --with-kb), no writes, no MCP.
+The questions and the repository content the agent reads are sent to the agent's model provider, and the answers are
+written to eval/results/*.json. The run refuses to start while `kb check` reports source.secret_in_original. Results are merged into
 eval/results/phase1-<agent>.json, one entry per mode:
   wrong_fact_rate: answers missing an expected fact or holding a forbidden one / questions
   citation_rate:   answers naming a record id or source document from `cites` / questions
@@ -14,11 +17,15 @@ eval/results/phase1-<agent>.json, one entry per mode:
 
 import argparse
 import json
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from kb.check import run_check
 from kb.yamlio import load_yaml_strict
 
 HERE = Path(__file__).parent
@@ -38,11 +45,19 @@ PROMPT = {
 }
 
 
+KB_COMMANDS = ["Bash(kb context:*)", "Bash(kb trace:*)"]
+KB_DIR_DENY = ["Read(kb/**)", "Grep(kb/**)", "Glob(kb/**)"]
+
+
 def build_command(agent: str, question: str, with_kb: bool) -> list[str]:
     prompt = PROMPT[with_kb].format(question=question)
     if agent == "claude":
-        tools = "Read,Grep,Glob" + (",Bash(kb context:*),Bash(kb trace:*)" if with_kb else "")
-        return ["claude", "-p", prompt, "--output-format", "json", "--allowedTools", tools]
+        # --tools limits what exists; dontAsk refuses everything not allowed (no prompts, no writes); no MCP servers.
+        cmd = ["claude", "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk", "--strict-mcp-config"]
+        cmd += ["--tools", "Read,Grep,Glob" + (",Bash" if with_kb else "")]
+        cmd += ["--allowedTools", *(["Read", "Grep", "Glob"] + (KB_COMMANDS if with_kb else []))]
+        cmd += ["--disallowedTools", *(["Edit", "Write", "NotebookEdit"] + ([] if with_kb else ["Bash", *KB_DIR_DENY]))]
+        return cmd
     if agent == "codex":
         return ["codex", "exec", "--sandbox", "read-only", "--json", prompt]
     raise ValueError(f"unknown agent {agent!r}: use {', '.join(AGENTS)}")
@@ -71,32 +86,72 @@ def extract_answer(agent: str, stdout: str) -> str:
     return answer
 
 
+def _has(text: str, term: str) -> bool:
+    """Whole-word / whole-phrase, case-insensitive match ('no' does not match 'know')."""
+    return re.search(r"(?<!\w)" + re.escape(term.strip().lower()) + r"(?!\w)", text.lower()) is not None
+
+
 def is_wrong(question: dict, answer: str) -> bool:
-    low = answer.lower()
-    missing = any(not any(alt.lower() in low for alt in group) for group in question["expect"])
-    return missing or any(f.lower() in low for f in question.get("forbid", []))
+    missing = any(not any(_has(answer, alt) for alt in group) for group in question["expect"])
+    return missing or any(_has(answer, f) for f in question.get("forbid", []))
 
 
 def is_cited(question: dict, answer: str) -> bool:
     return any(c in answer for c in question["cites"])
 
 
+class RunnerError(Exception):
+    """The agent could not be run, timed out or exited non-zero."""
+
+
 def subprocess_runner(cmd: list[str], cwd: Path) -> str:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=600).stdout
+    try:
+        done = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RunnerError(f"{type(e).__name__}: {e}") from e
+    if done.returncode:
+        raise RunnerError(f"exit {done.returncode}: {' '.join(done.stderr.split())[:300]}")
+    return done.stdout
 
 
 def run_eval(questions: list[dict], agent: str, with_kb: bool, repo: Path, runner: Runner = subprocess_runner) -> dict:
-    results = []
-    for q in questions:
-        answer = extract_answer(agent, runner(build_command(agent, q["question"], with_kb), repo))
-        results.append({"id": q["id"], "wrong": is_wrong(q, answer), "cited": is_cited(q, answer), "answer": answer})
+    """Score every question; a failed run is recorded as an error (counted wrong, not cited) and the rest continue."""
+    scratch = None
+    cwd = repo
+    if agent == "codex" and not with_kb:  # codex has no path deny rules: it gets a copy without kb/
+        scratch = Path(tempfile.mkdtemp(prefix="kb-eval-"))
+        cwd = scratch / "repo"
+        shutil.copytree(repo, cwd, ignore=shutil.ignore_patterns("kb", ".kb"))
+    try:
+        results = []
+        for q in questions:
+            error = None
+            try:
+                answer = extract_answer(agent, runner(build_command(agent, q["question"], with_kb), cwd))
+            except RunnerError as e:
+                answer, error = "", str(e)
+            entry = {"id": q["id"], "wrong": is_wrong(q, answer) or error is not None, "cited": is_cited(q, answer), "answer": answer}
+            if error:
+                entry["error"] = error
+            results.append(entry)
+    finally:
+        if scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
     n = len(results)
     return {
         "questions": n,
+        "errors": sum("error" in r for r in results),
         "wrong_fact_rate": sum(r["wrong"] for r in results) / n,
         "citation_rate": sum(r["cited"] for r in results) / n,
         "results": results,
     }
+
+
+def secret_in_original(repo: Path) -> bool:
+    """Whether `kb check` reports an unmasked secret in an original document (the agent would read it)."""
+    if not (repo / "kb.config.yaml").exists():
+        return False
+    return any(i.code == "source.secret_in_original" for i in run_check(repo).issues)
 
 
 def record(path: Path, agent: str, mode: str, run: dict) -> None:
@@ -115,12 +170,19 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess_runner) -> i
     parser.add_argument("--questions", type=Path, default=HERE / "questions.yaml")
     parser.add_argument("--results-dir", type=Path, default=HERE / "results")
     args = parser.parse_args(argv)
+    if secret_in_original(args.repo):
+        print("refusing to run: kb check reports source.secret_in_original; remove the secret from the original document "
+              "and run `kb source sync` (demo step 4, docs/phases/phase1-demo.md)", file=sys.stderr)
+        return 2
     questions = load_yaml_strict(args.questions.read_text())
     mode = "with-kb" if args.with_kb else "without-kb"
     run = run_eval(questions, args.agent, args.with_kb, args.repo, runner)
     out = args.results_dir / f"phase1-{args.agent}.json"
     record(out, args.agent, mode, run)
     print(f"{args.agent} {mode}: wrong-fact rate {run['wrong_fact_rate']:.2f}, citation rate {run['citation_rate']:.2f} -> {out}")
+    if run["errors"]:
+        print(f"{run['errors']} questions failed to run (see 'error' in {out})", file=sys.stderr)
+        return 1
     return 0
 
 

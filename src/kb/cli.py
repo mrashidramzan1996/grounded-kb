@@ -368,8 +368,11 @@ def hook(
     stdin = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
     root = Path(ctx.obj["root"])
     if not ctx.obj["root_explicit"]:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
-        if top.returncode == 0 and top.stdout.strip():
+        try:  # git missing or unusable: keep the current directory, hooks must fail safe
+            top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
+        except OSError:
+            top = None
+        if top is not None and top.returncode == 0 and top.stdout.strip():
             root = Path(top.stdout.strip())
     try:
         out, code = run_hook(root, event, agent, stdin)

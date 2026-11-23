@@ -122,3 +122,19 @@ def test_hook_outside_a_git_repo_stays_fail_safe(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["hook", "stop"], input="")
     assert result.exit_code == 0 and result.stdout == ""
+
+
+def test_hook_with_git_absent_stays_fail_safe(tmp_path, monkeypatch):
+    import subprocess
+
+    from typer.testing import CliRunner
+
+    from kb.cli import app
+
+    def no_git(*a, **k):
+        raise FileNotFoundError("git")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(subprocess, "run", no_git)
+    result = CliRunner().invoke(app, ["hook", "stop"], input="")
+    assert result.exit_code == 0 and result.stdout == ""

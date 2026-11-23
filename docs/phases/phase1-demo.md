@@ -107,7 +107,9 @@ uv run python eval/run.py --agent claude --with-kb    --repo /Users/dev/projects
 uv run python eval/run.py --agent claude --without-kb --repo /Users/dev/projects/acme-billing
 ```
 
-Results land in `eval/results/phase1-claude.json`. Record them here:
+The runner is sandboxed read-only, and refuses to run (exit 2) while `kb check` reports `source.secret_in_original`
+(finish step 4 first). It sends the questions and the repository content the agent reads to the agent's model provider,
+and writes the answers to `eval/results/phase1-claude.json` (decide before committing that file). Record the rates here:
 
 | Agent | Mode | Wrong-fact rate | Citation rate |
 |---|---|---|---|
