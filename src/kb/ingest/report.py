@@ -1,7 +1,6 @@
 """`kb ingest --report`: gate whatever the agent drafted since `base` (A-16)."""
 
 import hashlib
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,24 +13,20 @@ from kb.gates.base import GateContext, run_gates
 from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
-from kb.gates.sources import sha256_file, source_gate
-from kb.gitfiles import read_tree_files
-from kb.ingest.brief import valid_segment_id
+from kb.gates.sources import STORE_FILE, bad_segment_ids, recover_hint, sha256_file, source_gate, stored_ids
+from kb.gitfiles import file_at, read_tree_files
 from kb.issues import Issue
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
-from kb.sources.readers import SourceError
-from kb.sources.store import derive_store
 from kb.textfmt import inline_code
 from kb.yamlio import YamlError, load_yaml_strict
 
 GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]
+BASE_GATES = [g for g in GATES if g is not source_gate]
 CONFIG = "kb.config.yaml"
 ORIGINAL_CHANGED = (
     "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
 )
-# files `kb ingest` writes itself; the agent owns everything else under kb/
-_STORE_FILE = re.compile(r"kb/sources/(SRC-[^/]+)/(?:source\.yaml|text\.md|segments\.jsonl)")
 
 
 @dataclass
@@ -76,49 +71,7 @@ def _drafted_paths(head: KbRepo, before: KbRepo) -> set[str]:
     """kb/ paths the agent added, changed or deleted since base, including ones that now fail to load."""
     changed = {p for p in set(head.raw) | set(before.raw) if head.raw.get(p) != before.raw.get(p)}
     changed |= {i.path for i in head.errors if i.path} - {i.path for i in before.errors if i.path}
-    return {p for p in changed if not _STORE_FILE.fullmatch(p)}
-
-
-def _bad_segment_ids(repo: KbRepo) -> list[str]:
-    """Sources whose segments.jsonl holds ids that are not `seg-NN`."""
-    return sorted(s for s in repo.sources if not all(valid_segment_id(g.id) for g in repo.segments(s)))
-
-
-def _tampered(root: Path, config: KbConfig, head: KbRepo, before: KbRepo, ref: str) -> list[Issue]:
-    """Store files may change only as `kb source sync` would change them: re-derive and compare bytes.
-    Segment ids must be `seg-NN` whatever changed, since the report prints them."""
-    fix = f"restore the store files from {ref} and run `kb source sync` once"
-    issues = [
-        Issue("source.tampered", f"kb/sources/{s}/segments.jsonl holds invalid segment ids; {fix}",
-              path=f"kb/sources/{s}/segments.jsonl", record=s)
-        for s in _bad_segment_ids(head)
-    ]
-    changed = sorted({
-        m.group(1) for p in set(head.raw) | set(before.raw)
-        if (m := _STORE_FILE.fullmatch(p)) and head.raw.get(p) != before.raw.get(p)
-    } - {i.record for i in issues})
-    for src_id in changed:
-        old, new = before.sources.get(src_id), head.sources.get(src_id)
-        original = old.original if old else new.original if new else None
-        where = f"kb/sources/{src_id}"
-        try:
-            if original is None:
-                raise SourceError("no valid source.yaml")
-            previous, next_seg = (before.segments(src_id), old.next_seg) if old else ([], 1)
-            source, expected = derive_store(root, original, config, previous, next_seg)
-            if source.id != src_id:
-                raise SourceError(f"{original} gives {source.id}")
-        except (SourceError, OSError, ValueError) as e:
-            issues.append(Issue("source.tampered", f"{where} changed and cannot be re-derived: {e}; {fix}", path=where, record=src_id))
-            continue
-        for name, data in expected.items():
-            if head.raw.get(f"{where}/{name}") != data:
-                issues.append(Issue(
-                    "source.tampered",
-                    f"{where}/{name} differs from what {original} gives; {fix}",
-                    path=f"{where}/{name}", record=src_id,
-                ))
-    return issues
+    return {p for p in changed if not STORE_FILE.fullmatch(p)}
 
 
 def _originals_changed(root: Path, before: KbRepo, ref: str) -> list[Issue]:
@@ -130,7 +83,7 @@ def _originals_changed(root: Path, before: KbRepo, ref: str) -> list[Issue]:
             now = sha256_file(root / src.original)
         except (ValueError, OSError):
             now = None
-        at_base = read_tree_files(root, ref, src.original).get(src.original)
+        at_base = file_at(root, ref, src.original)
         git_sha = hashlib.sha256(at_base).hexdigest() if at_base is not None else None
         if now != src.original_sha256 or (git_sha is not None and git_sha != now):
             issues.append(Issue("ingest.original_changed", ORIGINAL_CHANGED, path=src.original, record=src_id))
@@ -150,7 +103,7 @@ def _citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
 def _untriaged(repo: KbRepo) -> list[str]:
     """Segments with no triage entry; sources with invalid segment ids are skipped (reported as tampered)."""
     out = []
-    bad = set(_bad_segment_ids(repo))
+    bad = set(bad_segment_ids(repo))
     for src_id in sorted(set(repo.sources) - bad):
         tri = repo.triage(src_id)
         done = tri.segments if tri else {}
@@ -172,8 +125,9 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     config = load_config(root / CONFIG)
     head, before = KbRepo.load(root), KbRepo.at_ref(root, ref)
     base_config = _base_config(root, ref)
-    issues = run_gates(GateContext(root, config, head, before), GATES)
-    at_base = {_key(i) for i in run_gates(GateContext(root, base_config or config, before), GATES)}
+    issues = run_gates(GateContext(root, config, head, before, ref), GATES)
+    # source issues are never "caused" (they are reported under Sources), so the base needs no source gate
+    at_base = {_key(i) for i in run_gates(GateContext(root, base_config or config, before), BASE_GATES)}
 
     drafted = _drafted_paths(head, before)
     ids = {rid for rid, path in head.id_paths if path in drafted}
@@ -185,7 +139,11 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         if i.severity == "error" and i not in mine and not i.code.startswith("source.") and _key(i) not in at_base
     ]
 
-    tampered = _tampered(root, config, head, before, ref)
+    source_issues += [  # `kb ingest` never deletes a source
+        Issue("source.tampered", f"kb/sources/{s} was deleted; {recover_hint(ref)}", path=f"kb/sources/{s}", record=s)
+        for s in sorted(stored_ids(before) - stored_ids(head))
+    ]
+    tampered = [i for i in source_issues if i.code == "source.tampered"]
     bad_sources = {i.record for i in tampered if i.record}
     tainted = [
         Issue("source.tampered", f"{rid} cites {src}, whose stored files were changed by hand", path=head.paths[rid], record=rid)
@@ -200,7 +158,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         flagged=[i for i in mine if i.severity == "warning"],
         untriaged=_untriaged(head),
         proposed_modules=sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])}),
-        sources=source_issues + tampered + _originals_changed(root, before, ref),
+        sources=source_issues + _originals_changed(root, before, ref),
         caused=caused,
     )
 

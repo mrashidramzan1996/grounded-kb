@@ -43,6 +43,13 @@ _PATTERNS: list[tuple[RecordType, re.Pattern[str]]] = [
 ]
 
 
+_SEGMENT = re.compile(SEGMENT)
+
+
+def valid_segment_id(seg_id: str) -> bool:
+    return _SEGMENT.fullmatch(seg_id) is not None
+
+
 def parse_id(s: str) -> ParsedId:
     for rtype, pat in _PATTERNS:
         m = pat.fullmatch(s)

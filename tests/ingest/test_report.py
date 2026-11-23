@@ -261,3 +261,10 @@ def test_inline_code_of_empty_text():
     from kb.ingest.brief import inline_code
 
     assert inline_code("") == "(empty)"
+
+
+def test_deleted_source_store_is_tampered(md_repo_ingested):
+    import shutil
+
+    shutil.rmtree(md_repo_ingested / "kb/sources/SRC-n")
+    assert ("SRC-n", "source.tampered") in _pairs(ingest_report(md_repo_ingested, "HEAD").rejected)

@@ -41,7 +41,7 @@ def default_branch(root: Path) -> str:
     return _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.decode().strip()
 
 
-def _merge_base(root: Path, base: str) -> str:
+def merge_base(root: Path, base: str) -> str:
     for ref in (base, f"origin/{base}"):
         r = _git(root, "merge-base", ref, "HEAD", check=False)
         if r.returncode == 0 and r.stdout.strip():
@@ -53,7 +53,7 @@ def _merge_base(root: Path, base: str) -> str:
 
 
 def changed_files(root: Path, base: str | None = None) -> list[str]:
-    ref = _merge_base(root, base or default_branch(root))
+    ref = merge_base(root, base or default_branch(root))
     changed = _split(_git(root, "diff", "--name-only", "-z", ref).stdout)
     untracked = _split(_git(root, "ls-files", "-z", "--others", "--exclude-standard").stdout)
     return sorted(set(changed) | set(untracked))
@@ -62,6 +62,11 @@ def changed_files(root: Path, base: str | None = None) -> list[str]:
 def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:
     out = _git(root, "ls-tree", "-r", "-z", "--name-only", ref, "--", prefix).stdout
     return {p: _git(root, "show", f"{ref}:{p}").stdout for p in _split(out)}
+
+
+def file_at(root: Path, ref: str, path: str) -> bytes | None:
+    """The bytes of `path` at `ref`, or None when it is not in that tree."""
+    return read_tree_files(root, ref, path).get(path)
 
 
 def tree_symlinks(root: Path, ref: str, prefix: str) -> set[str]:

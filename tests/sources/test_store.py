@@ -154,11 +154,8 @@ def test_gate_flags_secret_in_original_and_outdated(acme_repo):
     (acme_repo / "docs/product-brief.docx").write_bytes(b"changed")
     (acme_repo / "docs/architecture-notes.docx").unlink()
     got = {(i.code, i.record) for i in gate(acme_repo)}
-    assert got == {
-        ("source.secret_in_original", "SRC-architecture-notes"),
-        ("source.outdated", "SRC-architecture-notes"),
-        ("source.outdated", "SRC-product-brief"),
-    }
+    # the secret is counted in the original as it is now (deleted: no secret), never taken from source.yaml
+    assert got == {("source.outdated", "SRC-architecture-notes"), ("source.outdated", "SRC-product-brief")}
 
 
 # --- CLI ----------------------------------------------------------------------------------------
@@ -291,6 +288,6 @@ def test_gate_invalid_original_and_oversize(acme_repo, tmp_path, monkeypatch):
     yaml_path.write_text(yaml_path.read_text().replace("docs/product-brief.docx", "docs/link.md"))
     assert [i.code for i in gate(acme_repo)] == ["source.invalid_original"]
     yaml_path.write_text(yaml_path.read_text().replace("docs/link.md", "docs/product-brief.docx"))
-    monkeypatch.setattr("kb.gates.sources.MAX_SOURCE_BYTES", 10)
+    monkeypatch.setattr("kb.sources.store.MAX_SOURCE_BYTES", 10)
     issues = gate(acme_repo)
     assert [i.code for i in issues] == ["source.outdated"] and "MAX_SOURCE_BYTES" in issues[0].message

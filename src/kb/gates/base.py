@@ -13,6 +13,7 @@ class GateContext:
     config: KbConfig
     repo: KbRepo
     base: KbRepo | None = None
+    base_ref: str | None = None  # the commit `base` was read from
 
 
 Gate = Callable[[GateContext], list[Issue]]

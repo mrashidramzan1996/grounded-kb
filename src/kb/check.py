@@ -10,7 +10,7 @@ from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
 from kb.gates.sources import source_gate
 from kb.gates.triage import triage_gate
-from kb.gitfiles import _merge_base, changed_files, default_branch, repo_files
+from kb.gitfiles import merge_base, changed_files, default_branch, repo_files
 from kb.issues import Issue
 from kb.modules import module_paths_gate, suggest_paths
 from kb.records.repo import KbRepo
@@ -39,8 +39,9 @@ def run_check(root: Path, *, base: str | None = None, changed_only: bool = False
         base = base or default_branch(root)
         changed = changed_files(root, base)
     # decision_guard compares with where the branch forked, not the tip of the base branch
-    base_repo = KbRepo.at_ref(root, _merge_base(root, base)) if base else None
-    ctx = GateContext(root, config, repo, base_repo)
+    base_ref = merge_base(root, base) if base else None
+    base_repo = KbRepo.at_ref(root, base_ref) if base_ref else None
+    ctx = GateContext(root, config, repo, base_repo, base_ref)
     gates = list(DEFAULT_GATES) + ([decision_guard] if base else [])
     # a change to the config or to kb/ can break file-level checks on untouched files: then check every file
     narrow = changed is not None and not any(p == "kb.config.yaml" or p.startswith("kb/") for p in changed)

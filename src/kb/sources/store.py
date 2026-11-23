@@ -92,15 +92,15 @@ def _read(root: Path, path: str, config: KbConfig) -> _Read:
     return _Read(rel, cfg, data, normaliser, guarded, masked)
 
 
-def _store_files(read: _Read, previous: list[Segment], next_seg: int) -> tuple[Source, dict[str, bytes]]:
-    """The source and the bytes of its source.yaml, text.md and segments.jsonl."""
+def _store_files(read: _Read, previous: list[Segment], next_seg: int, src_id: str) -> tuple[Source, dict[str, bytes]]:
+    """The source `src_id` and the bytes of its source.yaml, text.md and segments.jsonl."""
     segments, next_seg = assign_segment_ids(previous, segment(read.masked), next_seg)
     spans = read.guarded.injection_spans
     counts = read.guarded.counts.model_copy(update={
         "injection_segments": [s.id for s in segments if any(s.start < e and a < s.end for a, e in spans)]
     })
     source = Source(
-        id=source_id(read.rel), original=read.rel, original_sha256=hashlib.sha256(read.data).hexdigest(),
+        id=src_id, original=read.rel, original_sha256=hashlib.sha256(read.data).hexdigest(),
         normaliser=read.normaliser, trust=read.cfg.trust, visibility=read.cfg.visibility, guard=counts,
         next_seg=next_seg,
     )
@@ -112,10 +112,11 @@ def _store_files(read: _Read, previous: list[Segment], next_seg: int) -> tuple[S
 
 
 def derive_store(
-    root: Path, path: str, config: KbConfig, previous: list[Segment], next_seg: int
+    root: Path, path: str, config: KbConfig, previous: list[Segment], next_seg: int, src_id: str | None = None
 ) -> tuple[Source, dict[str, bytes]]:
-    """What add_source would store for `path` given the earlier segments and next_seg, computed in memory."""
-    return _store_files(_read(Path(root), path, config), previous, next_seg)
+    """What add_source would store for `path` (as `src_id`, default its own id) given the earlier segments and
+    next_seg, computed in memory."""
+    return _store_files(_read(Path(root), path, config), previous, next_seg, src_id or source_id(path))
 
 
 def add_source(root: Path, path: str, config: KbConfig) -> Source:
@@ -144,7 +145,7 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
         if old.original != rel:
             raise SourceError(f"{src_id} already belongs to {old.original}; {rel} has the same name")
         previous, next_seg = existing.segments(src_id), old.next_seg
-    source, store = _store_files(read, previous, next_seg)
+    source, store = _store_files(read, previous, next_seg, src_id)
 
     parent = target.parent
     parent.mkdir(parents=True, exist_ok=True)

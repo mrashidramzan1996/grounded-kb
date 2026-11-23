@@ -14,7 +14,7 @@ from pathspec import GitIgnoreSpec
 
 from kb.config.schema import KbConfig
 from kb.gitfiles import repo_files
-from kb.records.ids import SEGMENT
+from kb.records.ids import valid_segment_id
 from kb.records.io import render_record
 from kb.records.models import Component, Decision, Feature, Invariant, Requirement, Source, Term
 from kb.records.repo import KbRepo
@@ -37,7 +37,6 @@ _NUMBERED = [
     ("Decision", "ADR", 4),
     ("Invariant", "INV", 3),
 ]
-_SEG_ID = re.compile(SEGMENT)
 
 
 # --- choosing and storing sources --------------------------------------------------------------
@@ -171,10 +170,6 @@ def _examples() -> str:
 def _fence(text: str) -> str:
     """A backtick fence longer than any backtick run in `text`, so the text cannot close it."""
     return "`" * max(3, longest_backticks(text) + 1)
-
-
-def valid_segment_id(seg_id: str) -> bool:
-    return _SEG_ID.fullmatch(seg_id) is not None
 
 
 def _segments(repo: KbRepo, src_ids: list[str]) -> str:
