@@ -1,0 +1,48 @@
+version: 1
+teams:
+  team-billing:   { git_team: "@acme/billing" }
+  team-platform:  { git_team: "@acme/platform" }
+  product-owners: { git_team: "@acme/product" }
+  tech-leads:     { git_team: "@acme/tech-leads" }
+modules:
+  - id: MOD-billing
+    paths: ["services/billing/**"]
+    owner: team-billing          # → CODEOWNERS + required approval
+    risk: high                   # low | standard | high → evidence E2 | E4 | E5
+  - id: MOD-sessions
+    paths: ["services/sessions/**"]
+    owner: team-platform
+    risk: high
+sources:
+  - paths: ["docs/requirements/**"]
+    trust: spec
+    visibility: internal
+  - paths: ["docs/tickets/*.json"]
+    adapter: json
+    mapping: { message: body, title: subject, date: created_at }
+    trust: discussion
+visibility:
+  restricted:
+    - paths: ["docs/contracts/**"]
+      readers: [tech-leads]
+models:                           # tier per job
+  extract: standard
+  judge_test: standard
+  reconfirm: standard
+  tie_break: small
+evidence:
+  required: { low: E2, standard: E4, high: E5 }
+policy:
+  mode: warn-only                 # warn-only during rollout → enforce
+  fail_on: [broken, schema, decision_guard, missing_owner_approval, stale_context]
+  warn_on: [stale, coverage_drop]
+  approvers:
+    intent: [product-owners]      # requirements
+    decisions: [tech-leads]       # ADRs, ground-truth change requests
+review:
+  max_items_per_pr: 40
+  escalate_after_days: 5
+coordination:                     # Phase 4
+  lease_minutes: 30
+  broadcast_rate_per_hour: 6
+  ask_reply_timeout_minutes: 10
