@@ -5,6 +5,7 @@ from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
+from kb.textfmt import inline_code
 
 MAX_QUOTES_PER_CLAIM = 5
 _NUMBER = re.compile(r"\d[\d,.]*")
@@ -51,7 +52,7 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
             if src not in repo.sources or seg is None:
                 continue  # id_gate reports the missing source or segment
             if find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is None:
-                issues.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {q.text!r}", path=path, record=rid))
+                issues.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
         grounded = set().union(*(_numbers(q.text) for q in ev.quotes))
         missing = sorted(_numbers(_claimed_text(rec)) - grounded)
         if missing:

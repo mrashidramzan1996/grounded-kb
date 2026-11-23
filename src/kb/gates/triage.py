@@ -1,9 +1,6 @@
 from kb.gates.base import GateContext
 from kb.issues import Issue
-
-
-def _inline(text: str) -> str:
-    return " ".join(text.split())
+from kb.textfmt import inline_code
 
 
 def triage_gate(ctx: GateContext) -> list[Issue]:
@@ -16,7 +13,7 @@ def triage_gate(ctx: GateContext) -> list[Issue]:
             if seg.id not in triaged:
                 issues.append(Issue(
                     "segment.untriaged",
-                    f"`{src_id}#{seg.id}` \"{_inline(seg.heading)}\" has no triage entry",
+                    f"`{src_id}#{seg.id}` {inline_code(seg.heading)} has no triage entry",
                     "warning",
                     path=f"kb/sources/{src_id}/triage.yaml",
                     record=src_id,
