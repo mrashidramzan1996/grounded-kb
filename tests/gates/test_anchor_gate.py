@@ -75,3 +75,8 @@ def test_valid_ctx_with_calls_do_not_share_files(valid_ctx_with):
     a = valid_ctx_with(add_file("only_a.txt", "x"))
     b = valid_ctx_with()
     assert (a.root / "only_a.txt").exists() and not (b.root / "only_a.txt").exists()
+
+
+def test_markers_in_agent_instruction_files_are_documentation(valid_ctx_with):
+    ctx = valid_ctx_with(add_file("AGENTS.md", "put r[impl ID] in code\n"), add_file("CLAUDE.md", "r[verify ID]\n"))
+    assert "marker.unknown_id" not in codes(run_gates(ctx, [anchor_gate]))

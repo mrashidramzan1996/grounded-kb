@@ -35,7 +35,12 @@ def scan_markers(root: Path, files: list[str]) -> list[Marker]:
     return out
 
 
+# agent instruction files document the marker syntax (`r[impl ID]`); they are not code
+AGENT_FILES = frozenset({"AGENTS.md", "CLAUDE.md"})
+
+
 def marker_eligible(path: str) -> bool:
-    """Whether markers in this repo file count: not under kb/ and no dot-directory or dot-file segment."""
+    """Whether markers in this repo file count: not under kb/, not a root agent instruction file,
+    and no dot-directory or dot-file segment."""
     parts = path.split("/")
-    return parts[0] != "kb" and not any(p.startswith(".") for p in parts)
+    return parts[0] != "kb" and path not in AGENT_FILES and not any(p.startswith(".") for p in parts)

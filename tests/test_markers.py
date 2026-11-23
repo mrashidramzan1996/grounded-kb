@@ -47,3 +47,10 @@ def test_marker_eligible_excludes_kb_and_dot_paths():
     assert marker_eligible("services/billing/seats.py") and marker_eligible("kbtools/x.py")
     assert not marker_eligible("kb/requirements/REQ-F-001.yaml")
     assert not marker_eligible(".github/x.py") and not marker_eligible("src/.hidden/x.py")
+
+
+def test_marker_eligible_excludes_agent_instruction_files():
+    from kb.markers import marker_eligible
+
+    assert not marker_eligible("AGENTS.md") and not marker_eligible("CLAUDE.md")
+    assert marker_eligible("docs/AGENTS.md")

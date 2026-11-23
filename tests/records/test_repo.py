@@ -160,3 +160,7 @@ def test_source_original_must_be_a_contained_relative_path(original):
     with pytest.raises(ValidationError):
         Source(id="SRC-a", original=original, original_sha256="0" * 64, normaliser="text@1", trust="spec",
                visibility="internal", guard=GuardCounts(emails=0, secrets=0, injections=0), next_seg=1)
+
+
+def test_kb_readme_is_documentation_not_an_unknown_file():
+    assert KbRepo.from_files({"kb/README.md": b"# kb\n"}).errors == []

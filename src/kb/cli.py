@@ -11,6 +11,7 @@ from kb.config.load import ConfigError, load_config
 from kb.check import run_check
 from kb.context import ContextError, governing, render_pack, session_brief
 from kb.baseline import BaselineError, freeze_baseline
+from kb.init.scaffold import InitError, init_repo
 from kb.gitfiles import GitError, changed_files, repo_files
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_brief
@@ -39,6 +40,29 @@ def main(
 def version() -> None:
     """Print the kb version."""
     typer.echo(kb.__version__)
+
+
+@app.command()
+def init(
+    ctx: typer.Context,
+    ci: Annotated[str, typer.Option("--ci", help="CI template: github, gitlab or none.")] = "github",
+    install_spec: Annotated[str | None, typer.Option("--install-spec", help="Package spec CI installs kb from.")] = None,
+) -> None:
+    """Scaffold kb.config.yaml, agent rules, CODEOWNERS block and CI. Modules only from CODEOWNERS."""
+    if ci not in ("github", "gitlab", "none"):
+        typer.echo(f"unknown --ci {ci!r}: use github, gitlab or none", err=True)
+        raise typer.Exit(2)
+    extra = {"install_spec": install_spec} if install_spec is not None else {}
+    try:
+        result = init_repo(Path(ctx.obj["root"]), ci=ci, **extra)  # type: ignore[arg-type]
+    except (InitError, ConfigError, OSError) as e:
+        typer.echo(f"kb init: {e}", err=True)
+        raise typer.Exit(2) from e
+    for rel in result.files_written:
+        typer.echo(f"wrote {rel}")
+    for issue in result.issues:
+        typer.echo(f"{issue.severity} {issue.code}: {issue.message}", err=True)
+    typer.echo("next: set policy.approvers in kb.config.yaml (TODO), then `kb check`.", err=True)
 
 
 source_app = typer.Typer(help="Manage product-document sources.", no_args_is_help=True)

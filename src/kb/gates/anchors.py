@@ -6,7 +6,7 @@ from kb.code.registry import NoAdapter, SymbolIndex, UnsafePath, resolve_anchor,
 from kb.gates.base import GateContext
 from kb.gitfiles import GitError, repo_files
 from kb.issues import Issue
-from kb.markers import scan_markers
+from kb.markers import AGENT_FILES, scan_markers
 from kb.ports.code import Symbol
 from kb.records.models import Invariant
 
@@ -25,7 +25,7 @@ def _files(root: Path) -> list[str]:
         files = repo_files(root)
     except (GitError, OSError):
         files = _walk(root)
-    return [f for f in files if not f.startswith("kb/")]
+    return [f for f in files if not f.startswith("kb/") and f not in AGENT_FILES]
 
 
 def _resolve(resolver: Callable[..., Symbol | None], index: SymbolIndex, ref: str, missing: str, path: str | None, rid: str) -> Issue | None:
