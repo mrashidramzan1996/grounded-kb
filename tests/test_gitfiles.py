@@ -63,3 +63,27 @@ def test_only_origin_main(tmp_path):
     assert default_branch(clone) == "origin/main"
     assert changed_files(clone) == ["b.txt"]
     assert changed_files(clone, "main") == ["b.txt"]
+
+
+def test_tag_and_commit_helpers(tmp_path):
+    from kb.gitfiles import commit_time, create_tag, delete_tag, head_commit, is_dirty, tag_exists
+
+    repo = make_git_repo(None, tmp_path, extra={"kb/a.txt": "1", "x.txt": "1"})
+    assert head_commit(repo) == git(repo, "rev-parse", "HEAD").strip()
+    assert commit_time(repo, "HEAD") == int(git(repo, "show", "-s", "--format=%ct", "HEAD"))
+    assert not tag_exists(repo, "t1")
+    create_tag(repo, "t1")
+    assert tag_exists(repo, "t1")
+    with pytest.raises(GitError):
+        create_tag(repo, "t1")
+    delete_tag(repo, "t1")
+    assert not tag_exists(repo, "t1")
+    with pytest.raises(GitError):
+        delete_tag(repo, "t1")
+    assert not is_dirty(repo, "kb/")
+    (repo / "x.txt").write_text("2")
+    assert not is_dirty(repo, "kb/")
+    (repo / "kb/a.txt").write_text("2")
+    assert is_dirty(repo, "kb/")
+    with pytest.raises(GitError):
+        head_commit(repo / "nowhere")

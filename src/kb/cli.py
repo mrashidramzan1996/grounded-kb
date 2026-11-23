@@ -193,11 +193,16 @@ def status(
         summary = summarize(config, repo, requirement_status(root, config, repo))
     except (ConfigError, GitError) as e:
         raise _fail(e) from e
+    failed = sorted({i.path for i in repo.errors if i.path})
+    if repo.errors:
+        typer.echo(f"{len(failed)} KB files failed to load (run `kb check`): {', '.join(failed[:3])}", err=True)
     if format == "json":
         typer.echo(json.dumps(summary, indent=2, sort_keys=True))
-        return
-    for name, c in [*summary["modules"].items(), ("total", summary["total"])]:
-        typer.echo(f"{name}: {c['built']}/{c['total']} built, {c['tested']}/{c['total']} tested")
+    else:
+        for name, c in [*summary["modules"].items(), ("total", summary["total"])]:
+            typer.echo(f"{name}: {c['built']}/{c['total']} built, {c['tested']}/{c['total']} tested")
+    if repo.errors:
+        raise typer.Exit(1)
 
 
 baseline_app = typer.Typer(help="Freeze the agreed requirement set.", no_args_is_help=True)

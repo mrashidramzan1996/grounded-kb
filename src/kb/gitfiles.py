@@ -73,3 +73,30 @@ def tree_symlinks(root: Path, ref: str, prefix: str) -> set[str]:
         if meta.split(" ", 1)[0] == "120000":
             links.add(path)
     return links
+
+
+def head_commit(root: Path) -> str:
+    return _git(root, "rev-parse", "HEAD").stdout.decode().strip()
+
+
+def commit_time(root: Path, ref: str) -> int:
+    """Committer time of `ref` as Unix seconds."""
+    return int(_git(root, "show", "-s", "--format=%ct", ref).stdout.decode().strip())
+
+
+def tag_exists(root: Path, name: str) -> bool:
+    return _git(root, "rev-parse", "--verify", "--quiet", f"refs/tags/{name}", check=False).returncode == 0
+
+
+def create_tag(root: Path, name: str) -> None:
+    """Lightweight tag at HEAD; fails if it exists."""
+    _git(root, "tag", name, "HEAD")
+
+
+def delete_tag(root: Path, name: str) -> None:
+    _git(root, "tag", "-d", name)
+
+
+def is_dirty(root: Path, pathspec: str) -> bool:
+    """Whether `git status --porcelain` reports anything under pathspec."""
+    return bool(_git(root, "status", "--porcelain", "--", pathspec).stdout.strip())

@@ -4,6 +4,7 @@ import os
 import pytest
 
 from helpers import apply_drafts, git, invoke
+from kb.gitfiles import GitError
 from kb.baseline import BaselineError, freeze_baseline
 from kb.records.repo import KbRepo
 from kb.yamlio import load_yaml_strict
@@ -91,3 +92,67 @@ def test_cli_freeze(committed):
     assert "wrote kb/baseline/v1.yaml; tagged HEAD as kb-baseline-v1; commit the baseline file" in out.stdout
     again = invoke(committed, "baseline", "freeze", "v1")
     assert again.exit_code == 2
+
+
+def _break_requirement(repo):
+    (repo / "kb/requirements/REQ-F-002.yaml").write_text("id: REQ-F-002\nbogus: [\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "broken")
+
+
+def test_freeze_refuses_unloadable_records(committed):
+    _break_requirement(committed)
+    with pytest.raises(BaselineError, match="REQ-F-002"):
+        freeze_baseline(committed, "v1")
+    assert not (committed / "kb/baseline").exists() and git(committed, "tag", "-l") == ""
+
+
+def test_freeze_refuses_duplicate_ids(committed):
+    src = (committed / "kb/requirements/REQ-F-002.yaml").read_text()
+    (committed / "kb/requirements/REQ-F-999.yaml").write_text(src)
+    git(committed, "add", "-A")
+    git(committed, "commit", "-m", "dup")
+    with pytest.raises(BaselineError, match="REQ-F-002"):
+        freeze_baseline(committed, "v1")
+
+
+def test_status_cli_reports_load_failures(committed):
+    _break_requirement(committed)
+    out = invoke(committed, "status")
+    assert out.exit_code == 1
+    assert "1 KB files failed to load (run `kb check`): kb/requirements/REQ-F-002.yaml" in out.stderr
+    assert "total:" in out.stdout
+
+
+def test_tag_failure_leaves_nothing(committed, monkeypatch):
+    import kb.baseline as b
+
+    def boom(*a):
+        raise GitError("tag failed")
+
+    monkeypatch.setattr(b, "create_tag", boom)
+    with pytest.raises(GitError):
+        freeze_baseline(committed, "v1")
+    assert not (committed / "kb/baseline").exists() and git(committed, "tag", "-l") == ""
+
+
+def test_write_failure_leaves_no_tag_or_partial(committed, monkeypatch):
+    import kb.baseline as b
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(b.os, "link", boom)
+    with pytest.raises(OSError):
+        freeze_baseline(committed, "v1")
+    assert not (committed / "kb/baseline").exists() and git(committed, "tag", "-l") == ""
+    monkeypatch.undo()
+    freeze_baseline(committed, "v1")
+
+
+def test_baseline_path_is_a_file(committed):
+    (committed / "kb/baseline").write_text("x")
+    git(committed, "add", "-A")
+    git(committed, "commit", "-m", "f")
+    with pytest.raises(BaselineError):
+        freeze_baseline(committed, "v1")

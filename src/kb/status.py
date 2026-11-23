@@ -37,7 +37,10 @@ def requirement_status(root: Path, config: KbConfig, repo: KbRepo) -> dict[str, 
 
     built: set[str] = set()
     tested: set[str] = set()
-    for _, claim in repo.claims():
+    live = live_ids(repo)
+    for feature, claim in repo.claims():
+        if feature.id not in live:
+            continue
         req = claim.requirement
         if not req:
             continue
@@ -49,7 +52,7 @@ def requirement_status(root: Path, config: KbConfig, repo: KbRepo) -> dict[str, 
     tested |= verify
 
     out: dict[str, Status] = {}
-    for rid in sorted(live_ids(repo)):
+    for rid in sorted(live):
         if isinstance(repo.records[rid], Requirement):
             out[rid] = ("tested" if rid in tested else "built") if rid in built else "not_built"
     return out

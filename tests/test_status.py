@@ -89,3 +89,10 @@ def test_cli_text_and_json(built_acme):
 
 def test_cli_bad_format(built_acme):
     assert invoke(built_acme, "status", "--format", "xml").exit_code == 2
+
+
+def test_claims_of_rejected_features_do_not_count(acme_repo_ingested, fixtures):
+    repo = drafted(acme_repo_ingested, fixtures)
+    write(repo, "kb/features/FEAT-001.md", FEAT.replace("---\nSeats.", "status: rejected\n---\nSeats."))
+    write(repo, "services/billing/seats.py", "def add_seat(): ...\n")
+    assert requirement_status(*ctx(repo)[:3])["REQ-F-001"] == "not_built"
