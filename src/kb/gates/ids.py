@@ -116,5 +116,8 @@ def id_gate(ctx: GateContext) -> list[Issue]:
         for items in (tri.segments.values() if tri else ()):
             for item in [] if isinstance(items, str) else items:
                 if item not in repo.records:
-                    issues.append(Issue("ref.missing", f"triage of {src_id} names {item}, which does not exist", record=src_id))
+                    issues.append(Issue(
+                        "ref.missing", f"triage of {src_id} names {item}, which does not exist",
+                        path=f"kb/sources/{src_id}/triage.yaml", record=src_id,
+                    ))
     return issues

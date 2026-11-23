@@ -1,0 +1,10 @@
+id: REQ-F-001
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "A removed seat stays active until the end of the billing cycle."
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-10
+    text: "A removed seat stays active until the end of the billing cycle."
+modules:
+- MOD-billing
+

@@ -1,0 +1,14 @@
+version: 1
+teams:
+  product-owners: {git_team: "@acme/product"}
+  tech-leads: {git_team: "@acme/tech-leads"}
+policy:
+  approvers:
+    intent: [product-owners]
+    decisions: [tech-leads]
+sources:
+  - paths: ["docs/**"]
+modules:
+  - {id: MOD-billing, owner: "@acme/billing", risk: high}
+  - {id: MOD-sessions, owner: "@acme/platform"}
+  - {id: MOD-web, owner: "@acme/web", risk: low}

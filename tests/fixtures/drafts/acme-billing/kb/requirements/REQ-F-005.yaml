@@ -1,0 +1,10 @@
+id: REQ-F-005
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "Annual plans get two months free."
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-07
+    text: "Annual plans get two months free"
+modules:
+- MOD-billing
+

@@ -140,3 +140,14 @@ def acme_kb_with(acme_repo):
         return GateContext(acme_repo, load_config(cfg_path), KbRepo.load(acme_repo))
 
     return build
+
+
+@pytest.fixture
+def acme_repo_ingested(acme_repo):
+    """acme_repo with every doc stored as a source and committed."""
+    from helpers import add_all, git
+
+    add_all(acme_repo)
+    git(acme_repo, "add", "-A")
+    git(acme_repo, "commit", "-m", "ingest sources")
+    return acme_repo

@@ -1,0 +1,10 @@
+id: REQ-F-003
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "Adding a seat is charged pro-rata for the remaining days of the current billing cycle."
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-09
+    text: "Adding a seat is charged pro-rata for the remaining days of the current billing cycle."
+modules:
+- MOD-billing
+

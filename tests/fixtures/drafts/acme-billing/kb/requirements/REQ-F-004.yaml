@@ -1,0 +1,10 @@
+id: REQ-F-004
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "Billing alerts are shown no more than one click away from the billing page."
+evidence:
+  quotes:
+  - source: SRC-product-brief#seg-03
+    text: "Billing alerts are shown no more than one click away from the billing page."
+modules:
+- MOD-web
+

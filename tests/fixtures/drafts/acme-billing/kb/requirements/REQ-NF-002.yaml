@@ -1,0 +1,10 @@
+id: REQ-NF-002
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "Billing data is retained for 7 years."
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-12
+    text: "Billing data must be retained for 7 years."
+modules:
+- MOD-billing
+

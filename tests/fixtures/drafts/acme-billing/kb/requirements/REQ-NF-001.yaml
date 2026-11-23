@@ -1,0 +1,11 @@
+id: REQ-NF-001
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "The checkout page must be fast."
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-12
+    text: "The checkout page must be fast."
+modules:
+- MOD-web
+flags:
+- vague

@@ -248,3 +248,25 @@ def req(id: str, statement: str, quote: tuple[str, str, str], **fields):
         return Requirement.model_validate(data)
 
     return build
+
+
+# --- ingest helpers ----------------------------------------------------------------------------
+
+BRIEF = ".kb/cache/ingest/brief.md"
+
+
+def brief_of(repo: Path) -> str:
+    return (repo / BRIEF).read_text(encoding="utf-8")
+
+
+def total_segments(repo: Path) -> int:
+    from kb.records.repo import KbRepo
+
+    kb = KbRepo.load(repo)
+    return sum(len(kb.segments(s)) for s in kb.sources)
+
+
+def apply_drafts(repo: Path, drafts: Path) -> None:
+    """Simulate an agent following the brief: copy the drafted files over the repo (its kb.config.yaml,
+    which carries the proposed modules, replaces the repo's)."""
+    shutil.copytree(drafts, repo, dirs_exist_ok=True)

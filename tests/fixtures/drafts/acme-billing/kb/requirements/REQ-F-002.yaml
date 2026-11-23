@@ -1,0 +1,10 @@
+id: REQ-F-002
+drafted_by: "agent:fixture via kb ingest brief v1"
+statement: "No refund is given when a seat is removed."
+evidence:
+  quotes:
+  - source: SRC-pricing-spec-v3#seg-10
+    text: "No refund is given."
+modules:
+- MOD-billing
+
