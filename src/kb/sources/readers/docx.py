@@ -2,15 +2,16 @@
 content controls and nested tables are read, and any other element holding text is an error.
 
 Source documents are untrusted, so the work is bounded: every table cell is read once (merged
-cells are not repeated per grid column), tables nest at most MAX_TABLE_DEPTH deep and at most
-MAX_TEXT_CHARS characters are extracted."""
+cells are not repeated per grid column), the archive is checked for zip bombs before it is
+parsed, tables nest at most MAX_TABLE_DEPTH deep, a document has at most MAX_TABLE_CELLS table
+cells and at most MAX_TEXT_CHARS characters are extracted."""
 
 import io
 import re
 import zipfile
+from bisect import bisect_right
 
 from docx import Document
-from docx.opc.exceptions import PackageNotFoundError
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
@@ -18,6 +19,9 @@ from kb.sources.readers import NormalisedText, SourceError, join_blocks, row_lin
 
 MAX_TABLE_DEPTH = 5
 MAX_TEXT_CHARS = 5_000_000
+MAX_TABLE_CELLS = 100_000
+MAX_DOCX_UNCOMPRESSED = 100_000_000  # bytes, all archive members together
+MAX_DOCX_COMPRESSION_RATIO = 200
 
 _HEADING = re.compile(r"^Heading (\d+)$")
 W_P, W_TBL, W_TR, W_TC, W_T = qn("w:p"), qn("w:tbl"), qn("w:tr"), qn("w:tc"), qn("w:t")
@@ -66,24 +70,57 @@ def _children(container):
             raise err
 
 
-def _prop(el, path: str, default: int) -> int:
+def _prop(el, path: str, default: int, minimum: int) -> int:
     found = el.find(path)
     if found is None:
         return default
     try:
-        return int(found.get(W_VAL, default))
-    except ValueError as e:
-        raise SourceError(f"invalid Word table property {path}: {found.get(W_VAL)!r}") from e
+        value = int(found.get(W_VAL, default))
+    except ValueError:
+        value = minimum - 1
+    if value < minimum:
+        raise SourceError(f"invalid Word table property {path}: {found.get(W_VAL)!r}")
+    return value
 
 
-def _header_for(header: list[_Cell], col: int) -> str:
-    return next((v for start, span, v in header if start <= col < start + span), "")
+def _headers(header: list[_Cell], rows: list[list[_Cell]]) -> dict[int, str]:
+    """Grid column → header value, for the columns where `rows` have cells. Built once per table;
+    header cells' start columns increase strictly, so each lookup is a binary search."""
+    starts = [start for start, _, _ in header]
+    out: dict[int, str] = {}
+    for col in {col for row in rows for col, _, _ in row}:
+        i = bisect_right(starts, col) - 1
+        out[col] = header[i][2] if i >= 0 and col < header[i][0] + header[i][1] else ""
+    return out
+
+
+def _check_archive(data: bytes) -> None:
+    """Refuse zip bombs before python-docx decompresses anything. Python's zipfile never
+    yields more than a member's declared size, so the declared sizes bound the work."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            members = z.infolist()
+    except (zipfile.BadZipFile, ValueError, EOFError) as e:
+        raise SourceError(f"not a valid .docx archive: {e}") from e
+    total = 0
+    for m in members:
+        total += m.file_size
+        if total > MAX_DOCX_UNCOMPRESSED:
+            raise SourceError(
+                f"Word document has more than {MAX_DOCX_UNCOMPRESSED} bytes uncompressed (MAX_DOCX_UNCOMPRESSED)"
+            )
+        if m.file_size > MAX_DOCX_COMPRESSION_RATIO * max(m.compress_size, 1):
+            raise SourceError(
+                f"Word archive member {m.filename} has compression ratio above "
+                f"{MAX_DOCX_COMPRESSION_RATIO} (MAX_DOCX_COMPRESSION_RATIO)"
+            )
 
 
 class _Reader:
     def __init__(self, doc):
         self.doc = doc
         self.chars = 0
+        self.cells = 0
 
     def count(self, text: str) -> str:
         self.chars += len(text)
@@ -132,10 +169,13 @@ class _Reader:
                 raise err
         rows = []
         for tr in tbl.iterchildren(W_TR):
-            col = _prop(tr, f"{qn('w:trPr')}/{qn('w:gridBefore')}", 0)
+            col = _prop(tr, f"{qn('w:trPr')}/{qn('w:gridBefore')}", 0, minimum=0)
             row: list[_Cell] = []
             for tc in tr.iterchildren(W_TC):
-                span = _prop(tc, f"{qn('w:tcPr')}/{qn('w:gridSpan')}", 1)
+                self.cells += 1
+                if self.cells > MAX_TABLE_CELLS:
+                    raise SourceError(f"Word document has more than {MAX_TABLE_CELLS} table cells (MAX_TABLE_CELLS)")
+                span = _prop(tc, f"{qn('w:tcPr')}/{qn('w:gridSpan')}", 1, minimum=1)
                 vmerge = tc.find(f"{qn('w:tcPr')}/{qn('w:vMerge')}")
                 continued = vmerge is not None and vmerge.get(W_VAL) != "restart"
                 row.append((col, span, "" if continued else self.cell(tc, depth)))
@@ -165,10 +205,8 @@ class _Reader:
         if len(rows) <= 1:
             return [v for row in rows for _, _, v in row if v]
         header, *body = rows
-        return [
-            self.count(f"{h}: {v}" if (h := _header_for(header, col)) else v)
-            for row in body for col, _, v in row if v
-        ]
+        heads = _headers(header, body)
+        return [self.count(f"{heads[col]}: {v}" if heads[col] else v) for row in body for col, _, v in row if v]
 
     def table(self, tbl) -> str | None:
         rows = self.rows(tbl, 1)
@@ -177,17 +215,19 @@ class _Reader:
         if len(rows) == 1:
             return self.count(row_line([v for _, _, v in rows[0]]))
         header, *body = rows
+        heads = _headers(header, body)
         lines = [
-            self.count(row_line([f"{h}: {v}" if (h := _header_for(header, col)) else v for col, _, v in row]))
+            row_line([self.count(f"{heads[col]}: {v}" if heads[col] else v) for col, _, v in row])
             for row in body
         ]
         return "\n".join(lines)
 
 
 def read(data: bytes) -> NormalisedText:
+    _check_archive(data)
     try:
         doc = Document(io.BytesIO(data))
-    except (PackageNotFoundError, zipfile.BadZipFile, KeyError, ValueError) as e:
+    except Exception as e:  # python-docx/lxml raise many error types on malformed packages
         raise SourceError(f"cannot read Word document: {e}") from e
     reader = _Reader(doc)
     blocks: list[str] = []

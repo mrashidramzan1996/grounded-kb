@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import pytest
 from helpers import docx_bytes, pdf_bytes
 
-from kb.sources.readers import NormalisedText, SourceError, read_document
+from kb.sources.readers import NormalisedText, SourceError, read_document, row_line
 
 DOCS = "repos/acme-billing/docs"
 
@@ -272,3 +274,80 @@ def test_docx_text_box_text_is_read_once():
                    f"<mc:Fallback><w:pict>{box}</w:pict></mc:Fallback>"
                    f"</mc:AlternateContent></w:r>")
     assert read_document("b.docx", docx_bytes(doc))[0].text == "Before Box text\n"
+
+
+# --- review fix: linear-time Word table headers and a cell cap -----------------------------------
+
+def _wide_table_doc(cols: int, rows: int):
+    """A document with one plain table, built as XML (python-docx is slow at building huge tables)."""
+    def cell(text: str) -> str:
+        return f"<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"
+
+    body = "".join(
+        "<w:tr>" + "".join(cell(f"H{c}" if r == 0 else f"v{r}.{c}") for c in range(cols)) + "</w:tr>"
+        for r in range(rows)
+    )
+    doc = _doc()
+    doc.add_paragraph("Wide.")._p.addnext(_wxml("tbl", "<w:tblPr/><w:tblGrid/>" + body))
+    return doc
+
+
+def test_docx_wide_table_extracts_correctly():
+    text = read_document("w.docx", docx_bytes(_wide_table_doc(50, 3)))[0].text
+    lines = text.splitlines()
+    assert lines[0] == "Wide." and len(lines) == 4
+    assert lines[2] == row_line([f"H{c}: v1.{c}" for c in range(50)])
+    assert lines[3] == row_line([f"H{c}: v2.{c}" for c in range(50)])
+
+
+def test_docx_table_cell_limit(monkeypatch):
+    import kb.sources.readers.docx as reader
+
+    monkeypatch.setattr(reader, "MAX_TABLE_CELLS", 10)
+    read_document("ok.docx", docx_bytes(_wide_table_doc(5, 2)))
+    with pytest.raises(SourceError, match=r"more than 10 table cells \(MAX_TABLE_CELLS\)"):
+        read_document("big.docx", docx_bytes(_wide_table_doc(4, 3)))
+
+
+def test_docx_huge_table_fails_fast():
+    import time
+
+    data = docx_bytes(_wide_table_doc(20_000, 6))
+    start = time.monotonic()
+    with pytest.raises(SourceError, match=r"MAX_TABLE_CELLS"):
+        read_document("huge.docx", data)
+    assert time.monotonic() - start < 2
+
+
+def _zip(members: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+    return out.getvalue()
+
+
+def test_docx_zip_bomb_is_rejected():
+    import time
+
+    data = _zip({"[Content_Types].xml": b"<Types/>", "word/document.xml": b" " * 5_000_000})
+    start = time.monotonic()
+    with pytest.raises(SourceError, match=r"compression ratio .*\(MAX_DOCX_COMPRESSION_RATIO\)"):
+        read_document("bomb.docx", data)
+    assert time.monotonic() - start < 2
+
+
+def test_docx_total_uncompressed_size_limit(monkeypatch):
+    import kb.sources.readers.docx as reader
+
+    monkeypatch.setattr(reader, "MAX_DOCX_UNCOMPRESSED", 1000)
+    with pytest.raises(SourceError, match=r"more than 1000 bytes uncompressed \(MAX_DOCX_UNCOMPRESSED\)"):
+        read_document("big.docx", (Path(__file__).parent.parent / "fixtures" / DOCS / "product-brief.docx").read_bytes())
+
+
+def test_docx_corrupt_archive_is_a_source_error():
+    with pytest.raises(SourceError, match=r"not a valid \.docx archive"):
+        read_document("c.docx", b"PK\x03\x04 truncated")
