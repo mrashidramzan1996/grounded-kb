@@ -14,8 +14,7 @@ from kb.ports.agents import EventKind, HookResult
 from kb.records.repo import KbRepo
 
 EVENTS: dict[str, EventKind] = {"session-start": "session_start", "stop": "stop", "pre-commit": "pre_commit"}
-# human actions: an agent cannot fix them (owners) or must not (the original documents), so they never block
-NOTE_ONLY = {"config.owner_todo", "source.secret_in_original"}
+OWNER_TODO, SECRET = "config.owner_todo", "source.secret_in_original"
 
 
 def _payload(text: str) -> dict:
@@ -34,17 +33,25 @@ def _brief(root: Path) -> str:
     return out
 
 
-def _blocking(root: Path) -> list[Issue]:
-    """Errors new since the merge-base with the default branch (all of them when none resolves), except the
-    NOTE_ONLY ones, which go to stderr as one-line notes."""
+def _note(i: Issue) -> None:
+    sys.stderr.write(f"kb: note {i.code} {i.path or '-'}: {' '.join(i.message.split())}\n")
+
+
+def _blocking(root: Path, kind: EventKind) -> list[Issue]:
+    """The errors that block: those new since the merge-base with the default branch (all of them when none
+    resolves). Human actions never block an agent and are noted on stderr instead: TODO owners (the agent
+    cannot fix them) and secrets in original documents (it must not edit them). A new secret does block a
+    commit (pre-commit), so a person removes it before it lands."""
     errors = [i for i in run_check(root, changed_only=True).issues if i.severity == "error"]
+    rest = [i for i in errors if i.code not in (OWNER_TODO, SECRET)]
+    secrets = [i for i in errors if i.code == SECRET] if kind == "pre_commit" else []
+    if (rest or secrets) and (base := resolve_base(root)) is not None:
+        at_base = errors_at(root, base)
+        rest, secrets = new_since(rest, at_base), new_since(secrets, at_base)
     for i in errors:
-        if i.code in NOTE_ONLY:
-            sys.stderr.write(f"kb: note {i.code} {i.path or '-'}: {' '.join(i.message.split())}\n")
-    errors = [i for i in errors if i.code not in NOTE_ONLY]
-    if errors and (base := resolve_base(root)) is not None:
-        errors = new_since(errors, errors_at(root, base))
-    return errors
+        if i.code == OWNER_TODO or (i.code == SECRET and i not in secrets):
+            _note(i)
+    return rest + secrets
 
 
 def run_hook(root, event_name: str, agent: str, stdin_text: str) -> tuple[str, int]:
@@ -67,9 +74,9 @@ def run_hook(root, event_name: str, agent: str, stdin_text: str) -> tuple[str, i
             result.brief = _brief(root)
         elif kind == "stop":
             if not event.stop_active:
-                result.errors = _blocking(root)
+                result.errors = _blocking(root, kind)
         else:
-            result.errors = _blocking(root)
+            result.errors = _blocking(root, kind)
     except Exception as e:  # a broken tool must not trap the agent; pre-commit reports it as a tool error
         sys.stderr.write(f"kb hook {event_name}: {' '.join(str(e).split())}\n")
         if kind == "pre_commit":

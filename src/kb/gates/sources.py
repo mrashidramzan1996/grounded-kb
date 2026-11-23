@@ -16,7 +16,7 @@ from kb.issues import Issue
 from kb.records.ids import valid_segment_id
 from kb.records.repo import KbRepo
 from kb.sources.readers import SourceError
-from kb.sources.store import MAX_SOURCE_BYTES, derive_store, source_id
+from kb.sources.store import MAX_SOURCE_BYTES, derive_store, source_ids
 
 STORE_NAMES = ("source.yaml", "text.md", "segments.jsonl")
 # the files `kb source add` / `kb ingest` write; triage.yaml is the agent's
@@ -93,7 +93,7 @@ def rederive(
         return failed("source.invalid_original", f"{original} is a symlink or lies outside the repository")
     if not (root / original).is_file():
         return failed("source.outdated", f"{original} is missing; restore it or remove {where}")
-    if src_id != source_id(original):
+    if src_id not in source_ids(original):
         return [Issue("source.tampered", f"{where} does not belong to {original}; {fix}", path=yaml_path, record=src_id)]
     if old is not None:
         previous, next_seg = base.segments(src_id), old.next_seg  # type: ignore[union-attr]
@@ -120,7 +120,7 @@ def rederive(
     if derived.guard.secrets:
         issues.append(Issue(
             "source.secret_in_original",
-            f"{original} contains {derived.guard.secrets} secret(s); remove them from the original",
+            f"{original} contains {derived.guard.secrets} secret(s); remove them from the original and run `kb source sync`",
             path=yaml_path, record=src_id,
         ))
     return issues
@@ -150,7 +150,7 @@ def _as_at_base(ctx: GateContext, src_id: str, original: bytes) -> list[Issue]:
         issues.append(Issue("source.outdated", f"{src.original} changed since it was stored; run `kb source sync`", path=where, record=src_id))
     if src.guard.secrets > 0:
         issues.append(Issue(
-            "source.secret_in_original", f"{src.original} contains {src.guard.secrets} secret(s); remove them from the original",
+            "source.secret_in_original", f"{src.original} contains {src.guard.secrets} secret(s); remove them from the original and run `kb source sync`",
             path=where, record=src_id,
         ))
     return issues

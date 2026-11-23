@@ -192,9 +192,27 @@ def test_owner_todo_never_blocks_and_is_noted(valid_git_repo, fixtures, capsys):
     assert err and all(line.startswith("kb: note config.owner_todo") for line in err)
 
 
-def test_new_secret_in_original_never_blocks(md_repo_ingested, fixtures, capsys):
-    (md_repo_ingested / "docs/k.md").write_text("# Keys\n\nThe key is AKIAIOSFODNN7EXAMPLE.\n")
-    assert invoke(md_repo_ingested, "ingest").exit_code == 0
+def add_secret_doc(repo):
+    (repo / "docs/k.md").write_text("# Keys\n\nThe key is AKIAIOSFODNN7EXAMPLE.\n")
+    assert invoke(repo, "ingest").exit_code == 0
+
+
+def test_new_secret_in_original_blocks_pre_commit(md_repo_ingested):
+    add_secret_doc(md_repo_ingested)
+    out, code = run_hook(md_repo_ingested, "pre-commit", "generic", "")
+    assert code == 1 and "source.secret_in_original" in out and "kb source sync" in out
+
+
+def test_new_secret_in_original_is_only_a_note_at_stop(md_repo_ingested, fixtures, capsys):
+    add_secret_doc(md_repo_ingested)
+    assert run_hook(md_repo_ingested, "stop", "claude-code", payload(fixtures, "claude_code/stop")) == ("", 0)
+    assert "kb: note source.secret_in_original" in capsys.readouterr().err
+
+
+def test_pre_existing_secret_in_original_does_not_block_pre_commit(md_repo_ingested, capsys):
+    add_secret_doc(md_repo_ingested)
+    commit_all(md_repo_ingested, "secret already on main")
+    (md_repo_ingested / "notes.txt").write_text("x\n")
     assert run_hook(md_repo_ingested, "pre-commit", "generic", "") == ("", 0)
     assert "kb: note source.secret_in_original" in capsys.readouterr().err
 
