@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -21,11 +22,26 @@ from kb.yamlio import dump_yaml
 MAX_SOURCE_BYTES = 50_000_000
 
 
-def source_id(path: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", PurePosixPath(path).stem.lower()).strip("-")
+def _slug_id(text: str, path: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     if not slug:
         raise SourceError(f"cannot derive a source id from {path}")
     return f"SRC-{slug}"
+
+
+def source_id(path: str) -> str:
+    """The usual id: SRC- and the file stem."""
+    return _slug_id(PurePosixPath(path).stem, path)
+
+
+def path_source_id(path: str) -> str:
+    """The id for documents whose stems collide: SRC- and the repo-relative path without its extension."""
+    return _slug_id(PurePosixPath(path).with_suffix("").as_posix(), path)
+
+
+def source_ids(path: str) -> set[str]:
+    """The ids a source of `path` may have."""
+    return {source_id(path), path_source_id(path)}
 
 
 def _relative(root: Path, path: str) -> str:
@@ -84,7 +100,10 @@ def _read(root: Path, path: str, config: KbConfig) -> _Read:
     if file.stat().st_size > MAX_SOURCE_BYTES:
         raise SourceError(f"{rel} is larger than {MAX_SOURCE_BYTES} bytes (MAX_SOURCE_BYTES)")
     data = file.read_bytes()
-    normalised, normaliser = read_document(rel, data)
+    try:
+        normalised, normaliser = read_document(rel, data)
+    except SourceError as e:
+        raise SourceError(e.args[0] if str(e).startswith(rel) else f"{rel}: {e}") from e
     guarded = guard(normalised.text)
     masked = NormalisedText(
         guarded.text, [(page, guarded.map_offset(start)) for page, start in normalised.pages]
@@ -119,42 +138,61 @@ def derive_store(
     return _store_files(_read(Path(root), path, config), previous, next_seg, src_id or source_id(path))
 
 
-def add_source(root: Path, path: str, config: KbConfig) -> Source:
-    """Store `path` (relative to `root`) as a source; an existing source is re-synced, keeping segment ids.
+def assign_source_ids(repo: KbRepo, rels: list[str]) -> dict[str, str]:
+    """The id each document gets. A stored document keeps its id. A new one gets `SRC-<file stem>`, unless
+    another new document or a stored source with a different original has that stem: then every colliding
+    new document gets the id of its whole path (SRC-docs-api-readme for docs/api/README.md)."""
+    by_original = {s.original: sid for sid, s in repo.sources.items()}
+    taken = set(by_original.values()) | {p.split("/")[2] for p in repo.raw if p.startswith("kb/sources/")}
+    new = [r for r in dict.fromkeys(rels) if r not in by_original]
+    stems = Counter(source_id(r) for r in new)
+    out = {r: by_original[r] for r in rels if r in by_original}
+    for rel in new:
+        sid = source_id(rel)
+        if stems[sid] > 1 or sid in taken:
+            sid = path_source_id(rel)
+        if sid in taken or sid in out.values():
+            raise SourceError(f"{rel}: its source id {sid} is already taken; rename the document")
+        out[rel] = sid
+    return out
 
-    Nothing is written until the document is read and guarded; the source directory is replaced atomically.
-    """
-    root = Path(root)
-    read = _read(root, path, config)
-    rel = read.rel
-    src_id = source_id(rel)
+
+@dataclass(frozen=True)
+class _Prepared:
+    target: Path
+    source: Source
+    files: dict[str, bytes]  # including the kept triage.yaml
+
+
+def _prepare(root: Path, read: _Read, src_id: str, repo: KbRepo) -> _Prepared:
+    """Everything add_source writes for `read`, computed and checked without writing."""
     target = root / "kb/sources" / src_id
     _check_store_dirs(root, target)
     triage = target / "triage.yaml"
-    triage_data = None
     if triage.is_symlink() or (triage.exists() and not triage.is_file()):
         raise SourceError(f"{triage.relative_to(root)} is not a regular file; refusing to sync")
-    if triage.exists():
-        triage_data = triage.read_bytes()
     previous, next_seg = [], 1
     if target.exists():
-        existing = KbRepo.load(root)
-        old = existing.sources.get(src_id)
+        old = repo.sources.get(src_id)
         if old is None:
             raise SourceError(f"{target.relative_to(root)} exists but holds no valid source")
-        if old.original != rel:
-            raise SourceError(f"{src_id} already belongs to {old.original}; {rel} has the same name")
-        previous, next_seg = existing.segments(src_id), old.next_seg
-    source, store = _store_files(read, previous, next_seg, src_id)
+        if old.original != read.rel:
+            raise SourceError(f"{src_id} already belongs to {old.original}; {read.rel} has the same name")
+        previous, next_seg = repo.segments(src_id), old.next_seg
+    source, files = _store_files(read, previous, next_seg, src_id)
+    if triage.exists():
+        files = {**files, "triage.yaml": triage.read_bytes()}
+    return _Prepared(target, source, files)
 
-    parent = target.parent
+
+def _write(prepared: _Prepared) -> None:
+    """Replace the source directory atomically."""
+    target, parent = prepared.target, prepared.target.parent
     parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix=f".{src_id}.", dir=parent))
+    tmp = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=parent))
     try:
-        for name, data in store.items():
+        for name, data in prepared.files.items():
             (tmp / name).write_bytes(data)
-        if triage_data is not None:
-            (tmp / "triage.yaml").write_bytes(triage_data)
         if target.exists():
             old_dir = tmp.with_name(tmp.name + ".old")
             target.rename(old_dir)
@@ -168,10 +206,28 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
             tmp.rename(target)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    return source
+
+
+def add_sources(root: Path, paths: list[str], config: KbConfig) -> list[Source]:
+    """Store each of `paths` (relative to `root`) as a source; an existing source is re-synced, keeping its id
+    and segment ids. Every document is read, guarded and given its id before anything is written, so one
+    bad document leaves the store untouched; each source directory is then replaced atomically."""
+    root = Path(root)
+    reads = [_read(root, p, config) for p in paths]
+    repo = KbRepo.load(root)
+    ids = assign_source_ids(repo, [r.rel for r in reads])
+    prepared = [_prepare(root, r, ids[r.rel], repo) for r in {r.rel: r for r in reads}.values()]
+    for p in prepared:
+        _write(p)
+    return [p.source for p in prepared]
+
+
+def add_source(root: Path, path: str, config: KbConfig) -> Source:
+    """add_sources for one document."""
+    return add_sources(root, [path], config)[0]
 
 
 def sync_sources(root: Path, config: KbConfig) -> list[Source]:
     """Re-read every stored source from its original."""
     repo = KbRepo.load(Path(root))
-    return [add_source(root, repo.sources[i].original, config) for i in sorted(repo.sources)]
+    return add_sources(root, [repo.sources[i].original for i in sorted(repo.sources)], config)

@@ -9,7 +9,7 @@ from kb.gates.base import GateContext
 from kb.gates.sources import source_gate
 from kb.records.repo import KbRepo
 from kb.sources.readers import SourceError
-from kb.sources.store import MAX_SOURCE_BYTES, add_source, sync_sources
+from kb.sources.store import MAX_SOURCE_BYTES, add_source, add_sources, sync_sources
 
 
 def cfg_of(repo):
@@ -123,13 +123,22 @@ def test_sync_reports_missing_original(acme_repo):
         sync_sources(acme_repo, cfg)
 
 
-def test_id_collision_between_different_files_refused(acme_repo):
+def test_id_collision_between_different_files_gets_a_path_id(acme_repo):
     cfg = cfg_of(acme_repo)
     (acme_repo / "docs/a.md").write_text("# A\n\na\n")
     (acme_repo / "docs/a.txt").write_text("a\n")
-    add_source(acme_repo, "docs/a.md", cfg)
-    with pytest.raises(SourceError, match="SRC-a"):
-        add_source(acme_repo, "docs/a.txt", cfg)
+    assert add_source(acme_repo, "docs/a.md", cfg).id == "SRC-a"
+    assert add_source(acme_repo, "docs/a.txt", cfg).id == "SRC-docs-a"  # the stored one keeps its id
+    assert add_source(acme_repo, "docs/a.md", cfg).id == "SRC-a"
+
+
+def test_id_collision_of_whole_paths_refused(acme_repo):
+    cfg = cfg_of(acme_repo)
+    (acme_repo / "docs/a b.md").write_text("# A\n\na\n")
+    (acme_repo / "docs/a-b.md").write_text("# B\n\nb\n")
+    with pytest.raises(SourceError, match="SRC-docs-a-b"):
+        add_sources(acme_repo, ["docs/a b.md", "docs/a-b.md"], cfg)
+    assert not (acme_repo / "kb/sources").exists()
 
 
 def test_slug():

@@ -41,6 +41,10 @@ def join_blocks(blocks: list[str]) -> str:
 _READERS = {".md": "text", ".txt": "text", ".pdf": "pdf", ".docx": "docx"}
 
 
+def has_reader(path: str) -> bool:
+    return PurePath(path).suffix.lower() in _READERS
+
+
 def read_document(path: str, data: bytes) -> tuple[NormalisedText, str]:
     """Read `data` (the file at `path`) with the reader for its suffix; returns (text, normaliser id)."""
     suffix = PurePath(path).suffix.lower()

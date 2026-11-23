@@ -20,8 +20,8 @@ from kb.records.models import Component, Decision, Feature, Invariant, Requireme
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
 from kb.sources.guard import has_injection
-from kb.sources.readers import SourceError
-from kb.sources.store import add_source
+from kb.sources.readers import SourceError, has_reader
+from kb.sources.store import add_sources
 from kb.textfmt import inline_code, longest_backticks  # noqa: F401  (inline_code is re-exported)
 from kb.yamlio import dump_yaml
 
@@ -68,17 +68,20 @@ def _files_under(root: Path, rel_dir: str) -> list[str]:
     return sorted(out)
 
 
-def source_paths(root: Path, config: KbConfig, paths: list[str]) -> list[str]:
-    """Repo-relative files to ingest. No paths: every stored source plus every file matching config.sources.
-    A directory expands to the files under it that match config.sources; a file is taken as given."""
+def source_paths(root: Path, config: KbConfig, paths: list[str]) -> tuple[list[str], list[str]]:
+    """(repo-relative files to ingest, files skipped because no reader takes them). No paths: every stored
+    source plus every file matching config.sources. A directory expands to the files under it that match
+    config.sources. Expanded files without a reader are skipped; a file named explicitly is taken as given."""
     root = Path(root)
     if not paths:
         stored = [s.original for s in KbRepo.load(root).sources.values()]
         found = sorted(set(stored) | set(_candidates(repo_files(root), config)))
-        if not found:
+        taken, skipped = _readable(found, set(stored))
+        if not taken:
             raise SourceError("nothing to ingest: no stored sources and no files match config.sources")
-        return found
+        return taken, skipped
     out: list[str] = []
+    skipped: list[str] = []
     for p in paths:
         full = Path(p) if Path(p).is_absolute() else root / p
         if full.is_dir() and not full.is_symlink():
@@ -86,18 +89,27 @@ def source_paths(root: Path, config: KbConfig, paths: list[str]) -> list[str]:
                 rel_dir = full.resolve().relative_to(root.resolve()).as_posix()
             except ValueError:
                 raise SourceError(f"{p} is outside the repository") from None
-            matched = _candidates(_files_under(root, rel_dir), config)
+            matched, unread = _readable(_candidates(_files_under(root, rel_dir), config), set())
             if not matched:
-                raise SourceError(f"{p}: no files under it match config.sources")
+                raise SourceError(f"{p}: no files under it match config.sources and have a reader")
             out.extend(matched)
+            skipped.extend(unread)
         else:
             out.append(p)
-    return list(dict.fromkeys(out))
+    return list(dict.fromkeys(out)), sorted(set(skipped))
 
 
-def ingest_sources(root: Path, config: KbConfig, paths: list[str]) -> list[Source]:
-    """Add or re-sync each source named by `paths` (see source_paths)."""
-    return [add_source(Path(root), rel, config) for rel in source_paths(root, config, paths)]
+def _readable(rels: list[str], keep: set[str]) -> tuple[list[str], list[str]]:
+    """(rels with a reader, or in `keep`; the rest)."""
+    ok = [r for r in rels if r in keep or has_reader(r)]
+    return ok, [r for r in rels if r not in ok]
+
+
+def ingest_sources(root: Path, config: KbConfig, paths: list[str]) -> tuple[list[Source], list[str]]:
+    """Add or re-sync every source named by `paths` (see source_paths), all validated before any is written.
+    Returns (sources, skipped files)."""
+    rels, skipped = source_paths(root, config, paths)
+    return add_sources(Path(root), rels, config), skipped
 
 
 # --- the brief ---------------------------------------------------------------------------------

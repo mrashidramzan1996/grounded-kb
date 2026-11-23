@@ -166,6 +166,11 @@ def source_gate(ctx: GateContext) -> list[Issue]:
         for s in bad_segment_ids(ctx.repo)
     ]
     tampered_ids = {i.record for i in issues}
+    issues += [  # M8: a scanned or image-only document gives no text
+        Issue("source.empty", f"{src.original} gave no text (scanned or image-only?); nothing in it can be quoted",
+              "warning", f"kb/sources/{sid}/source.yaml", sid)
+        for sid, src in sorted(ctx.repo.sources.items()) if not ctx.repo.segments(sid)
+    ]
     for src_id in sorted(stored_ids(ctx.repo) - tampered_ids):
         original = _unchanged_original(ctx, src_id) if ctx.base is not None else None
         if original is not None:

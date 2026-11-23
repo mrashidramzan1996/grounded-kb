@@ -23,7 +23,7 @@ from kb.ingest.report import ingest_report, render_report
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
 from kb.sources.readers import SourceError
-from kb.sources.store import add_source, sync_sources
+from kb.sources.store import add_sources, sync_sources
 from kb.status import requirement_status, summarize
 from kb.trace import TraceError, trace_chain
 
@@ -87,6 +87,13 @@ def _run(ctx: typer.Context, action) -> None:
             f"{s.id}: {len(repo.segments(s.id))} segments, "
             f"guard: {g.emails} emails, {g.secrets} secrets, {g.injections} injections"
         )
+    _warn_empty(repo, sources)
+
+
+def _warn_empty(repo: KbRepo, sources) -> None:
+    for s in sources:
+        if not repo.segments(s.id):
+            typer.echo(f"warning source.empty: {s.original} gave no text (scanned or image-only?); nothing to quote", err=True)
 
 
 @source_app.command("add")
@@ -94,7 +101,7 @@ def source_add(ctx: typer.Context, paths: Annotated[list[Path], typer.Argument(h
     """Read, mask, segment and store documents under kb/sources/."""
 
     def add(root: Path, config):
-        return [add_source(root, p.as_posix() if not p.is_absolute() else str(p), config) for p in paths]
+        return add_sources(root, [p.as_posix() if not p.is_absolute() else str(p) for p in paths], config)
 
     _run(ctx, add)
 
@@ -127,7 +134,7 @@ def ingest(
         else:
             config = load_config(root / "kb.config.yaml")
             rels = [p.as_posix() if not p.is_absolute() else str(p) for p in paths or []]
-            sources = ingest_sources(root, config, rels)
+            sources, skipped = ingest_sources(root, config, rels)
             write_brief(root, build_brief(root, config, [s.id for s in sources]))
     except (ConfigError, SourceError, GitError, UnsafePath) as e:
         typer.echo(str(e), err=True)
@@ -137,6 +144,9 @@ def ingest(
         if strict and result.failed:
             raise typer.Exit(1)
         return
+    for rel in skipped:
+        typer.echo(f"skipped (no reader): {rel}", err=True)
+    _warn_empty(KbRepo.load(root), sources)
     typer.echo(f"Brief: {BRIEF_PATH}")
     typer.echo(f"Ask your coding agent: *follow {BRIEF_PATH}*")
 
