@@ -51,7 +51,16 @@ def rewritten_sha(root):
     path.write_text("\n".join(lines) + "\n")
 
 
-TAMPERS = {"invented_quote": invented_quote, "zero_secrets": zero_secrets, "rewritten_sha": rewritten_sha}
+def text_and_sha(root):
+    """Security review: an invented text.md plus a forged original_sha256, the original untouched."""
+    invented_quote(root)
+    replace(root, f"{STORE}/source.yaml", "original_sha256: ", "original_sha256: 00")
+
+
+TAMPERS = {
+    "invented_quote": invented_quote, "zero_secrets": zero_secrets, "rewritten_sha": rewritten_sha,
+    "text_and_sha": text_and_sha,
+}
 
 
 def errors(root, *args):
@@ -85,10 +94,47 @@ def test_tampering_is_caught_after_a_commit(repo, tamper):
         assert ("source.secret_in_original", "SRC-n") in found, args
 
 
-def test_original_edited_without_sync_is_outdated_not_tampered(repo):
+def test_original_edited_without_sync_is_outdated_against_a_base(repo):
+    """Outdated only when the original moved on since the base and the store did not; with no base nothing
+    says which side changed, so the mismatch is tampering (head's own source.yaml is never believed)."""
     replace(repo, "docs/n.md", "5 EUR", "6 EUR")
-    found = errors(repo)
+    for args in (("--changed",), ("--base", "main")):
+        found = errors(repo, *args)
+        assert ("source.outdated", "SRC-n") in found and ("source.tampered", "SRC-n") not in found, args
+    assert ("source.tampered", "SRC-n") in errors(repo)
+
+
+def test_tampered_store_with_deleted_original_is_tampered(repo):
+    invented_quote(repo)
+    (repo / "docs/n.md").unlink()
+    for args in ((), ("--changed",)):
+        assert ("source.tampered", "SRC-n") in errors(repo, *args), args
+
+
+def test_deleted_original_with_untouched_store_is_outdated(repo):
+    (repo / "docs/n.md").unlink()
+    found = errors(repo, "--changed")
     assert ("source.outdated", "SRC-n") in found and ("source.tampered", "SRC-n") not in found
+
+
+def test_report_does_not_accept_records_citing_a_tampered_source_whose_original_is_gone(repo):
+    from kb.ingest.report import ingest_report
+
+    invented_quote(repo)
+    (repo / "docs/n.md").unlink()
+    r = ingest_report(repo, "HEAD")
+    assert ("SRC-n", "source.tampered") in {(i.record, i.code) for i in r.sources}
+    assert "REQ-F-001" not in r.accepted and "REQ-F-001" in {i.record for i in r.rejected}
+
+
+def test_document_edit_committed_with_its_sync_is_not_tampering(repo):
+    git(repo, "checkout", "-q", "-b", "feature")
+    replace(repo, "docs/n.md", "5 EUR", "6 EUR")
+    assert invoke(repo, "source", "sync").exit_code == 0
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "doc update with sync")
+    for args in ((), ("--changed",), ("--base", "main")):
+        assert ("source.tampered", "SRC-n") not in errors(repo, *args), args
 
 
 def test_original_edited_and_synced_on_a_branch_passes(repo):
@@ -104,7 +150,7 @@ def test_original_edited_and_synced_on_a_branch_passes(repo):
 def test_secret_removed_from_the_original_clears_the_error_only_after_sync(repo):
     replace(repo, "docs/n.md", "The staging key is AKIAIOSFODNN7EXAMPLE.", "No key here.")
     assert ("source.secret_in_original", "SRC-n") not in errors(repo)
-    assert ("source.outdated", "SRC-n") in errors(repo)
+    assert ("source.outdated", "SRC-n") in errors(repo, "--changed")
     assert invoke(repo, "source", "sync").exit_code == 0
     assert errors(repo) == set()
 

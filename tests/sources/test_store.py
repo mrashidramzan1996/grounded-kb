@@ -153,9 +153,12 @@ def test_gate_flags_secret_in_original_and_outdated(acme_repo):
     assert issues[0].record == "SRC-architecture-notes"
     (acme_repo / "docs/product-brief.docx").write_bytes(b"changed")
     (acme_repo / "docs/architecture-notes.docx").unlink()
-    got = {(i.code, i.record) for i in gate(acme_repo)}
-    # the secret is counted in the original as it is now (deleted: no secret), never taken from source.yaml
-    assert got == {("source.outdated", "SRC-architecture-notes"), ("source.outdated", "SRC-product-brief")}
+    got = {(i.code, i.record): i.message for i in gate(acme_repo)}
+    # the secret is counted in the original as it is now (deleted: no secret), never taken from source.yaml;
+    # with no base to vouch for the store, a store that cannot be re-derived is tampered, with the cause
+    assert set(got) == {("source.tampered", "SRC-architecture-notes"), ("source.tampered", "SRC-product-brief")}
+    assert "is missing" in got[("source.tampered", "SRC-architecture-notes")]
+    assert "cannot be stored as it is now" in got[("source.tampered", "SRC-product-brief")]
 
 
 # --- CLI ----------------------------------------------------------------------------------------
@@ -286,8 +289,9 @@ def test_gate_invalid_original_and_oversize(acme_repo, tmp_path, monkeypatch):
     outside.write_text("x")
     (acme_repo / "docs/link.md").symlink_to(outside)
     yaml_path.write_text(yaml_path.read_text().replace("docs/product-brief.docx", "docs/link.md"))
-    assert [i.code for i in gate(acme_repo)] == ["source.invalid_original"]
+    (issue,) = gate(acme_repo)
+    assert issue.code == "source.tampered" and "symlink" in issue.message
     yaml_path.write_text(yaml_path.read_text().replace("docs/link.md", "docs/product-brief.docx"))
     monkeypatch.setattr("kb.sources.store.MAX_SOURCE_BYTES", 10)
     issues = gate(acme_repo)
-    assert [i.code for i in issues] == ["source.outdated"] and "MAX_SOURCE_BYTES" in issues[0].message
+    assert [i.code for i in issues] == ["source.tampered"] and "MAX_SOURCE_BYTES" in issues[0].message

@@ -149,11 +149,16 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         Issue("source.tampered", f"kb/sources/{s} was deleted; {recover_hint(ref)}", path=f"kb/sources/{s}", record=s)
         for s in sorted(stored_ids(before) - stored_ids(head))
     ]
+    source_issues += _originals_changed(root, before, ref)
     tampered = [i for i in source_issues if i.code == "source.tampered"]
-    bad_sources = {i.record for i in tampered if i.record}
+    # a source with any error is not evidence; a secret in the original is masked in the store, so its
+    # stored text still stands
+    bad_sources = {i.record: i.code for i in reversed(source_issues)
+                   if i.severity == "error" and i.record and i.code != "source.secret_in_original"}
     tainted = [
-        Issue("source.tampered", f"{rid} cites {src}, whose stored files were changed by hand", path=head.paths[rid], record=rid)
-        for rid, src in _citers(head, bad_sources)
+        Issue(bad_sources[src], f"{rid} cites {src}, which has a source error ({bad_sources[src]}); it is not evidence until fixed",
+              path=head.paths[rid], record=rid)
+        for rid, src in _citers(head, set(bad_sources))
     ]
     rejected = direct + _config_issues(config, base_config) + tampered + tainted + caused
     bad_paths = {i.path for i in rejected}
@@ -164,7 +169,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         flagged=[i for i in mine if i.severity == "warning"],
         untriaged=_untriaged(head),
         proposed_modules=sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])}),
-        sources=source_issues + _originals_changed(root, before, ref),
+        sources=source_issues,
         caused=caused,
     )
 

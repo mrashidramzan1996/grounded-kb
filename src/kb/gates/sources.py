@@ -62,43 +62,61 @@ def _contained(root: Path, rel: str) -> bool:
     return not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
 
 
-def rederive(root: Path, config: KbConfig, src_id: str, head: KbRepo, prior: KbRepo, fix: str) -> list[Issue]:
-    """Re-derive `src_id` from its original and compare with the bytes stored at head.
+def rederive(
+    root: Path, config: KbConfig, src_id: str, head: KbRepo, base: KbRepo | None, fix: str
+) -> list[Issue]:
+    """Re-derive `src_id` from its original and compare every store file at head byte for byte.
 
-    `prior` supplies the original's path and the segment ids to keep (the base when one resolves, else head
-    itself). Issues: source.invalid_original, source.outdated (the original moved on: run `kb source sync`),
-    source.tampered (the store differs from what the original gives), and source.secret_in_original — counted
-    in the original just read, never taken from the stored guard counts."""
+    The original's path and the segment ids to keep come from `base` when it has the source, else from head
+    (no base) or a fresh add (new since base). A store that moved since the base — or any store when there is
+    no base to vouch for it — is source.tampered whenever its bytes are not exactly what the re-derivation
+    gives, including when the re-derivation cannot run (the cause goes in the message); head's own
+    source.yaml is never believed. source.outdated only when the store is the base's and the original moved
+    on. source.secret_in_original is counted in the original just read, never taken from stored counts."""
     root = Path(root)
     where = f"kb/sources/{src_id}"
     yaml_path = f"{where}/source.yaml"
-    old, new = prior.sources.get(src_id), head.sources.get(src_id)
+    old = base.sources.get(src_id) if base is not None else None
+    new = head.sources.get(src_id)
+    moved = old is None or store_changed(src_id, head, base)  # type: ignore[arg-type]
+
+    def failed(code: str, cause: str) -> list[Issue]:
+        if moved:
+            return [Issue("source.tampered", f"{where} cannot be re-derived ({cause}); {fix}", path=yaml_path, record=src_id)]
+        return [Issue(code, cause, path=yaml_path, record=src_id)]
+
     meta = old or new
     if meta is None:
         return [Issue("source.tampered", f"{where} holds no valid source.yaml; {fix}", path=yaml_path, record=src_id)]
     original = meta.original
     if not _contained(root, original):
-        return [Issue("source.invalid_original", f"{original} is a symlink or lies outside the repository", path=yaml_path, record=src_id)]
+        return failed("source.invalid_original", f"{original} is a symlink or lies outside the repository")
     if not (root / original).is_file():
-        return [Issue("source.outdated", f"{original} is missing; restore it or remove {where}", path=yaml_path, record=src_id)]
+        return failed("source.outdated", f"{original} is missing; restore it or remove {where}")
     if src_id != source_id(original):
         return [Issue("source.tampered", f"{where} does not belong to {original}; {fix}", path=yaml_path, record=src_id)]
-    previous, next_seg = (prior.segments(src_id), old.next_seg) if old else ([], 1)
+    if old is not None:
+        previous, next_seg = base.segments(src_id), old.next_seg  # type: ignore[union-attr]
+    elif base is None and new is not None:
+        previous, next_seg = head.segments(src_id), new.next_seg  # keeping the stored ids
+    else:
+        previous, next_seg = [], 1
     try:
         derived, expected = derive_store(root, original, config, previous, next_seg, src_id)
     except (SourceError, OSError, ValueError) as e:
-        return [Issue("source.outdated", f"{original} cannot be stored as it is now: {e}", path=yaml_path, record=src_id)]
+        return failed("source.outdated", f"{original} cannot be stored as it is now: {e}")
 
     issues = []
-    if new is not None and new.original == original and new.original_sha256 != derived.original_sha256:
+    differ = [name for name, data in expected.items() if head.raw.get(f"{where}/{name}") != data]
+    if differ and not moved:  # the store is the base's: the original moved on since
         issues.append(Issue("source.outdated", f"{original} changed since it was stored; run `kb source sync`", path=yaml_path, record=src_id))
-    else:
-        for name, data in expected.items():
-            if head.raw.get(f"{where}/{name}") != data:
-                issues.append(Issue(
-                    "source.tampered", f"{where}/{name} differs from what {original} gives; {fix}",
-                    path=f"{where}/{name}", record=src_id,
-                ))
+    elif differ:
+        cause = "" if base is not None else " (the store was edited, or the original changed without `kb source sync`)"
+        issues += [
+            Issue("source.tampered", f"{where}/{name} differs from what {original} gives{cause}; {fix}",
+                  path=f"{where}/{name}", record=src_id)
+            for name in differ
+        ]
     if derived.guard.secrets:
         issues.append(Issue(
             "source.secret_in_original",
@@ -148,11 +166,10 @@ def source_gate(ctx: GateContext) -> list[Issue]:
         for s in bad_segment_ids(ctx.repo)
     ]
     tampered_ids = {i.record for i in issues}
-    prior = ctx.base if ctx.base is not None else ctx.repo
     for src_id in sorted(stored_ids(ctx.repo) - tampered_ids):
         original = _unchanged_original(ctx, src_id) if ctx.base is not None else None
         if original is not None:
             issues.extend(_as_at_base(ctx, src_id, original))
         else:
-            issues.extend(rederive(ctx.root, ctx.config, src_id, ctx.repo, prior, fix))
+            issues.extend(rederive(ctx.root, ctx.config, src_id, ctx.repo, ctx.base, fix))
     return issues
