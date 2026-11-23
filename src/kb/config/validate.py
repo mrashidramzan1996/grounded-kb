@@ -1,12 +1,8 @@
-from pathlib import PurePosixPath
-
 from pathspec import GitIgnoreSpec
 
+from kb.code.registry import adapter_for
 from kb.config.schema import KbConfig
 from kb.issues import Issue
-
-# Suffixes of files a code adapter handles. Task 10's adapter registry replaces this.
-CODE_SUFFIXES = {".py"}
 
 _EXEMPT_NAMES = {"kb.config.yaml", "AGENTS.md", "CLAUDE.md", "CODEOWNERS"}
 
@@ -51,7 +47,7 @@ def validate_config(config: KbConfig, files: list[str]) -> list[Issue]:
         mods = modules_for(path, config)
         if len(mods) > 1:
             issues.append(Issue("config.file_in_two_modules", f"{path} belongs to modules {', '.join(mods)}", path=path))
-        elif not mods and PurePosixPath(path).suffix in CODE_SUFFIXES:
+        elif not mods and adapter_for(path) is not None:
             issues.append(Issue("config.file_unassigned", f"{path} is not assigned to any module", "warning", path=path))
     return issues
 

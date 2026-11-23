@@ -98,6 +98,23 @@ def set_field(rec_id: str, **fields):
     return mutate
 
 
+def set_claim(feature_id: str, index: int, **fields):
+    def mutate(files):
+        path = _path_of(files, feature_id)
+        current, body = _split(path, files[path])
+        current["claims"][index].update(fields)
+        files[path] = _join(path, current, body)
+
+    return mutate
+
+
+def add_file(path: str, text: str):
+    def mutate(files):
+        files[path] = text.encode()
+
+    return mutate
+
+
 def adr_bytes(id: str, **fields) -> bytes:
     data = {"id": id, "title": f"Decision {id}", "governs": ["MOD-sessions"]} | fields
     return _join("x.md", data, f"Body of {id}.\n")

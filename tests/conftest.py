@@ -59,17 +59,20 @@ def valid_ctx(fixtures):
 
 
 @pytest.fixture
-def valid_ctx_with(fixtures):
-    """valid_ctx_with(*mutations) -> GateContext built from kb_valid after applying each mutation."""
+def valid_ctx_with(fixtures, tmp_path):
+    """valid_ctx_with(*mutations) -> GateContext over a copy of kb_valid (in tmp_path) after applying each mutation."""
     from helpers import load_dir
     from kb.gates.base import GateContext
     from kb.records.repo import KbRepo
 
     def build(*mutations):
-        root = fixtures / "kb_valid"
-        files = load_dir(root)
+        files = load_dir(fixtures / "kb_valid")
         for m in mutations:
             m(files)
+        root = tmp_path / "kb_valid_copy"
+        for rel, data in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_bytes(data)
         return GateContext(root, _kb_valid_config(root), KbRepo.from_files(files))
 
     return build
