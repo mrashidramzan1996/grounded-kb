@@ -25,3 +25,18 @@ def cfg():
         )
 
     return build
+
+
+@pytest.fixture
+def spec_req() -> dict:
+    """The spec §10 Requirement example, minus derived fields."""
+    return {
+        "id": "REQ-F-034",
+        "schema_version": 1,
+        "statement": "No refund is given when a seat is removed.",
+        "evidence": {
+            "mode": "all",
+            "quotes": [{"source": "SRC-pricing-spec-v3#seg-08", "text": "No refund is given."}],
+        },
+        "features": ["FEAT-014"],
+    }

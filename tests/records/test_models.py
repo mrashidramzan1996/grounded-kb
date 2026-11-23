@@ -1,0 +1,38 @@
+import pytest
+from pydantic import ValidationError
+
+from kb.records.models import Decision, Requirement, Triage
+
+
+def test_spec_requirement_without_derived_fields_validates(spec_req):
+    assert Requirement.model_validate(spec_req).evidence.quotes[0].text == "No refund is given."
+
+
+@pytest.mark.parametrize("field", ["fingerprint", "approved_by", "confirmed_at", "level", "proposed_by"])
+def test_derived_fields_are_rejected(spec_req, field):
+    with pytest.raises(ValidationError, match=field):
+        Requirement.model_validate({**spec_req, field: "x"})
+
+
+def test_requirement_needs_feature_or_module(spec_req):
+    with pytest.raises(ValidationError):
+        Requirement.model_validate({**spec_req, "features": [], "modules": []})
+
+
+def test_decision_may_carry_quotes():
+    d = Decision.model_validate(
+        {
+            "id": "ADR-0001",
+            "title": "Session storage",
+            "governs": ["MOD-sessions"],
+            "body": "",
+            "evidence": {"quotes": [{"source": "SRC-architecture-notes#seg-05", "text": "we will store sessions in Postgres"}]},
+        }
+    )
+    assert d.evidence.quotes[0].text.endswith("Postgres")
+
+
+def test_triage_string_must_be_none_reason():
+    assert Triage.model_validate({"segments": {"seg-01": ["REQ-F-001"], "seg-02": "none: boilerplate"}})
+    with pytest.raises(ValidationError, match="none: "):
+        Triage.model_validate({"segments": {"seg-01": "skipped"}})
