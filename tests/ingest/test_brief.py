@@ -164,3 +164,11 @@ def test_ingest_bad_path_exits_2(acme_repo):
     out = invoke(acme_repo, "ingest", "docs/missing.pdf")
     assert out.exit_code == 2 and "missing.pdf" in out.stderr
     assert not (acme_repo / BRIEF).exists()
+
+
+def test_brief_says_when_an_owner_is_a_handle(acme_repo):
+    """I10: a team name in the documents is not a forge handle."""
+    assert invoke(acme_repo, "ingest", "docs/").exit_code == 0
+    rules = _section(brief_of(acme_repo), "## The rules")
+    assert "use `--owner <@handle>` only when the documents name a forge handle (e.g. @acme/billing)" in rules
+    assert "a team name like 'Billing team' means `--owner TODO`" in rules

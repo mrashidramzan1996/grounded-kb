@@ -18,8 +18,9 @@ shape of the examples. The gates then check what you wrote: when you are done, r
    rules as INVs (`kb/invariants/INV-*.md`) with quotes.
 5. Link each requirement to a module or feature (`modules:` or `features:`).
 6. Propose the modules the documents describe with
-   `kb module add MOD-<name> --owner <@team|TODO> [--risk …]`, with no paths. Never guess paths; use
-   `--owner TODO` when the documents name no owner.
+   `kb module add MOD-<name> --owner <@team|TODO> [--risk …]`, with no paths. Never guess paths;
+   use `--owner <@handle>` only when the documents name a forge handle (e.g. @acme/billing);
+   a team name like 'Billing team' means `--owner TODO`, and so do documents that name no owner.
 7. Write `triage.yaml` for every segment, in `kb/sources/SRC-…/triage.yaml`: map each segment ID to
    the IDs drafted from it, or to `"none: <reason>"`.
 8. Set `drafted_by: "agent:<your name> via kb ingest brief $version"` on every record you draft.
