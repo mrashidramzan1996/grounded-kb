@@ -279,3 +279,9 @@ def ctx(repo: Path):
     from kb.records.repo import KbRepo
 
     return repo, load_config(repo / "kb.config.yaml"), KbRepo.load(repo), repo_files(repo)
+
+
+def write(repo: Path, rel: str, text: str) -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)

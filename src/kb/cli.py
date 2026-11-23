@@ -1,11 +1,14 @@
 from pathlib import Path
 from typing import Annotated
 
+import json
+
 import typer
 
 import kb
 from kb.config.edit import add_module, set_paths
 from kb.config.load import ConfigError, load_config
+from kb.baseline import BaselineError, freeze_baseline
 from kb.gitfiles import GitError, repo_files
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_brief
@@ -14,6 +17,7 @@ from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
 from kb.sources.readers import SourceError
 from kb.sources.store import add_source, sync_sources
+from kb.status import requirement_status, summarize
 
 app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
 
@@ -171,3 +175,41 @@ def module_list(ctx: typer.Context) -> None:
         raise _fail(e) from e
     for m in config.modules:
         typer.echo(f"{m.id}  {', '.join(m.paths) if m.paths else '(planned: no paths yet)'}  owner: {m.owner}  risk: {m.risk}")
+
+
+@app.command()
+def status(
+    ctx: typer.Context,
+    format: Annotated[str, typer.Option("--format", help="text or json.")] = "text",
+) -> None:
+    """Show how many live requirements are built and tested, per module."""
+    if format not in ("text", "json"):
+        typer.echo(f"unknown format {format!r}: use text or json", err=True)
+        raise typer.Exit(2)
+    root = Path(ctx.obj["root"])
+    try:
+        config = load_config(root / "kb.config.yaml")
+        repo = KbRepo.load(root)
+        summary = summarize(config, repo, requirement_status(root, config, repo))
+    except (ConfigError, GitError) as e:
+        raise _fail(e) from e
+    if format == "json":
+        typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+        return
+    for name, c in [*summary["modules"].items(), ("total", summary["total"])]:
+        typer.echo(f"{name}: {c['built']}/{c['total']} built, {c['tested']}/{c['total']} tested")
+
+
+baseline_app = typer.Typer(help="Freeze the agreed requirement set.", no_args_is_help=True)
+app.add_typer(baseline_app, name="baseline")
+
+
+@baseline_app.command("freeze")
+def baseline_freeze(ctx: typer.Context, version: Annotated[str, typer.Argument(help="Baseline version, e.g. v1.")]) -> None:
+    """Write kb/baseline/VERSION.yaml and tag HEAD (the file is left for you to commit)."""
+    try:
+        path = freeze_baseline(Path(ctx.obj["root"]), version)
+    except (BaselineError, GitError) as e:
+        raise _fail(e) from e
+    rel = path.relative_to(Path(ctx.obj["root"])).as_posix()
+    typer.echo(f"wrote {rel}; tagged HEAD as kb-baseline-{version}; commit the baseline file")
