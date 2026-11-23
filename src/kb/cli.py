@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import json
@@ -9,8 +9,9 @@ import kb
 from kb.config.edit import add_module, set_paths
 from kb.config.load import ConfigError, load_config
 from kb.check import run_check
+from kb.context import ContextError, governing, render_pack, session_brief
 from kb.baseline import BaselineError, freeze_baseline
-from kb.gitfiles import GitError, repo_files
+from kb.gitfiles import GitError, changed_files, repo_files
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_brief
 from kb.ingest.report import ingest_report, render_report
@@ -19,6 +20,7 @@ from kb.safepath import UnsafePath
 from kb.sources.readers import SourceError
 from kb.sources.store import add_source, sync_sources
 from kb.status import requirement_status, summarize
+from kb.trace import TraceError, trace_chain
 
 app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
 
@@ -258,4 +260,70 @@ def check(
             typer.echo(f"{i.severity} {i.code} {i.path or '-'} {i.record or '-'}: {message}")
     typer.echo(f"{errors} errors, {warnings} warnings (mode: {report.mode})", err=True)
     if errors and (strict or report.mode == "enforce"):
+        raise typer.Exit(1)
+
+
+def _repo_rel(root: Path, path: str) -> str:
+    """A path given on the command line as a repo-relative POSIX path (unchanged when it is outside the repo)."""
+    p = Path(path)
+    if p.is_absolute():
+        try:
+            return p.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            return path
+    return PurePosixPath(p.as_posix()).as_posix()
+
+
+@app.command()
+def context(
+    ctx: typer.Context,
+    paths: Annotated[list[str] | None, typer.Option("--paths", help="Files you will touch (repeatable).")] = None,
+    module: Annotated[list[str] | None, typer.Option("--module", help="Module id (repeatable).")] = None,
+    feature: Annotated[list[str] | None, typer.Option("--feature", help="Feature id (repeatable).")] = None,
+    id: Annotated[list[str] | None, typer.Option("--id", help="Record id (repeatable).")] = None,
+    changed: Annotated[bool, typer.Option("--changed", help="Files changed against the default branch.")] = False,
+    brief: Annotated[bool, typer.Option("--session-brief", help="What a coding agent gets at session start.")] = False,
+    format: Annotated[str, typer.Option("--format", help="md or json.")] = "md",
+) -> None:
+    """Print the live requirements, decisions and invariants governing what you are about to touch."""
+    given = [bool(paths), bool(module), bool(feature), bool(id), changed, brief]
+    if sum(given) != 1:
+        typer.echo("give exactly one of --paths, --module, --feature, --id, --changed or --session-brief", err=True)
+        raise typer.Exit(2)
+    if format not in ("md", "json"):
+        typer.echo(f"unknown format {format!r}: use md or json", err=True)
+        raise typer.Exit(2)
+    if brief and format != "md":
+        typer.echo("--session-brief is Markdown only", err=True)
+        raise typer.Exit(2)
+    root = Path(ctx.obj["root"])
+    try:
+        if brief:
+            out = session_brief(root)
+            repo = KbRepo.load(root)
+        else:
+            config = load_config(root / "kb.config.yaml")
+            repo = KbRepo.load(root)
+            files = changed_files(root) if changed else [_repo_rel(root, p) for p in paths or []]
+            pack = governing(root, config, repo, paths=files, modules=module or (), features=feature or (), ids=id or ())
+            out = render_pack(pack, format)
+    except (ConfigError, GitError, ContextError) as e:
+        raise _fail(e) from e
+    typer.echo(out, nl=False)
+    if repo.errors:
+        failed = sorted({i.path for i in repo.errors if i.path})
+        typer.echo(f"{len(failed)} KB files failed to load (run `kb check`): {', '.join(failed[:3])}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def trace(ctx: typer.Context, id: Annotated[str, typer.Argument(help="A record id or SRC-…#seg-NN.")]) -> None:
+    """Show the evidence chain of a record (re-checking its quotes), or every record resting on a segment."""
+    try:
+        lines, ok = trace_chain(Path(ctx.obj["root"]), id)
+    except TraceError as e:
+        raise _fail(e) from e
+    for line in lines:
+        typer.echo(line)
+    if not ok:
         raise typer.Exit(1)

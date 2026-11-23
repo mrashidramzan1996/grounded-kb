@@ -22,6 +22,7 @@ from kb.safepath import UnsafePath
 from kb.sources.guard import has_injection
 from kb.sources.readers import SourceError
 from kb.sources.store import add_source
+from kb.textfmt import inline_code, longest_backticks  # noqa: F401  (inline_code is re-exported)
 from kb.yamlio import dump_yaml
 
 BRIEF_PATH = ".kb/cache/ingest/brief.md"
@@ -36,7 +37,6 @@ _NUMBERED = [
     ("Decision", "ADR", 4),
     ("Invariant", "INV", 3),
 ]
-_BACKTICKS = re.compile(r"`+")
 _SEG_ID = re.compile(SEGMENT)
 
 
@@ -168,27 +168,13 @@ def _examples() -> str:
     return "\n\n".join(blocks)
 
 
-def _longest_backticks(text: str) -> int:
-    return max((len(m.group()) for m in _BACKTICKS.finditer(text)), default=0)
-
-
 def _fence(text: str) -> str:
     """A backtick fence longer than any backtick run in `text`, so the text cannot close it."""
-    return "`" * max(3, _longest_backticks(text) + 1)
+    return "`" * max(3, longest_backticks(text) + 1)
 
 
 def valid_segment_id(seg_id: str) -> bool:
     return _SEG_ID.fullmatch(seg_id) is not None
-
-
-def inline_code(text: str) -> str:
-    """`text` on one line as inline code it cannot break out of (newlines become spaces)."""
-    if not text:
-        return "(empty)"
-    flat = re.sub(r"\r\n|\r|\n", " ", text)
-    ticks = "`" * (_longest_backticks(flat) + 1)
-    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
-    return f"{ticks}{pad}{flat}{pad}{ticks}"
 
 
 def _segments(repo: KbRepo, src_ids: list[str]) -> str:

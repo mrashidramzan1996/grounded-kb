@@ -16,12 +16,13 @@ from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
 from kb.gates.sources import sha256_file, source_gate
 from kb.gitfiles import read_tree_files
-from kb.ingest.brief import inline_code, valid_segment_id
+from kb.ingest.brief import valid_segment_id
 from kb.issues import Issue
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.sources.readers import SourceError
 from kb.sources.store import derive_store
+from kb.textfmt import inline_code
 from kb.yamlio import YamlError, load_yaml_strict
 
 GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]

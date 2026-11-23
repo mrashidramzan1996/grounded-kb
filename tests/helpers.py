@@ -298,3 +298,17 @@ def break_ref(root: Path) -> None:
 def set_mode(root: Path, mode: str) -> None:
     path = root / "kb.config.yaml"
     path.write_text(path.read_text() + f"  mode: {mode}\n")
+
+
+# --- context / trace helpers -------------------------------------------------------------------
+
+def ids(items) -> list[str]:
+    return [i.id for i in items]
+
+
+def replace_doc_text(repo: Path, rel: str, old: str, new: str) -> None:
+    """Reword a text document in place (the original changes; its stored source does not until a sync)."""
+    path = repo / rel
+    text = path.read_text()
+    assert old in text
+    path.write_text(text.replace(old, new))

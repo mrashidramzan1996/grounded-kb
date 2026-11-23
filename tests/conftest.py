@@ -201,3 +201,14 @@ def built_acme_with_web_impl(built_acme):
 @pytest.fixture
 def valid_git_repo(valid_git_ctx):
     return valid_git_ctx.root
+
+
+@pytest.fixture
+def acme_repo_drafted(acme_repo_ingested, fixtures):
+    """acme_repo_ingested + the drafted records and proposed modules (no paths, no code), committed."""
+    from helpers import apply_drafts, git
+
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    git(acme_repo_ingested, "add", "-A")
+    git(acme_repo_ingested, "commit", "-m", "drafts")
+    return acme_repo_ingested
