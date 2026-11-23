@@ -14,7 +14,7 @@ from kb.config.load import load_config
 from kb.config.schema import KbConfig, ModuleCfg
 from kb.config.validate import modules_for
 from kb.gitfiles import changed_files
-from kb.markers import marker_eligible, scan_markers
+from kb.markers import evidence_files, scan_markers
 from kb.records.lifecycle import live_ids, superseded_by
 from kb.records.models import Decision, Feature, FeatureClaim, Invariant, Requirement
 from kb.records.repo import KbRepo
@@ -136,7 +136,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
     paths = sorted(set(paths))
     for p in paths:
         scope_mods.update(modules_for(p, ix.config))
-    for mk in scan_markers(ix.root, [p for p in paths if marker_eligible(p)]):
+    for mk in scan_markers(ix.root, evidence_files(paths, ix.config)):
         if mk.kind == "impl":
             scope_mods.update(ix.modules_of(mk.id))
         if mk.id in ix.claims:

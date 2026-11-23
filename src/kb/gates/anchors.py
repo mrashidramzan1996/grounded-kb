@@ -6,7 +6,8 @@ from kb.code.registry import NoAdapter, SymbolIndex, UnsafePath, resolve_anchor,
 from kb.gates.base import GateContext
 from kb.gitfiles import GitError, repo_files
 from kb.issues import Issue
-from kb.markers import marker_eligible, scan_markers
+from kb.config.schema import KbConfig
+from kb.markers import evidence_files, scan_markers
 from kb.ports.code import Symbol
 from kb.records.models import Invariant
 
@@ -20,12 +21,12 @@ def _walk(root: Path) -> list[str]:
     return out
 
 
-def _files(root: Path) -> list[str]:
+def _files(root: Path, config: KbConfig) -> list[str]:
     try:
         files = repo_files(root)
     except (GitError, OSError):
         files = _walk(root)
-    return [f for f in files if marker_eligible(f)]
+    return evidence_files(files, config)
 
 
 def _resolve(resolver: Callable[..., Symbol | None], index: SymbolIndex, ref: str, missing: str, path: str | None, rid: str) -> Issue | None:
@@ -42,7 +43,7 @@ def _resolve(resolver: Callable[..., Symbol | None], index: SymbolIndex, ref: st
 
 def anchor_gate(ctx: GateContext) -> list[Issue]:
     repo, root, issues = ctx.repo, ctx.root, []
-    markers = scan_markers(root, _files(root))
+    markers = scan_markers(root, _files(root, ctx.config))
     index = SymbolIndex(root)
     for feature, claim in repo.claims():
         path = repo.paths[feature.id]

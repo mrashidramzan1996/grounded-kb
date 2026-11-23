@@ -8,7 +8,7 @@ from kb.config.validate import modules_for
 from kb.gates.base import GateContext
 from kb.gitfiles import repo_files
 from kb.issues import Issue
-from kb.markers import marker_eligible, scan_markers
+from kb.markers import evidence_files, marker_eligible, scan_markers
 from kb.records.models import Feature, Requirement
 from kb.records.repo import KbRepo
 
@@ -28,12 +28,12 @@ def _owners_by_id(repo: KbRepo) -> dict[str, set[str]]:
     return out
 
 
-def _evidence(root: Path, repo: KbRepo, files: list[str]) -> dict[str, set[str]]:
-    """module id -> evidence files (impl markers, claim code anchors)."""
+def _evidence(root: Path, config: KbConfig, repo: KbRepo, files: list[str]) -> dict[str, set[str]]:
+    """module id -> evidence files (impl markers outside the source documents, claim code anchors)."""
     owners = _owners_by_id(repo)
     present = set(files)
     out: dict[str, set[str]] = defaultdict(set)
-    for m in scan_markers(root, [f for f in files if marker_eligible(f)]):
+    for m in scan_markers(root, evidence_files(files, config)):
         if m.kind == "impl":
             for mod in owners.get(m.id, ()):
                 out[mod].add(m.path)
@@ -77,7 +77,7 @@ def _glob_dirs(dirs: set[str], foreign: list[str]) -> list[str]:
 
 
 def _suggestions(root: Path, config: KbConfig, repo: KbRepo, files: list[str]) -> dict[str, tuple[list[str], int]]:
-    evidence = _evidence(root, repo, files)
+    evidence = _evidence(root, config, repo, files)
     candidates = [f for f in files if marker_eligible(f)]
     claimed: dict[str, set[str]] = defaultdict(set)  # file -> modules that own it
     for mod, fs in evidence.items():

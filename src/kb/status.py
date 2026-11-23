@@ -6,7 +6,7 @@ from typing import Literal
 from kb.code.registry import NoAdapter, SymbolIndex, UnsafePath, resolve_anchor, resolve_test
 from kb.config.schema import KbConfig
 from kb.gitfiles import repo_files
-from kb.markers import marker_eligible, scan_markers
+from kb.markers import evidence_files, scan_markers
 from kb.records.lifecycle import live_ids
 from kb.records.models import Feature, Requirement
 from kb.records.repo import KbRepo
@@ -25,7 +25,7 @@ def _resolves(resolve, root: Path, index: SymbolIndex, ref: str | None) -> bool:
 
 def requirement_status(root: Path, config: KbConfig, repo: KbRepo) -> dict[str, Status]:
     root = Path(root)
-    markers = scan_markers(root, [f for f in repo_files(root) if marker_eligible(f)])
+    markers = scan_markers(root, evidence_files(repo_files(root), config))
     impl = {m.id for m in markers if m.kind == "impl"}
     verify = {m.id for m in markers if m.kind == "verify"}
     index = SymbolIndex(root)
