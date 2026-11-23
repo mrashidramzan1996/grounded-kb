@@ -5,6 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from kb.cli import app
+from kb.config.schema import ModuleCfg
 
 
 def git(repo: Path, *args: str) -> str:
@@ -39,3 +40,7 @@ def invoke(root: Path, *args: str):
 
 def codes(issues) -> list[str]:
     return [i.code for i in issues]
+
+
+def mod(id: str, paths: list[str] | None = None, owner: str = "team-a") -> ModuleCfg:
+    return ModuleCfg(id=id, paths=paths or [], owner=owner)
