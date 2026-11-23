@@ -1,4 +1,5 @@
-from kb.gitfiles import changed_files, default_branch, read_tree_files, repo_files
+import pytest
+from kb.gitfiles import GitError, changed_files, default_branch, read_tree_files, repo_files
 from tests.helpers import git, make_git_repo
 
 
@@ -26,3 +27,39 @@ def test_default_branch_and_changed_files(tmp_path):
 def test_read_tree_files(tmp_path):
     repo = make_git_repo(None, tmp_path, extra={"docs/d.md": "d", "other.md": "o"})
     assert read_tree_files(repo, "HEAD", "docs") == {"docs/d.md": b"d"}
+
+
+def test_bad_base_raises(tmp_path):
+    repo = make_git_repo(None, tmp_path, extra={"a.txt": "1"})
+    with pytest.raises(GitError, match="nope"):
+        changed_files(repo, "nope")
+
+
+def test_merge_base_semantics(tmp_path):
+    repo = make_git_repo(None, tmp_path, extra={"a.txt": "1"})
+    git(repo, "checkout", "-b", "feat")
+    (repo / "b.txt").write_text("b")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "b")
+    git(repo, "checkout", "main")
+    (repo / "m.txt").write_text("m")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "m")
+    git(repo, "checkout", "feat")
+    (repo / "u.txt").write_text("u")
+    assert changed_files(repo, "main") == ["b.txt", "u.txt"]
+
+
+def test_only_origin_main(tmp_path):
+    (tmp_path / "s").mkdir()
+    src = make_git_repo(None, tmp_path / "s", extra={"a.txt": "1"})
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", str(src), str(clone))
+    git(clone, "checkout", "-b", "feat")
+    (clone / "b.txt").write_text("b")
+    git(clone, "add", "-A")
+    git(clone, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-m", "b")
+    git(clone, "branch", "-D", "main")
+    assert default_branch(clone) == "origin/main"
+    assert changed_files(clone) == ["b.txt"]
+    assert changed_files(clone, "main") == ["b.txt"]
