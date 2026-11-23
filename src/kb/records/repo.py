@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import stat
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -102,9 +103,15 @@ class KbRepo:
     @classmethod
     def load(cls, root: Path) -> "KbRepo":
         base = Path(root)
+        kb = base / "kb"
+        if kb.is_symlink() or (kb.exists() and not kb.resolve().is_relative_to(base.resolve())):
+            repo = cls()
+            repo.errors.append(Issue("schema.symlink", "kb/ must not be a symlink or resolve outside the repo", path="kb"))
+            return repo
         files: dict[str, bytes] = {}
         links: list[str] = []
-        for dirpath, dirnames, filenames in os.walk(base / "kb", followlinks=False):
+        special: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(kb, followlinks=False):
             here = Path(dirpath)
             for d in sorted(dirnames):
                 if (here / d).is_symlink():
@@ -113,11 +120,17 @@ class KbRepo:
             for f in sorted(filenames):
                 p = here / f
                 rel = p.relative_to(base).as_posix()
-                if p.is_symlink():
+                mode = os.lstat(p).st_mode
+                if stat.S_ISLNK(mode):
                     links.append(rel)
-                else:
+                elif stat.S_ISREG(mode):
                     files[rel] = p.read_bytes()
-        return cls.from_files(files, links)
+                else:
+                    special.append(rel)
+        repo = cls.from_files(files, links)
+        for rel in sorted(special):
+            repo.errors.append(Issue("schema.unknown_file", "not a regular file", path=rel))
+        return repo
 
     @classmethod
     def at_ref(cls, root: Path, ref: str) -> "KbRepo":

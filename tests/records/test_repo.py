@@ -118,3 +118,32 @@ def test_git_symlink_entries_are_reported_at_ref(fixtures, tmp_path):
     repo = KbRepo.at_ref(repo_dir, "HEAD")
     assert [(i.code, i.path) for i in repo.errors] == [("schema.symlink", "kb/requirements/REQ-F-009.yaml")]
     assert "REQ-F-009" not in repo.records
+
+
+def test_load_refuses_a_symlinked_kb_dir(tmp_path, fixtures):
+    import os
+
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "requirements").mkdir()
+    (target / "requirements" / "REQ-F-001.yaml").write_bytes(
+        (fixtures / "kb_valid/kb/requirements/REQ-F-001.yaml").read_bytes()
+    )
+    root = tmp_path / "proj"
+    root.mkdir()
+    os.symlink(target, root / "kb")
+    repo = KbRepo.load(root)
+    assert [(i.code, i.path) for i in repo.errors] == [("schema.symlink", "kb")]
+    assert repo.records == {}
+
+
+def test_load_reports_fifos_without_hanging(tmp_path, fixtures):
+    import os
+    import shutil
+
+    root = tmp_path / "proj"
+    shutil.copytree(fixtures / "kb_valid", root)
+    os.mkfifo(root / "kb/requirements/REQ-F-099.yaml")
+    repo = KbRepo.load(root)
+    assert [(i.code, i.path) for i in repo.errors] == [("schema.unknown_file", "kb/requirements/REQ-F-099.yaml")]
+    assert "REQ-F-001" in repo.records
