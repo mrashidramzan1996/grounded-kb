@@ -3,7 +3,7 @@ import hashlib
 from kb.records.models import FeatureClaim, Source, Triage
 from kb.records.repo import KbRepo
 from kb.sources.segment import Segment
-from helpers import load_dir, make_git_repo
+from helpers import git, load_dir, make_git_repo
 
 SRC = "SRC-pricing-spec-v3"
 
@@ -90,3 +90,31 @@ def test_source_file_problems_are_reported(fixtures):
 def test_files_outside_kb_are_ignored():
     repo = KbRepo.from_files({"README.md": b"x", "docs/a.txt": b"y"})
     assert repo.records == {} and repo.errors == []
+
+
+def test_symlinks_under_kb_are_reported_and_never_read(fixtures, tmp_path):
+    repo_dir = make_git_repo(fixtures / "kb_valid", tmp_path)
+    secret = tmp_path / "secret.yaml"
+    secret.write_text("id: REQ-F-009\nSECRET-CONTENT\n")
+    outside = tmp_path / "outside"
+    (outside / "x").mkdir(parents=True)
+    (outside / "x" / "TERM-leak.yaml").write_text("id: TERM-leak\nname: n\ndefinition: d\n")
+    (repo_dir / "kb/requirements/REQ-F-009.yaml").symlink_to(secret)
+    (repo_dir / "kb/glossary/linked").symlink_to(outside, target_is_directory=True)
+    repo = KbRepo.load(repo_dir)
+    assert sorted((i.code, i.path) for i in repo.errors) == [
+        ("schema.symlink", "kb/glossary/linked"),
+        ("schema.symlink", "kb/requirements/REQ-F-009.yaml"),
+    ]
+    assert "TERM-leak" not in repo.records and "REQ-F-009" not in repo.records
+    assert not any("SECRET" in i.message for i in repo.errors)
+
+
+def test_git_symlink_entries_are_reported_at_ref(fixtures, tmp_path):
+    repo_dir = make_git_repo(fixtures / "kb_valid", tmp_path)
+    (repo_dir / "kb/requirements/REQ-F-009.yaml").symlink_to("REQ-F-001.yaml")
+    git(repo_dir, "add", "-A")
+    git(repo_dir, "commit", "-m", "link")
+    repo = KbRepo.at_ref(repo_dir, "HEAD")
+    assert [(i.code, i.path) for i in repo.errors] == [("schema.symlink", "kb/requirements/REQ-F-009.yaml")]
+    assert "REQ-F-009" not in repo.records

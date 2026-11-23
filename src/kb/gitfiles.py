@@ -62,3 +62,14 @@ def changed_files(root: Path, base: str | None = None) -> list[str]:
 def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:
     out = _git(root, "ls-tree", "-r", "-z", "--name-only", ref, "--", prefix).stdout
     return {p: _git(root, "show", f"{ref}:{p}").stdout for p in _split(out)}
+
+
+def tree_symlinks(root: Path, ref: str, prefix: str) -> set[str]:
+    """Paths under prefix that are git symlink entries (mode 120000) at ref."""
+    out = _git(root, "ls-tree", "-r", "-z", ref, "--", prefix).stdout
+    links = set()
+    for entry in _split(out):
+        meta, _, path = entry.partition("\t")
+        if meta.split(" ", 1)[0] == "120000":
+            links.add(path)
+    return links

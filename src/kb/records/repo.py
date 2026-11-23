@@ -1,13 +1,14 @@
 """Index of everything under kb/: records, sources and the problems found loading them."""
 
 import json
+import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from kb.gitfiles import read_tree_files
+from kb.gitfiles import read_tree_files, tree_symlinks
 from kb.issues import Issue
 from kb.records.io import RecordError, parse_record
 from kb.records.models import Feature, FeatureClaim, Record, Source, Triage
@@ -61,8 +62,11 @@ class KbRepo:
         self._triage: dict[str, Triage] = {}
 
     @classmethod
-    def from_files(cls, files: dict[str, bytes]) -> "KbRepo":
+    def from_files(cls, files: dict[str, bytes], symlinks: Iterable[str] = ()) -> "KbRepo":
+        """`symlinks` are kb/ paths that were symlinks: reported, never read."""
         repo = cls()
+        for link in sorted(symlinks):
+            repo.errors.append(Issue("schema.symlink", "symlinks are not allowed under kb/", path=link))
         for path in sorted(files):
             if not path.startswith("kb/"):
                 continue
@@ -98,13 +102,28 @@ class KbRepo:
     @classmethod
     def load(cls, root: Path) -> "KbRepo":
         base = Path(root)
-        kb_dir = base / "kb"
-        files = {p.relative_to(base).as_posix(): p.read_bytes() for p in sorted(kb_dir.rglob("*")) if p.is_file()}
-        return cls.from_files(files)
+        files: dict[str, bytes] = {}
+        links: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(base / "kb", followlinks=False):
+            here = Path(dirpath)
+            for d in sorted(dirnames):
+                if (here / d).is_symlink():
+                    links.append((here / d).relative_to(base).as_posix())
+            dirnames[:] = sorted(d for d in dirnames if not (here / d).is_symlink())
+            for f in sorted(filenames):
+                p = here / f
+                rel = p.relative_to(base).as_posix()
+                if p.is_symlink():
+                    links.append(rel)
+                else:
+                    files[rel] = p.read_bytes()
+        return cls.from_files(files, links)
 
     @classmethod
     def at_ref(cls, root: Path, ref: str) -> "KbRepo":
-        return cls.from_files(read_tree_files(Path(root), ref, "kb"))
+        links = tree_symlinks(Path(root), ref, "kb")
+        files = {p: d for p, d in read_tree_files(Path(root), ref, "kb").items() if p not in links}
+        return cls.from_files(files, links)
 
     def claims(self) -> Iterator[tuple[Feature, FeatureClaim]]:
         """Every (feature, claim) pair, features in sorted id order."""
