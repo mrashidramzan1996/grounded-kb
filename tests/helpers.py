@@ -49,3 +49,87 @@ def mod(id: str, paths: list[str] | None = None, owner: str = "team-a") -> Modul
 def load_dir(root: Path) -> dict[str, bytes]:
     """Every file under root as {posix relative path: bytes}."""
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+# --- gate-test helpers: mutations edit a loaded {path: bytes} files dict -------------------------
+
+def _path_of(files: dict[str, bytes], rec_id: str) -> str:
+    (path,) = [p for p in files if p.rsplit("/", 1)[-1].rsplit(".", 1)[0] == rec_id]
+    return path
+
+
+def _split(path: str, data: bytes) -> tuple[dict, str]:
+    """(fields, body) of a record file; body is '' for .yaml records."""
+    from kb.yamlio import load_yaml_strict
+
+    text = data.decode()
+    if path.endswith(".md"):
+        _, front, body = text.split("---\n", 2)
+        return load_yaml_strict(front), body
+    return load_yaml_strict(text), ""
+
+
+def _join(path: str, fields: dict, body: str) -> bytes:
+    from kb.yamlio import dump_yaml
+
+    out = dump_yaml(fields)
+    return (f"---\n{out}---\n{body}" if path.endswith(".md") else out).encode()
+
+
+def rename_id(old: str, new: str):
+    """Change the id inside the file; the file name stays, so it no longer matches."""
+
+    def mutate(files):
+        path = _path_of(files, old)
+        fields, body = _split(path, files[path])
+        fields["id"] = new
+        files[path] = _join(path, fields, body)
+
+    return mutate
+
+
+def set_field(rec_id: str, **fields):
+    def mutate(files):
+        path = _path_of(files, rec_id)
+        current, body = _split(path, files[path])
+        current.update(fields)
+        files[path] = _join(path, current, body)
+
+    return mutate
+
+
+def adr_bytes(id: str, **fields) -> bytes:
+    data = {"id": id, "title": f"Decision {id}", "governs": ["MOD-sessions"]} | fields
+    return _join("x.md", data, f"Body of {id}.\n")
+
+
+def add_adr(id: str, **fields):
+    def mutate(files):
+        files[f"kb/decisions/{id}.md"] = adr_bytes(id, **fields)
+
+    return mutate
+
+
+class GitCtx:
+    """A git working copy of kb_valid; `reload` builds a GateContext from disk."""
+
+    def __init__(self, root: Path, config):
+        self.root, self.config = root, config
+
+    def reload(self, base: str | None = None):
+        from kb.gates.base import GateContext
+        from kb.records.repo import KbRepo
+
+        return GateContext(
+            self.root, self.config, KbRepo.load(self.root), KbRepo.at_ref(self.root, base) if base else None
+        )
+
+
+def edit(ctx: GitCtx, path: str, text: str) -> None:
+    """Append `text` to the file (so it still parses but its bytes change)."""
+    with (ctx.root / path).open("a") as f:
+        f.write(text)
+
+
+def add_adr_file(ctx: GitCtx, id: str, **fields) -> None:
+    (ctx.root / f"kb/decisions/{id}.md").write_bytes(adr_bytes(id, **fields))

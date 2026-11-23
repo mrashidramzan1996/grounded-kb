@@ -40,3 +40,44 @@ def spec_req() -> dict:
         },
         "features": ["FEAT-014"],
     }
+
+
+def _kb_valid_config(root: Path):
+    from kb.config.load import load_config
+
+    return load_config(root / "kb.config.yaml")
+
+
+@pytest.fixture
+def valid_ctx(fixtures):
+    from helpers import load_dir
+    from kb.gates.base import GateContext
+    from kb.records.repo import KbRepo
+
+    root = fixtures / "kb_valid"
+    return GateContext(root, _kb_valid_config(root), KbRepo.from_files(load_dir(root)))
+
+
+@pytest.fixture
+def valid_ctx_with(fixtures):
+    """valid_ctx_with(*mutations) -> GateContext built from kb_valid after applying each mutation."""
+    from helpers import load_dir
+    from kb.gates.base import GateContext
+    from kb.records.repo import KbRepo
+
+    def build(*mutations):
+        root = fixtures / "kb_valid"
+        files = load_dir(root)
+        for m in mutations:
+            m(files)
+        return GateContext(root, _kb_valid_config(root), KbRepo.from_files(files))
+
+    return build
+
+
+@pytest.fixture
+def valid_git_ctx(fixtures, tmp_path):
+    from helpers import GitCtx, make_git_repo
+
+    root = make_git_repo(fixtures / "kb_valid", tmp_path)
+    return GitCtx(root, _kb_valid_config(root))

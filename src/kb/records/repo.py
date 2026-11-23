@@ -57,6 +57,9 @@ class KbRepo:
         self.records: dict[str, Record] = {}
         self.paths: dict[str, str] = {}
         self.errors: list[Issue] = []
+        self.raw: dict[str, bytes] = {}
+        # every (id, path) loaded, including ids claimed by more than one file
+        self.id_paths: list[tuple[str, str]] = []
         self.sources: dict[str, Source] = {}
         self._segments: dict[str, list[Segment]] = {}
         self._text: dict[str, str] = {}
@@ -71,6 +74,7 @@ class KbRepo:
         for path in sorted(files):
             if not path.startswith("kb/"):
                 continue
+            repo.raw[path] = files[path]
             try:
                 repo._load_file(path, files[path])
             except (RecordError, UnicodeDecodeError) as e:
@@ -79,7 +83,8 @@ class KbRepo:
 
     def _load_file(self, path: str, data: bytes) -> None:
         if _RECORD_FILE.fullmatch(path):
-            rec = parse_record(path, data)
+            rec = parse_record(path, data, check_name=False)  # id_gate reports mismatches
+            self.id_paths.append((rec.id, path))  # type: ignore[attr-defined]
             self.records[rec.id] = rec  # type: ignore[attr-defined]
             self.paths[rec.id] = path  # type: ignore[attr-defined]
         elif m := _SOURCE_FILE.fullmatch(path):

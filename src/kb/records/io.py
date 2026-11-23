@@ -51,7 +51,7 @@ def _split_front_matter(name: str, text: str) -> tuple[str, str]:
     raise RecordError(f"{name}: unterminated front matter")
 
 
-def parse_record(path: str, data: bytes) -> Record:
+def parse_record(path: str, data: bytes, *, check_name: bool = True) -> Record:
     name = re.split(r"[\\/]", path)[-1]
     model, ext = _model_for(name)
     try:
@@ -77,7 +77,7 @@ def parse_record(path: str, data: bytes) -> Record:
         raise RecordError(
             f"{name}: " + "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())
         ) from e
-    if name != f"{record.id}{ext}":  # type: ignore[attr-defined]
+    if check_name and name != f"{record.id}{ext}":  # type: ignore[attr-defined]
         raise RecordError(f"{name}: file name does not match id {record.id}")  # type: ignore[attr-defined]
     return record  # type: ignore[return-value]
 
