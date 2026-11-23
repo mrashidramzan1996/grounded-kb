@@ -10,7 +10,7 @@ from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
 from kb.gates.sources import source_gate
 from kb.gates.triage import triage_gate
-from kb.gitfiles import changed_files, default_branch, repo_files
+from kb.gitfiles import _merge_base, changed_files, default_branch, repo_files
 from kb.issues import Issue
 from kb.modules import module_paths_gate, suggest_paths
 from kb.records.repo import KbRepo
@@ -34,16 +34,21 @@ def run_check(root: Path, *, base: str | None = None, changed_only: bool = False
     root = Path(root)
     config = load_config(root / "kb.config.yaml")
     repo = KbRepo.load(root)
+    changed: list[str] | None = None
     if changed_only:
         base = base or default_branch(root)
         changed = changed_files(root, base)
-    else:
-        changed = None
-    ctx = GateContext(root, config, repo, KbRepo.at_ref(root, base) if base else None)
+    # decision_guard compares with where the branch forked, not the tip of the base branch
+    base_repo = KbRepo.at_ref(root, _merge_base(root, base)) if base else None
+    ctx = GateContext(root, config, repo, base_repo)
     gates = list(DEFAULT_GATES) + ([decision_guard] if base else [])
-    issues = validate_config(config, changed if changed is not None else repo_files(root))
+    # a change to the config or to kb/ can break file-level checks on untouched files: then check every file
+    narrow = changed is not None and not any(p == "kb.config.yaml" or p.startswith("kb/") for p in changed)
+    if narrow:
+        changed = [p for p in changed if (root / p).exists()]
+    issues = validate_config(config, changed if narrow else repo_files(root))
     issues += run_gates(ctx, gates)
-    if changed is not None:
+    if narrow:
         touched = set(changed)
         suggested = set(suggest_paths(root, config, repo, changed))
         issues = [

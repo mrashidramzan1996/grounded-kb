@@ -36,3 +36,10 @@ def test_resolve_owner_and_modules_for(cfg):
     c = cfg(modules=[mod("MOD-a", ["a/**"]), mod("MOD-b")])
     assert resolve_owner("team-a", c) == "@acme/a" and resolve_owner("@x/y", c) == "@x/y" and resolve_owner("ghost", c) is None
     assert modules_for("a/f.py", c) == ["MOD-a"] and modules_for("b/f.py", c) == []
+
+
+def test_test_files_need_no_module(cfg):
+    c = cfg(modules=[mod("MOD-a", ["src/**"])])
+    files = ["tests/test_a.py", "pkg/test_b.py", "pkg/b_test.go", "web/a.test.ts", "web/a.spec.ts",
+             "web/__tests__/x.ts", "spec/x.rb", "lib/real.py"]
+    assert [i.path for i in validate_config(c, files)] == ["lib/real.py"]

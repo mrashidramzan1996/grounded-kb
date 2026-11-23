@@ -1,3 +1,5 @@
+from fnmatch import fnmatch
+
 from pathspec import GitIgnoreSpec
 
 from kb.code.registry import adapter_for
@@ -5,6 +7,16 @@ from kb.config.schema import KbConfig
 from kb.issues import Issue
 
 _EXEMPT_NAMES = {"kb.config.yaml", "AGENTS.md", "CLAUDE.md", "CODEOWNERS"}
+
+
+_TEST_DIRS = {"tests", "test", "__tests__", "spec"}
+_TEST_NAMES = ["test_*.py", "*_test.py", "*_test.go", "*.test.*", "*.spec.*"]
+
+
+def is_test_file(path: str) -> bool:
+    """Test files are verification evidence, not implementation: they need no module."""
+    *dirs, name = path.split("/")
+    return bool(_TEST_DIRS & set(dirs)) or any(fnmatch(name, p) for p in _TEST_NAMES)
 
 
 def resolve_owner(owner: str, config: KbConfig) -> str | None:
@@ -47,7 +59,7 @@ def validate_config(config: KbConfig, files: list[str]) -> list[Issue]:
         mods = modules_for(path, config)
         if len(mods) > 1:
             issues.append(Issue("config.file_in_two_modules", f"{path} belongs to modules {', '.join(mods)}", path=path))
-        elif not mods and adapter_for(path) is not None:
+        elif not mods and adapter_for(path) is not None and not is_test_file(path):
             issues.append(Issue("config.file_unassigned", f"{path} is not assigned to any module", "warning", path=path))
     return issues
 

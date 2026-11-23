@@ -58,7 +58,7 @@ def test_json_shape_and_text_format(valid_git_repo):
     r = invoke(valid_git_repo, "check")
     line = r.stdout.splitlines()[0]
     assert line.startswith("error ref.missing kb/requirements/REQ-F-001.yaml REQ-F-001: ")
-    assert "1 errors, 2 warnings (mode: warn-only)" in r.stderr
+    assert "1 errors, 0 warnings (mode: warn-only)" in r.stderr
 
 
 def test_unknown_format_exits_2(valid_git_repo):
@@ -85,3 +85,46 @@ def test_changed_limits_file_level_checks(valid_git_repo):
     assert unassigned() >= {"other/b.py", "other/c.py"}
     assert unassigned(changed_only=True, base="HEAD") == {"other/c.py"}
     assert unassigned(changed_only=True) == {"other/c.py"}  # base defaults to the default branch (main == HEAD here)
+
+
+def test_valid_repo_has_no_warnings(valid_git_repo):
+    assert run_check(valid_git_repo).issues == []
+
+
+def test_changed_widens_when_kb_changes(valid_git_repo):
+    write(valid_git_repo, "services/billing/seats.py", "# r[impl REQ-F-002]\ndef f(): ...\n")
+    git(valid_git_repo, "add", "-A")
+    git(valid_git_repo, "commit", "-m", "marker")
+    (valid_git_repo / "kb/requirements/REQ-F-002.yaml").unlink()
+    codes_ = {i.code for i in run_check(valid_git_repo, changed_only=True).issues}
+    assert "marker.unknown_id" in codes_
+
+
+def test_changed_widens_when_config_changes(valid_git_repo):
+    write(valid_git_repo, "services/billing/seats.py", "def f(): ...\n")
+    git(valid_git_repo, "add", "-A")
+    git(valid_git_repo, "commit", "-m", "code")
+    cfg = valid_git_repo / "kb.config.yaml"
+    cfg.write_text(cfg.read_text().replace("services/billing/**", "services/other/**"))
+    issues = run_check(valid_git_repo, changed_only=True).issues
+    assert any(i.code == "config.file_unassigned" and i.path == "services/billing/seats.py" for i in issues)
+
+
+def test_changed_ignores_deleted_files(valid_git_repo):
+    write(valid_git_repo, "other/gone.py", "def g(): ...\n")
+    git(valid_git_repo, "add", "-A")
+    git(valid_git_repo, "commit", "-m", "gone")
+    (valid_git_repo / "other/gone.py").unlink()
+    assert not [i for i in run_check(valid_git_repo, changed_only=True, base="HEAD").issues if i.path == "other/gone.py"]
+
+
+def test_decision_guard_uses_merge_base(valid_git_repo):
+    git(valid_git_repo, "checkout", "-q", "-b", "feature")
+    git(valid_git_repo, "checkout", "-q", "main")
+    (valid_git_repo / "kb/decisions/ADR-0009.md").write_text(
+        "---\nid: ADR-0009\ntitle: New\ngoverns: [MOD-sessions]\n---\nBody.\n"
+    )
+    git(valid_git_repo, "add", "-A")
+    git(valid_git_repo, "commit", "-m", "adr on main")
+    git(valid_git_repo, "checkout", "-q", "feature")
+    assert "decision_guard" not in {i.code for i in run_check(valid_git_repo, base="main").issues}
