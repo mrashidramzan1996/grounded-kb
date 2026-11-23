@@ -103,3 +103,36 @@ def acme_repo(fixtures, tmp_path):
     from helpers import make_git_repo
 
     return make_git_repo(fixtures / "repos/acme-billing", tmp_path, extra={"kb.config.yaml": ACME_CONFIG})
+
+
+@pytest.fixture
+def acme_kb_with(acme_repo):
+    """acme_kb_with(*records) -> GateContext over acme_repo with its docs added and the records written under kb/."""
+    from helpers import add_all
+    from kb.config.load import load_config
+    from kb.gates.base import GateContext
+    from kb.records.repo import KbRepo
+    from kb.yamlio import dump_yaml
+
+    def build(*records):
+        add_all(acme_repo)
+        cfg_path = acme_repo / "kb.config.yaml"
+        cfg_path.write_text(
+            ACME_CONFIG.replace("modules: []", "modules:\n  - {id: MOD-billing, owner: tech-leads}")
+        )
+        repo = KbRepo.load(acme_repo)
+
+        def segment_id(stem: str, suffix: str, text: str) -> str:
+            """The first segment under the heading holding `text` (else the first under the heading)."""
+            text_md = repo.source_text(f"SRC-{stem}")
+            segs = [s for s in repo.segments(f"SRC-{stem}") if s.heading.endswith(suffix)]
+            return next((s for s in segs if text in text_md[s.start : s.end]), segs[0]).id
+
+        for r in records:
+            rec = r(segment_id)
+            out = acme_repo / "kb/requirements" / f"{rec.id}.yaml"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(dump_yaml(rec.model_dump(mode="json", exclude_defaults=True)))
+        return GateContext(acme_repo, load_config(cfg_path), KbRepo.load(acme_repo))
+
+    return build

@@ -210,3 +210,24 @@ def grep(directory: Path, pattern: str) -> list[Path]:
 
     rx = re.compile(pattern.encode())
     return [p for p in sorted(directory.rglob("*")) if p.is_file() and rx.search(p.read_bytes())]
+
+
+# --- acme quote-gate helpers -----------------------------------------------------------------
+
+def req(id: str, statement: str, quote: tuple[str, str, str], **fields):
+    """A Requirement for acme_kb_with. quote=(source stem, heading suffix, text); the segment is resolved later:
+    the first one under that heading containing the text, else the first under it."""
+
+    def build(segment_id):
+        from kb.records.models import Requirement
+
+        stem, suffix, text = quote
+        data = {
+            "id": id,
+            "statement": statement,
+            "evidence": {"quotes": [{"source": f"SRC-{stem}#{segment_id(stem, suffix, text)}", "text": text}]},
+            "modules": ["MOD-billing"],
+        } | fields
+        return Requirement.model_validate(data)
+
+    return build
