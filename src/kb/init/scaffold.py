@@ -10,7 +10,6 @@ from importlib import resources
 from pathlib import Path
 from typing import Literal
 
-from kb import __version__
 from kb.config.codeowners import parse_codeowners
 from kb.gitfiles import GitError, default_branch
 from kb.issues import Issue
@@ -86,7 +85,7 @@ def _render_config(modules: list[dict[str, str]], has_docs: bool) -> str:
     q = json.dumps
     out = [
         "# kb.config.yaml, written by `kb init`. Nothing here is guessed: fill in what is marked TODO.",
-        "# Reference: kb_spec.md. `kb check` reads this file.",
+        "# `kb check` reads this file.",
         "version: 1",
         "",
         "# Short team names -> forge handles. None generated: use the forge handle (@org/team) directly below.",
@@ -155,20 +154,21 @@ def init_repo(
     root: Path,
     *,
     ci: Literal["github", "gitlab", "none"] = "github",
-    install_spec: str = f"grounded-kb=={__version__}",
+    install_spec: str | None = None,
 ) -> InitResult:
     """Scaffold kb in `root`. Raises InitError (nothing written) if kb.config.yaml exists, a target is a
     symlink or not a regular file, or an argument is unsafe. Existing user content is never rewritten
-    outside kb's marked blocks; existing kb/README.md and CI files are left alone (CI: snippet reported)."""
+    outside kb's marked blocks; existing kb/README.md and CI files are left alone (CI: snippet reported).
+    Without install_spec the CI templates install nothing: they warn until KB_INSTALL_SPEC is set (I6)."""
     root = Path(root)
-    if not _SAFE_SPEC.match(install_spec):
+    if install_spec is not None and not _SAFE_SPEC.match(install_spec):
         raise InitError(f"unsafe --install-spec {install_spec!r}")
     if os.path.lexists(root / "kb.config.yaml"):
         raise InitError("kb.config.yaml already exists; kb init does not overwrite it")
 
     ci_path = {"github": ".github/workflows/kb.yml", "gitlab": ".gitlab-ci.yml", "none": None}[ci]
     existing: dict[str, bool] = {}
-    for rel in ["AGENTS.md", "CLAUDE.md", *CODEOWNERS_LOCATIONS, "kb/README.md", ".gitlab-ci.yml", ".github/workflows/kb.yml"]:
+    for rel in [".gitignore", "AGENTS.md", "CLAUDE.md", *CODEOWNERS_LOCATIONS, "kb/README.md", ".gitlab-ci.yml", ".github/workflows/kb.yml"]:
         existing[rel] = _check_target(root, rel, "file")
     _check_target(root, "kb", "dir")
     if ci_path == ".github/workflows/kb.yml":
@@ -184,6 +184,7 @@ def init_repo(
         ("AGENTS.md", "kb", _template("agents_block.md").replace("{{rules}}", "\n".join(AGENT_RULES)), "html"),
         ("CLAUDE.md", "kb", "@AGENTS.md", "html"),
         (codeowners_rel, "kb", _codeowners_block(), "hash"),
+        (".gitignore", "kb", ".kb/", "hash"),  # A-11: caches and the drafting brief are never committed
     ]:
         try:
             files[rel] = upsert_block(_read(root, rel) if existing.get(rel) else "", name, content, style)  # type: ignore[arg-type]
@@ -196,7 +197,7 @@ def init_repo(
     if ci_path:
         ci_text = (
             _template("github_workflow.yml" if ci == "github" else "gitlab_ci.yml")
-            .replace("{{install_spec}}", install_spec)
+            .replace("{{install_spec}}", install_spec or "")
             .replace("{{base}}", _base_branch(root))
         )
         if existing[ci_path]:

@@ -11,13 +11,20 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # How CI installs kb: a pinned spec such as 'git+https://github.com/<owner>/grounded-kb@<tag>' (see kb/README.md).
+      # While it is empty the check is skipped with a warning.
+      KB_INSTALL_SPEC: '{{install_spec}}'
+      BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
-      # Both steps honour policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
-      - if: github.event_name == 'pull_request'
-        run: uvx --from '{{install_spec}}' kb check --base origin/${{ github.base_ref }}
-      - if: github.event_name == 'push'
-        run: uvx --from '{{install_spec}}' kb check
+      - if: env.KB_INSTALL_SPEC == ''
+        run: 'echo "::warning::kb: set the install spec in .github/workflows/kb.yml — see kb/README.md"'
+      # Both check steps honour policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
+      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'
+        run: uvx --from "$KB_INSTALL_SPEC" kb check --base "origin/$BASE_REF"
+      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
+        run: uvx --from "$KB_INSTALL_SPEC" kb check

@@ -10,6 +10,18 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 - `kb ingest` prepares a drafting brief; drafted records are reviewed in a pull request.
 - `kb check` runs every gate; `kb context` and `kb trace` read the KB.
 
+## CI
+
+`kb init` writes a CI job (`.github/workflows/kb.yml` or `.gitlab-ci.yml`) that runs `kb check` on every pull request
+and on the default branch. It installs nothing until you set its install spec, `KB_INSTALL_SPEC`; until then the job
+only prints a warning. Use a spec you control and pin it:
+
+- a tagged git URL, e.g. `git+https://github.com/<owner>/grounded-kb@<tag>`, or
+- the published package with an exact version (`grounded-kb==<version>`), once its owner publishes it.
+
+Never use an unpinned package name: anyone could publish under a name nobody has claimed. `kb init --install-spec <spec>`
+writes the spec for you.
+
 ## Layout
 
 | Path | Holds |

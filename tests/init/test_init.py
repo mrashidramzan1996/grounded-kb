@@ -122,14 +122,21 @@ def test_github_ci_template(tmp_path):
     repo = make_git_repo(None, tmp_path)
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
-    assert "fetch-depth: 0" in text
-    assert "uvx --from 'grounded-kb==9.9' kb check --base origin/${{ github.base_ref }}" in text and "--strict" not in text
+    assert "fetch-depth: 0" in text and "KB_INSTALL_SPEC: 'grounded-kb==9.9'" in text
+    assert 'uvx --from "$KB_INSTALL_SPEC" kb check --base "origin/$BASE_REF"' in text and "--strict" not in text
+    assert "BASE_REF: ${{ github.base_ref }}" in text  # M7: never expanded inside run:
 
 
-def test_default_install_spec(tmp_path):
+@pytest.mark.parametrize("ci, rel", [("github", ".github/workflows/kb.yml"), ("gitlab", ".gitlab-ci.yml")])
+def test_no_default_install_spec(tmp_path, ci, rel):
+    """I6: nothing installs an unpinned or unclaimed package name; the check warns until the spec is set."""
     repo = make_git_repo(None, tmp_path)
-    init_repo(repo)
-    assert f"uvx --from 'grounded-kb=={__version__}' kb check" in (repo / ".github/workflows/kb.yml").read_text()
+    init_repo(repo, ci=ci)
+    text = (repo / rel).read_text()
+    assert "KB_INSTALL_SPEC: ''" in text and "grounded-kb==" not in text
+    assert all(line.split("uvx --from ", 1)[1].startswith('"$KB_INSTALL_SPEC"') for line in text.splitlines() if "uvx --from " in line)
+    assert f"kb: set the install spec in {rel} — see kb/README.md" in text
+    assert "install spec" in (repo / "kb/README.md").read_text()
 
 
 def test_base_branch_follows_repo(tmp_path):
@@ -143,7 +150,7 @@ def test_gitlab_ci_template(tmp_path):
     repo = make_git_repo(None, tmp_path)
     r = init_repo(repo, ci="gitlab")
     text = (repo / ".gitlab-ci.yml").read_text()
-    assert 'GIT_DEPTH: "0"' in text and "kb check --base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" in text and "--strict" not in text
+    assert 'GIT_DEPTH: "0"' in text and 'kb check --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"' in text and "--strict" not in text
     assert not (repo / ".github").exists() and ".gitlab-ci.yml" in r.files_written
 
 
@@ -160,7 +167,27 @@ def test_ci_none_writes_no_template(tmp_path):
     r = init_repo(repo, ci="none")
     assert not (repo / ".github").exists() and not (repo / ".gitlab-ci.yml").exists()
     assert r.files_written == sorted(r.files_written)
-    assert r.files_written == ["AGENTS.md", "CLAUDE.md", "CODEOWNERS", "kb.config.yaml", "kb/README.md"]
+    assert r.files_written == [".gitignore", "AGENTS.md", "CLAUDE.md", "CODEOWNERS", "kb.config.yaml", "kb/README.md"]
+
+
+def test_gitignore_block_keeps_user_content(tmp_path):
+    """I5 (A-11): .kb/ holds caches and the brief; it is never committed."""
+    repo = make_git_repo(None, tmp_path, extra={".gitignore": "node_modules/\n"})
+    init_repo(repo, ci="none")
+    text = (repo / ".gitignore").read_text()
+    assert text.startswith("node_modules/\n") and "# kb:begin kb\n.kb/\n# kb:end kb\n" in text
+    from kb.textblocks import upsert_block
+
+    assert upsert_block(text, "kb", ".kb/", "hash") == text
+    (repo / ".kb/cache").mkdir(parents=True)
+    (repo / ".kb/cache/x").write_text("x")
+    assert ".kb/" not in git(repo, "status", "--porcelain", "--untracked-files=all")
+
+
+def test_config_has_no_spec_reference(tmp_path):
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, ci="none")
+    assert "kb_spec.md" not in (repo / "kb.config.yaml").read_text()
 
 
 def test_unsafe_install_spec_is_refused_before_writing(tmp_path):
@@ -225,7 +252,7 @@ def test_install_spec_is_single_quoted_in_both_templates(tmp_path):
         repo = make_git_repo(None, tmp_path / ci)
         init_repo(repo, ci=ci, install_spec="grounded-kb>=1")
         text = (repo / rel).read_text()
-        assert "uvx --from 'grounded-kb>=1' kb check" in text
+        assert "KB_INSTALL_SPEC: 'grounded-kb>=1'" in text and 'uvx --from "$KB_INSTALL_SPEC" kb check' in text
         YAML(typ="safe").load(text)
 
 
@@ -241,15 +268,18 @@ def test_github_workflow_pr_and_push_steps(tmp_path):
     from ruamel.yaml import YAML
 
     repo = make_git_repo(None, tmp_path)
-    init_repo(repo)
+    init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     wf = YAML(typ="safe").load(text)
     assert set(wf[True] if True in wf else wf["on"]) == {"pull_request", "push"}
     steps = wf["jobs"]["check"]["steps"]
     runs = {s["if"]: s["run"] for s in steps if "run" in s}
-    assert len(runs) == 2
-    assert runs["github.event_name == 'pull_request'"].endswith("kb check --base origin/${{ github.base_ref }}")
-    assert runs["github.event_name == 'push'"].endswith("kb check") and "--base" not in runs["github.event_name == 'push'"]
+    assert len(runs) == 3
+    pr, push = "env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'", "env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"
+    assert runs[pr].endswith('kb check --base "origin/$BASE_REF"') and "${{" not in runs[pr]
+    assert runs[push].endswith("kb check") and "--base" not in runs[push]
+    assert runs["env.KB_INSTALL_SPEC == ''"].startswith("echo ")
+    assert wf["jobs"]["check"]["env"] == {"KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.base_ref }}"}
     assert wf["jobs"]["check"]["steps"][0]["with"]["fetch-depth"] == 0
     assert "branches: [main]" in text
 
@@ -261,7 +291,7 @@ def test_gitlab_ci_mr_and_default_branch_jobs(tmp_path):
     init_repo(repo, ci="gitlab")
     ci = YAML(typ="safe").load((repo / ".gitlab-ci.yml").read_text())
     mr, default = ci["kb-check-mr"], ci["kb-check-default-branch"]
-    assert any("--base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" in s for s in mr["script"])
+    assert any('--base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"' in s for s in mr["script"])
     assert all("--base" not in s for s in default["script"]) and any("kb check" in s for s in default["script"])
     assert "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH" in str(default["rules"])
     assert mr["variables"]["GIT_DEPTH"] == "0" and default["variables"]["GIT_DEPTH"] == "0"

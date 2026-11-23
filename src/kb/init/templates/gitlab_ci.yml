@@ -1,12 +1,16 @@
+# KB_INSTALL_SPEC: how CI installs kb, a pinned spec such as 'git+https://github.com/<owner>/grounded-kb@<tag>'
+# (see kb/README.md). While it is empty the check is skipped with a warning.
 kb-check-mr:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   variables:
     GIT_DEPTH: "0"
+    KB_INSTALL_SPEC: '{{install_spec}}'
   script:
+    - 'if [ -z "$KB_INSTALL_SPEC" ]; then echo "kb: set the install spec in .gitlab-ci.yml — see kb/README.md"; exit 0; fi'
     # Honours policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
-    - uvx --from '{{install_spec}}' kb check --base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+    - uvx --from "$KB_INSTALL_SPEC" kb check --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
 
 kb-check-default-branch:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
@@ -14,5 +18,7 @@ kb-check-default-branch:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   variables:
     GIT_DEPTH: "0"
+    KB_INSTALL_SPEC: '{{install_spec}}'
   script:
-    - uvx --from '{{install_spec}}' kb check
+    - 'if [ -z "$KB_INSTALL_SPEC" ]; then echo "kb: set the install spec in .gitlab-ci.yml — see kb/README.md"; exit 0; fi'
+    - uvx --from "$KB_INSTALL_SPEC" kb check
