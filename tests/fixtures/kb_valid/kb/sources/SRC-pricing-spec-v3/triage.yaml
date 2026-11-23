@@ -7,3 +7,6 @@ segments:
   - REQ-F-002
   seg-04:
   - ADR-0002
+  seg-05:
+  - ADR-0003
+  - INV-001

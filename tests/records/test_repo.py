@@ -55,7 +55,7 @@ def test_source_accessors(fixtures):
     assert text == (fixtures / "kb_valid/docs/pricing-spec-v3.md").read_text(encoding="utf-8")
     assert src.original_sha256 == hashlib.sha256((fixtures / "kb_valid/docs/pricing-spec-v3.md").read_bytes()).hexdigest()
     segs = repo.segments(SRC)
-    assert [s.id for s in segs] == ["seg-01", "seg-02", "seg-03", "seg-04"]
+    assert [s.id for s in segs] == ["seg-01", "seg-02", "seg-03", "seg-04", "seg-05"]
     assert src.next_seg == len(segs) + 1
     for s in segs:
         assert isinstance(s, Segment) and s.page == 1

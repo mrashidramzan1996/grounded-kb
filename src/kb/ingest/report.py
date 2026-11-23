@@ -12,7 +12,7 @@ from kb.gates.anchors import anchor_gate
 from kb.gates.base import GateContext, run_gates
 from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
-from kb.gates.quotes import quote_gate
+from kb.gates.quotes import missing_evidence, quote_gate
 from kb.gates.sources import STORE_FILE, bad_segment_ids, recover_hint, sha256_file, source_gate, stored_ids
 from kb.gitfiles import file_at, read_tree_files
 from kb.issues import Issue
@@ -133,6 +133,12 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     ids = {rid for rid, path in head.id_paths if path in drafted}
     source_issues = [i for i in issues if i.code.startswith("source.")]
     mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
+    # whoever wrote it, a decision or invariant drafted in this range must quote its document (C2)
+    mine = [i for i in mine if i.code != "evidence.missing"] + [
+        missing_evidence(rid, rec, "error", head.paths[rid])
+        for rid, rec in sorted(head.records.items())
+        if rid in ids and isinstance(rec, (Decision, Invariant)) and rec.evidence is None
+    ]
     direct = [i for i in mine if i.severity == "error"]
     caused = [
         i for i in issues

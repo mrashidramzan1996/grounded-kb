@@ -42,9 +42,11 @@ flags: []              # optional: vague | conflicting | untestable
 
 Feature (`FEAT-001.md`): front matter with `id`, `title`, `module`, `requirements`, `claims` (each `id`, `claim`, and optional `requirement`, `code`, `test`); the Markdown body follows.
 
-Decision (`ADR-0001.md`): front matter with `id`, `title`, `governs` (module or record ids), optional `evidence`, `decided_by`, `revisit_when`, `supersedes`; the reasoning is the body. An accepted decision is never edited: to change it, add a new decision whose `supersedes` names it.
+Decision (`ADR-0001.md`): front matter with `id`, `title`, `governs` (module or record ids), `evidence`, optional `decided_by`, `revisit_when`, `supersedes`; the reasoning is the body. An accepted decision is never edited: to change it, add a new decision whose `supersedes` names it.
 
-Invariant (`INV-001.md`): front matter with `id`, `statement`, `governs`, optional `evidence`, `tests`, `supersedes`; optional body.
+Invariant (`INV-001.md`): front matter with `id`, `statement`, `governs`, `evidence`, optional `tests`, `supersedes`; optional body. Like a decision, an accepted invariant is never edited; supersede it.
+
+A decision or invariant drafted from documents (`drafted_by` set) must quote them in `evidence`; without it `kb check` reports the error `evidence.missing`. One a person records without a document is a warning. Every number in a statement, or in a decision's title and body, must appear in one of its quotes.
 
 Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`.
 

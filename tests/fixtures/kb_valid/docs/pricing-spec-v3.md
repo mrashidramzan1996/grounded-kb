@@ -11,3 +11,7 @@ A removed seat stays active until the end of the billing cycle. No refund is giv
 ## 4. Invoices
 
 All amounts are stored and calculated in integer cents.
+
+## 5. Sessions
+
+Sessions are kept in Redis. A session expires after 30 minutes of inactivity.
