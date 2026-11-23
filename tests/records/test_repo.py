@@ -39,11 +39,10 @@ def test_valid_fixture_loads_clean(fixtures):
     assert repo.paths["ADR-0002"] == "kb/decisions/ADR-0002.md"
 
 
-def test_claims_are_indexed_by_id(fixtures):
-    claims = KbRepo.load(fixtures / "kb_valid").claims()
-    assert list(claims) == ["FEAT-001.C1"]
-    assert isinstance(claims["FEAT-001.C1"], FeatureClaim)
-    assert claims["FEAT-001.C1"].requirement == "REQ-F-002"
+def test_claims_yield_feature_claim_pairs(fixtures):
+    repo = KbRepo.load(fixtures / "kb_valid")
+    assert [(f.id, c.id) for f, c in repo.claims()] == [("FEAT-001", "FEAT-001.C1")]
+    assert all(isinstance(c, FeatureClaim) for _, c in repo.claims())
 
 
 def test_source_accessors(fixtures):

@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
@@ -9,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 from kb.gitfiles import read_tree_files
 from kb.issues import Issue
 from kb.records.io import RecordError, parse_record
-from kb.records.models import FeatureClaim, Record, Source, Triage
+from kb.records.models import Feature, FeatureClaim, Record, Source, Triage
 from kb.sources.segment import Segment
 from kb.yamlio import YamlError, load_yaml_strict
 
@@ -105,14 +106,12 @@ class KbRepo:
     def at_ref(cls, root: Path, ref: str) -> "KbRepo":
         return cls.from_files(read_tree_files(Path(root), ref, "kb"))
 
-    def claims(self) -> dict[str, FeatureClaim]:
-        """Every feature claim, keyed by claim id."""
-        return {
-            c.id: c
-            for rec in self.records.values()
-            if hasattr(rec, "claims")
-            for c in rec.claims  # type: ignore[attr-defined]
-        }
+    def claims(self) -> Iterator[tuple[Feature, FeatureClaim]]:
+        """Every (feature, claim) pair, features in sorted id order."""
+        for _, rec in sorted(self.records.items()):
+            if isinstance(rec, Feature):
+                for c in rec.claims:
+                    yield rec, c
 
     def segments(self, src_id: str) -> list[Segment]:
         return self._segments.get(src_id, [])
