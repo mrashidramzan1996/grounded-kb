@@ -219,3 +219,47 @@ def test_cli_changed_outside_git_exits_2(tmp_path):
     (tmp_path / "kb.config.yaml").write_text("version: 1\n")
     r = invoke(tmp_path, "context", "--changed")
     assert r.exit_code == 2 and "git" in r.stderr
+
+
+# --- bounded session brief ---------------------------------------------------------------------
+
+def test_session_brief_caps_the_not_built_list(acme_repo_drafted):
+    from kb.context import MAX_NOT_BUILT
+
+    for n in range(50):
+        add_req(acme_repo_drafted, f"REQ-F-{100 + n}", f"Rule {n}.", "SRC-pricing-spec-v3#seg-10", "No refund is given.")
+    git(acme_repo_drafted, "add", "-A")
+    git(acme_repo_drafted, "commit", "-m", "many")
+    lines = session_brief(acme_repo_drafted).splitlines()
+    shown = [l for l in lines if l.endswith("] not built")]
+    assert MAX_NOT_BUILT == 30 and len(shown) == 30  # 57 not built in all
+    assert "… and 27 more (run `kb status`)" in lines
+
+
+def test_session_brief_truncates_bodies_but_explicit_requests_do_not(acme_repo_drafted):
+    from kb.context import MAX_BODY_CHARS
+
+    path = acme_repo_drafted / "kb/decisions/ADR-0002.md"
+    body = "Cents. " * 200
+    path.write_text(path.read_text().split("---\n", 2)[0] + "---\n" + path.read_text().split("---\n", 2)[1] + "---\n" + body + "\n")
+    write(acme_repo_drafted, "services/billing/seats.py", "# r[impl REQ-F-002]\n")
+    brief = line_of(session_brief(acme_repo_drafted), "[ADR-0002] body")
+    assert brief.endswith("…`") and len(brief) < MAX_BODY_CHARS + 40
+    full = line_of(render_pack(governing(*args(acme_repo_drafted), ids=["ADR-0002"]), "md"), "[ADR-0002] body")
+    assert body.strip() in full
+
+
+def test_session_brief_is_capped_and_keeps_ids_on_every_line(acme_repo_drafted):
+    from kb.context import MAX_BRIEF_CHARS
+
+    long = "x" * 300
+    for n in range(100):
+        add_req(acme_repo_drafted, f"REQ-F-{100 + n}", f"{long} {n}", "SRC-pricing-spec-v3#seg-10", "No refund is given.")
+    write(acme_repo_drafted, "services/billing/seats.py", "# r[impl REQ-F-002]\n")
+    out = session_brief(acme_repo_drafted)
+    lines = out.splitlines()
+    assert len(out) <= MAX_BRIEF_CHARS
+    assert "… truncated; run `kb context --changed` for the full pack" in lines
+    data = [l for l in lines if not l.startswith(("#", "…")) and l.strip() and l not in AGENT_RULES]
+    assert data and all(CITES_ID.match(l) for l in data)
+    assert lines[-len(AGENT_RULES):] == AGENT_RULES

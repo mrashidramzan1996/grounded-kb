@@ -33,3 +33,9 @@ def scan_markers(root: Path, files: list[str]) -> list[Marker]:
         for n, line in enumerate(text.splitlines(), start=1):
             out.extend(Marker(m.group(1), m.group(2), rel, n) for m in _MARKER.finditer(line))
     return out
+
+
+def marker_eligible(path: str) -> bool:
+    """Whether markers in this repo file count: not under kb/ and no dot-directory or dot-file segment."""
+    parts = path.split("/")
+    return parts[0] != "kb" and not any(p.startswith(".") for p in parts)

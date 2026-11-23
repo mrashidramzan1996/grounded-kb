@@ -39,3 +39,11 @@ def test_skips_file_under_symlinked_dir(tmp_path):
     (tmp_path / "d" / "f.txt").write_text("r[impl REQ-F-001]\n")
     (tmp_path / "dl").symlink_to(tmp_path / "d")
     assert [m.path for m in scan_markers(tmp_path, ["dl/f.txt", "d/f.txt"])] == ["d/f.txt"]
+
+
+def test_marker_eligible_excludes_kb_and_dot_paths():
+    from kb.markers import marker_eligible
+
+    assert marker_eligible("services/billing/seats.py") and marker_eligible("kbtools/x.py")
+    assert not marker_eligible("kb/requirements/REQ-F-001.yaml")
+    assert not marker_eligible(".github/x.py") and not marker_eligible("src/.hidden/x.py")
