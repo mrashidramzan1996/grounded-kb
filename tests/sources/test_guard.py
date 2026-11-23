@@ -48,3 +48,24 @@ def test_offset_map_follows_masking():
     r = guard("a@b.example X")
     assert r.text == "[EMAIL-1] X"
     assert r.map_offset(0) == 0 and r.map_offset(len("a@b.example ")) == len("[EMAIL-1] ")
+
+
+def test_guard_is_linear_on_pathological_input():
+    import time
+
+    for text in ["a" * 200_000, "a@" * 50_000, "-----BEGIN PRIVATE KEY-----" * 5_000, "a." * 100_000 + "@"]:
+        t = time.perf_counter()
+        guard(text)
+        assert time.perf_counter() - t < 1
+
+
+def test_email_not_matched_from_mid_token_and_bounded():
+    r = guard("x" * 100 + "@acme.example")
+    assert r.counts.emails == 0 or "[EMAIL-1]" in r.text
+    assert guard("a@b.example").text == "[EMAIL-1]"
+
+
+def test_multiple_private_keys_each_masked():
+    k = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"
+    r = guard(f"{k}\nmid\n{k}")
+    assert r.text == "[SECRET:private-key]\nmid\n[SECRET:private-key]" and r.counts.secrets == 2

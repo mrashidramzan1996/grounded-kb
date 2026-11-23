@@ -83,7 +83,7 @@ def segment(n: NormalisedText) -> list[Segment]:
 def assign_segment_ids(
     previous: list[Segment], new: list[Segment], next_seg: int
 ) -> tuple[list[Segment], int]:
-    """Keep ids of segments matched by (heading, occurrence), then by hash; the rest get fresh numbers."""
+    """Keep ids by exact hash (duplicates in order), then by (heading, occurrence); the rest get fresh numbers."""
 
     def keyed(segs: list[Segment]) -> list[tuple[str, int]]:
         seen: dict[str, int] = {}
@@ -93,20 +93,19 @@ def assign_segment_ids(
             seen[s.heading] = seen.get(s.heading, 0) + 1
         return keys
 
-    old_by_key = dict(zip(keyed(previous), range(len(previous))))
     ids: list[str | None] = [None] * len(new)
     used: set[int] = set()
-    for i, key in enumerate(keyed(new)):
-        j = old_by_key.get(key)
+    for i, s in enumerate(new):
+        j = next((j for j, p in enumerate(previous) if j not in used and p.hash == s.hash), None)
         if j is not None:
             ids[i] = previous[j].id
             used.add(j)
-    for i, s in enumerate(new):
-        if ids[i] is None:
-            j = next((j for j, p in enumerate(previous) if j not in used and p.hash == s.hash), None)
-            if j is not None:
-                ids[i] = previous[j].id
-                used.add(j)
+    old_by_key = {k: j for j, k in enumerate(keyed(previous))}
+    for i, key in enumerate(keyed(new)):
+        j = old_by_key.get(key)
+        if ids[i] is None and j is not None and j not in used:
+            ids[i] = previous[j].id
+            used.add(j)
     out = []
     for s, seg_id in zip(new, ids):
         if seg_id is None:

@@ -35,6 +35,15 @@ def _relative(root: Path, path: str) -> str:
         raise SourceError(f"{path} is outside the repository") from None
 
 
+def _check_store_dirs(root: Path, target: Path) -> None:
+    """Refuse to write through symlinks: kb/, kb/sources and the source directory must be real directories."""
+    for d in (root / "kb", root / "kb/sources", target):
+        if d.is_symlink():
+            raise SourceError(f"{d.relative_to(root)} is a symlink; refusing to write through it")
+    if (root / "kb/sources").exists() and not (root / "kb/sources").resolve().is_relative_to(root.resolve()):
+        raise SourceError("kb/sources resolves outside the repository")
+
+
 def _config_for(rel: str, config: KbConfig) -> SourceCfg:
     for restricted in config.visibility.restricted:
         if GitIgnoreSpec.from_lines(restricted.paths).match_file(rel):
@@ -59,6 +68,8 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
     """
     root = Path(root)
     rel = _relative(root, path)
+    if rel == "kb" or rel.startswith("kb/"):
+        raise SourceError(f"{rel} is under kb/, which holds the knowledge base itself and cannot be a source")
     cfg = _config_for(rel, config)
     file = root / rel
     if not file.is_file():
@@ -74,6 +85,13 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
     )
     src_id = source_id(rel)
     target = root / "kb/sources" / src_id
+    _check_store_dirs(root, target)
+    triage = target / "triage.yaml"
+    triage_data = None
+    if triage.is_symlink() or (triage.exists() and not triage.is_file()):
+        raise SourceError(f"{triage.relative_to(root)} is not a regular file; refusing to sync")
+    if triage.exists():
+        triage_data = triage.read_bytes()
     previous, next_seg = [], 1
     if target.exists():
         existing = KbRepo.load(root)
@@ -100,12 +118,16 @@ def add_source(root: Path, path: str, config: KbConfig) -> Source:
         (tmp / "source.yaml").write_text(dump_yaml(source.model_dump()), encoding="utf-8")
         (tmp / "text.md").write_text(masked.text, encoding="utf-8")
         (tmp / "segments.jsonl").write_text(_segments_jsonl(segments), encoding="utf-8")
-        if (target / "triage.yaml").exists():
-            shutil.copy2(target / "triage.yaml", tmp / "triage.yaml")
+        if triage_data is not None:
+            (tmp / "triage.yaml").write_bytes(triage_data)
         if target.exists():
             old_dir = tmp.with_name(tmp.name + ".old")
             target.rename(old_dir)
-            tmp.rename(target)
+            try:
+                tmp.rename(target)
+            except BaseException:
+                old_dir.rename(target)  # put the previous source back
+                raise
             shutil.rmtree(old_dir)
         else:
             tmp.rename(target)

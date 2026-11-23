@@ -1,5 +1,7 @@
 import hashlib
 
+import pytest
+
 from kb.records.models import FeatureClaim, Source, Triage
 from kb.records.repo import KbRepo
 from kb.sources.segment import Segment
@@ -147,3 +149,14 @@ def test_load_reports_fifos_without_hanging(tmp_path, fixtures):
     repo = KbRepo.load(root)
     assert [(i.code, i.path) for i in repo.errors] == [("schema.unknown_file", "kb/requirements/REQ-F-099.yaml")]
     assert "REQ-F-001" in repo.records
+
+
+@pytest.mark.parametrize("original", ["/etc/passwd", "../x.md", "docs/../../x.md", "a\\b.md", ""])
+def test_source_original_must_be_a_contained_relative_path(original):
+    from pydantic import ValidationError
+
+    from kb.records.models import GuardCounts
+
+    with pytest.raises(ValidationError):
+        Source(id="SRC-a", original=original, original_sha256="0" * 64, normaliser="text@1", trust="spec",
+               visibility="internal", guard=GuardCounts(emails=0, secrets=0, injections=0), next_seg=1)

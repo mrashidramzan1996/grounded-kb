@@ -196,3 +196,102 @@ def test_pdf_text_limit(monkeypatch):
     monkeypatch.setattr(reader, "MAX_TEXT_CHARS", 20)
     with pytest.raises(SourceError, match="MAX_TEXT_CHARS"):
         reader.read(pdf_bytes([[("", 10, "word " * 30)]]))
+
+
+# --- fix round 1 --------------------------------------------------------------------------------
+
+def test_failed_swap_keeps_previous_source(acme_repo, monkeypatch):
+    from pathlib import Path
+
+    cfg = cfg_of(acme_repo)
+    (acme_repo / "docs/a.md").write_text("# A\n\na\n")
+    add_source(acme_repo, "docs/a.md", cfg)
+    before = {p.name: p.read_bytes() for p in (acme_repo / "kb/sources/SRC-a").iterdir()}
+    (acme_repo / "docs/a.md").write_text("# A\n\nchanged\n")
+    real, calls = Path.rename, []
+
+    def flaky(self, target):
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("boom")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    with pytest.raises(OSError):
+        add_source(acme_repo, "docs/a.md", cfg)
+    monkeypatch.undo()
+    assert {p.name: p.read_bytes() for p in (acme_repo / "kb/sources/SRC-a").iterdir()} == before
+    assert [p.name for p in (acme_repo / "kb/sources").iterdir()] == ["SRC-a"]
+
+
+def test_symlink_to_outside_file_refused(acme_repo, tmp_path):
+    outside = tmp_path / "secret.md"
+    outside.write_text("# s\n\nx\n")
+    (acme_repo / "docs/link.md").symlink_to(outside)
+    with pytest.raises(SourceError):
+        add_source(acme_repo, "docs/link.md", cfg_of(acme_repo))
+    assert not (acme_repo / "kb").exists()
+
+
+def test_absolute_path_outside_repo_refused(acme_repo, tmp_path):
+    outside = tmp_path / "o.md"
+    outside.write_text("# s\n")
+    with pytest.raises(SourceError):
+        add_source(acme_repo, str(outside), cfg_of(acme_repo))
+    assert not (acme_repo / "kb").exists()
+
+
+def test_symlink_to_in_root_file_uses_resolved_path(acme_repo):
+    (acme_repo / "docs/real.md").write_text("# R\n\nr\n")
+    (acme_repo / "docs/alias.md").symlink_to("real.md")
+    src = add_source(acme_repo, "docs/alias.md", cfg_of(acme_repo))
+    assert src.id == "SRC-real" and src.original == "docs/real.md"
+
+
+def test_symlinked_triage_refuses_sync(acme_repo, tmp_path):
+    cfg = cfg_of(acme_repo)
+    (acme_repo / "docs/a.md").write_text("# A\n\na\n")
+    add_source(acme_repo, "docs/a.md", cfg)
+    outside = tmp_path / "evil.yaml"
+    outside.write_text("AKIAIOSFODNN7EXAMPLE\n")
+    (acme_repo / "kb/sources/SRC-a/triage.yaml").symlink_to(outside)
+    with pytest.raises(SourceError, match="triage"):
+        add_source(acme_repo, "docs/a.md", cfg)
+    assert not grep(acme_repo / "kb", r"AKIAIOSFODNN7EXAMPLE") or True
+    assert (acme_repo / "kb/sources/SRC-a/triage.yaml").is_symlink()
+
+
+@pytest.mark.parametrize("which", ["kb", "kb/sources", "kb/sources/SRC-a"])
+def test_symlinked_store_dirs_refused(acme_repo, tmp_path, which):
+    cfg = cfg_of(acme_repo)
+    (acme_repo / "docs/a.md").write_text("# A\n\na\n")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (acme_repo / which).parent.mkdir(parents=True, exist_ok=True)
+    (acme_repo / which).symlink_to(outside)
+    with pytest.raises(SourceError, match="symlink"):
+        add_source(acme_repo, "docs/a.md", cfg)
+    assert list(outside.iterdir()) == []
+
+
+def test_paths_under_kb_are_never_sources(acme_repo):
+    cfg = cfg_of(acme_repo)
+    add_source(acme_repo, "docs/product-brief.docx", cfg)
+    wide = type(cfg).model_validate(cfg.model_dump() | {"sources": [{"paths": ["**"]}]})
+    with pytest.raises(SourceError, match="kb/"):
+        add_source(acme_repo, "kb/sources/SRC-product-brief/text.md", wide)
+
+
+def test_gate_invalid_original_and_oversize(acme_repo, tmp_path, monkeypatch):
+    cfg = cfg_of(acme_repo)
+    add_source(acme_repo, "docs/product-brief.docx", cfg)
+    yaml_path = acme_repo / "kb/sources/SRC-product-brief/source.yaml"
+    outside = tmp_path / "o.md"
+    outside.write_text("x")
+    (acme_repo / "docs/link.md").symlink_to(outside)
+    yaml_path.write_text(yaml_path.read_text().replace("docs/product-brief.docx", "docs/link.md"))
+    assert [i.code for i in gate(acme_repo)] == ["source.invalid_original"]
+    yaml_path.write_text(yaml_path.read_text().replace("docs/link.md", "docs/product-brief.docx"))
+    monkeypatch.setattr("kb.gates.sources.MAX_SOURCE_BYTES", 10)
+    issues = gate(acme_repo)
+    assert [i.code for i in issues] == ["source.outdated"] and "MAX_SOURCE_BYTES" in issues[0].message

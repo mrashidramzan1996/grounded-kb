@@ -71,3 +71,15 @@ def test_renamed_heading_matches_by_hash():
     new, _ = assign_segment_ids(old, segment(nt(f"# Renamed\n\n{row}\n")), n)
     assert [s.id for s in old] == ["seg-01", "seg-02"]  # the bare heading, then the row
     assert [s.id for s in new] == ["seg-03", "seg-02"] and new[1].heading == "Renamed"
+
+
+def test_inserted_table_row_keeps_other_row_ids():
+    old, n = assign_segment_ids([], segment(nt("# T\n\n| H: a |\n| H: b |\n| H: c |\n")), 1)
+    new, n2 = assign_segment_ids(old, segment(nt("# T\n\n| H: a |\n| H: x |\n| H: b |\n| H: c |\n")), n)
+    assert [s.id for s in new] == ["seg-01", "seg-02", "seg-05", "seg-03", "seg-04"] and n2 == 6
+
+
+def test_row_edited_in_place_keeps_id():
+    old, n = assign_segment_ids([], segment(nt("# T\n\n| H: a |\n| H: b |\n")), 1)
+    new, n2 = assign_segment_ids(old, segment(nt("# T\n\n| H: a |\n| H: B2 |\n")), n)
+    assert [s.id for s in new] == ["seg-01", "seg-02", "seg-03"] and n2 == 4

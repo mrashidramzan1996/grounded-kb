@@ -115,13 +115,21 @@ class GuardCounts(_Model):
 
 class Source(_Model):
     id: str = Field(pattern=rf"^{SOURCE_ID}$")
-    original: str
+    original: str  # repo-relative POSIX path, never absolute and never containing `..`
     original_sha256: str
     normaliser: str
     trust: str
     visibility: str
     guard: GuardCounts
     next_seg: int
+
+    @field_validator("original")
+    @classmethod
+    def _contained_relative_path(cls, v: str) -> str:
+        parts = v.split("/")
+        if not v or v.startswith("/") or "\\" in v or any(p in ("", ".", "..") for p in parts):
+            raise ValueError(f"original must be a relative POSIX path without '..' (got {v!r})")
+        return v
 
 
 class Triage(_Model):

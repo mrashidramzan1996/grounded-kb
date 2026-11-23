@@ -351,3 +351,11 @@ def test_docx_total_uncompressed_size_limit(monkeypatch):
 def test_docx_corrupt_archive_is_a_source_error():
     with pytest.raises(SourceError, match=r"not a valid \.docx archive"):
         read_document("c.docx", b"PK\x03\x04 truncated")
+
+
+def test_text_reader_char_limit(monkeypatch):
+    from kb.sources.readers import text as reader
+
+    monkeypatch.setattr(reader, "MAX_TEXT_CHARS", 10)
+    with pytest.raises(SourceError, match="MAX_TEXT_CHARS"):
+        reader.read(b"x" * 11)
