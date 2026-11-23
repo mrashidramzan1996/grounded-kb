@@ -6,7 +6,8 @@ from kb.gitfiles import GitError, git_common_dir, git_path
 from kb.ports.agents import EventKind, HookEvent, HookResult
 from kb.safewrite import WriteRefused, check_target, write_atomic
 
-HOOK_LINE = "command -v kb >/dev/null 2>&1 && { kb hook pre-commit || exit $?; }"
+# `if` (not `&&`): when kb isn't installed the hook must succeed, or every commit would be blocked.
+HOOK_LINE = "if command -v kb >/dev/null 2>&1; then kb hook pre-commit || exit $?; fi"
 
 
 def hooks_dir(root: Path) -> Path:

@@ -10,16 +10,16 @@ is not supported.
 
 ## Install
 
-Python 3.12 or later and [uv](https://docs.astral.sh/uv/). `grounded-kb` is not published on PyPI yet; install from a
-checkout or from a pinned git tag:
+Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Either from PyPI or from a pinned git tag:
 
 ```sh
-uv tool install /path/to/grounded-kb                                   # a local checkout
-uv tool install 'git+https://github.com/<owner>/grounded-kb@<tag>'     # a pinned tag
+uv tool install grounded-kb                                                       # from PyPI
+uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.1.0'     # a pinned tag
 kb version
 ```
 
-For CI, `kb init --install-spec '<the same pinned spec>'` writes it into the workflow; without it the CI job only warns.
+For CI, `kb init --install-spec 'grounded-kb==0.1.0'` (or the pinned git spec above) writes it into the workflow;
+without `--install-spec` the CI job only warns.
 
 ## Use (Phase 1)
 

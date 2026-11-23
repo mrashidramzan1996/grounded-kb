@@ -123,8 +123,8 @@ uv run python eval/run.py --agent claude --without-kb --repo /Users/dev/projects
 The runner is sandboxed read-only. It refuses to run (exit 2) without `kb.config.yaml` and registered sources, and while
 `kb check` reports `source.secret_in_original` (finish step 4 first). `--without-kb` runs in a temporary copy without
 `kb/`, `.kb/`, `.claude/`, `.codex/` and the kb blocks of `AGENTS.md` / `CLAUDE.md`; claude runs with
-`--setting-sources project` in both modes (the flag is listed by `claude --help`). Codex can still read the git history
-of the copy (`git log -p kb/`); keep that in mind when reading its without-kb rate. It sends the questions and the repository content the agent reads to the agent's model provider,
+`--setting-sources project` in both modes (the flag is listed by `claude --help`). The copy gets a fresh one-commit git
+repository, so its git history, status and diff don't reveal the removed KB. It sends the questions and the repository content the agent reads to the agent's model provider,
 and writes the answers to `eval/results/phase1-claude.json` (decide before committing that file). Record the rates here:
 
 | Agent | Mode | Wrong-fact rate | Citation rate |

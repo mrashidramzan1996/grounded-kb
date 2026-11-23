@@ -1,8 +1,21 @@
 [project]
 name = "grounded-kb"
 version = "0.1.0"
-description = "Git-native knowledge base CLI"
+description = "Git-native knowledge base where every product fact rests on a verbatim quote or a code anchor, checked for any coding agent"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["knowledge-base", "requirements", "traceability", "ai-agents", "claude-code", "codex", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Quality Assurance",
+]
 requires-python = ">=3.12"
 dependencies = [
     "pathspec>=1.1.1",
@@ -14,6 +27,11 @@ dependencies = [
     "tree-sitter-python>=0.25.0",
     "typer>=0.29.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mrashidramzan1996/grounded-kb"
+Repository = "https://github.com/mrashidramzan1996/grounded-kb"
+Issues = "https://github.com/mrashidramzan1996/grounded-kb/issues"
 
 [project.scripts]
 kb = "kb.cli:app"

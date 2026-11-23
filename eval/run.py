@@ -20,6 +20,7 @@ eval/results/phase1-<agent>.json, one entry per mode:
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -141,12 +142,23 @@ def clean_copy(repo: Path, dest: Path) -> Path:
     def ignore(directory: str, names: list[str]) -> set[str]:
         return KB_TRACES & set(names) if Path(directory) == repo else set()
 
-    shutil.copytree(repo, dest, ignore=ignore, symlinks=True)
+    shutil.copytree(repo, dest, ignore=lambda d, names: ignore(d, names) | ({".git"} & set(names) if Path(d) == repo else set()),
+                    symlinks=True)
     for name in KB_BLOCK_FILES:
         path = dest / name
         if path.is_file() and not path.is_symlink():
             path.write_text(remove_block(path.read_text(encoding="utf-8"), "kb", "html"), encoding="utf-8")
+    _fresh_git(dest)
     return dest
+
+
+def _fresh_git(dest: Path) -> None:
+    """A new one-commit repository, so git history/status/diff in the copy can't reveal the removed KB
+    (agents such as codex expect a git repository)."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "kb-eval", "GIT_AUTHOR_EMAIL": "kb-eval@example.invalid",
+           "GIT_COMMITTER_NAME": "kb-eval", "GIT_COMMITTER_EMAIL": "kb-eval@example.invalid"}
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-q", "--allow-empty", "-m", "eval copy"]):
+        subprocess.run(["git", *args], cwd=dest, env=env, check=True, capture_output=True)
 
 
 def run_eval(questions: list[dict], agent: str, with_kb: bool, repo: Path, runner: Runner = subprocess_runner) -> dict:

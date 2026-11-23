@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 import os
 import stat
@@ -149,3 +150,33 @@ def test_generic_install_refuses_a_hooks_dir_outside_the_repo(acme_repo, tmp_pat
     out = invoke(acme_repo, "agents", "install", "generic")
     assert out.exit_code == 2 and not list(shared.iterdir())
     assert "outside" in out.stderr and "kb hook pre-commit" in out.stderr
+
+
+def _run_hook_script(hook: Path, path_dirs: list[Path], cwd: Path) -> int:
+    import subprocess
+
+    env = {"PATH": ":".join(str(p) for p in path_dirs), "HOME": str(cwd)}
+    return subprocess.run(["/bin/sh", str(hook)], cwd=cwd, env=env, capture_output=True).returncode
+
+
+def _fake_kb(directory: Path, exit_code: int) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "kb"
+    script.write_text(f"#!/bin/sh\nexit {exit_code}\n")
+    script.chmod(0o755)
+    return directory
+
+
+def test_installed_pre_commit_allows_commits_when_kb_is_not_installed(acme_repo, tmp_path):
+    get_agent("generic").install(acme_repo)
+    hook = acme_repo / ".git/hooks/pre-commit"
+    assert _run_hook_script(hook, [Path("/usr/bin"), Path("/bin")], acme_repo) == 0
+
+
+def test_installed_pre_commit_passes_kb_exit_code_through(acme_repo, tmp_path):
+    get_agent("generic").install(acme_repo)
+    hook = acme_repo / ".git/hooks/pre-commit"
+    failing = _fake_kb(tmp_path / "fail", 1)
+    passing = _fake_kb(tmp_path / "pass", 0)
+    assert _run_hook_script(hook, [failing, Path("/usr/bin"), Path("/bin")], acme_repo) == 1
+    assert _run_hook_script(hook, [passing, Path("/usr/bin"), Path("/bin")], acme_repo) == 0

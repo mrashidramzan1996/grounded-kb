@@ -219,3 +219,23 @@ def test_secret_check_fails_closed(tmp_path, capsys):
         args = ["--agent", "claude", "--repo", str(repo), "--results-dir", str(tmp_path / "out")]
         assert run.main(args, lambda c, d: pytest.fail("agent must not run")) == 2
         assert "run kb init and kb source add first" in capsys.readouterr().err
+
+
+def test_without_kb_copy_has_no_kb_in_git(md_repo_ingested):
+    """The copy gets a fresh repository: git history/status/diff can't reveal the removed kb/."""
+    import subprocess
+
+    root = md_repo_ingested
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-qm", "kb"], cwd=root, check=True)
+    seen = []
+
+    def fake(cmd, cwd):
+        git = lambda *a: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True).stdout
+        seen.append((git("status", "--porcelain"), git("log", "--all", "--name-only", "--format="), git("diff", "HEAD")))
+        return json.dumps({"item": {"type": "agent_message", "text": "x"}})
+
+    run.run_eval(questions()[:1], "codex", False, root, fake)
+    status, history, diff = seen[0]
+    assert status == "" and diff == ""
+    assert history.strip() and not any(line.startswith(("kb/", ".kb/")) for line in history.splitlines())
