@@ -166,3 +166,33 @@ def md_repo_ingested(tmp_path):
     git(root, "add", "-A")
     git(root, "commit", "-m", "ingest sources")
     return root
+
+
+def _write_files(root: Path, files: dict[str, str]) -> None:
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+
+
+@pytest.fixture
+def built_acme(acme_repo_ingested, fixtures):
+    """acme_repo_ingested + the drafted records and proposed modules (no paths) + billing code carrying impl markers."""
+    from helpers import apply_drafts
+
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    _write_files(
+        acme_repo_ingested,
+        {
+            "services/billing/seats.py": "# r[impl REQ-F-001]\ndef add_seat(): ...\n",
+            "services/billing/invoices.py": "# r[impl REQ-F-002]\ndef invoice(): ...\n",
+            "services/billing/proration.py": "# r[impl REQ-F-003]\ndef prorate(): ...\n",
+            "services/billing/util.py": "def helper(): ...\n",
+        },
+    )
+    return acme_repo_ingested
+
+
+@pytest.fixture
+def built_acme_with_web_impl(built_acme):
+    _write_files(built_acme, {"web/billing/checkout.ts": "// r[impl REQ-F-001]\nexport const checkout = 1;\n"})
+    return built_acme

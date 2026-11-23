@@ -4,8 +4,10 @@ from typing import Annotated
 import typer
 
 import kb
+from kb.config.edit import add_module, set_paths
 from kb.config.load import ConfigError, load_config
-from kb.gitfiles import GitError
+from kb.gitfiles import GitError, repo_files
+from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_brief
 from kb.ingest.report import ingest_report, render_report
 from kb.records.repo import KbRepo
@@ -102,3 +104,70 @@ def ingest(
         return
     typer.echo(f"Brief: {BRIEF_PATH}")
     typer.echo(f"Ask your coding agent: *follow {BRIEF_PATH}*")
+
+
+module_app = typer.Typer(help="Manage modules; paths come later, from evidence.", no_args_is_help=True)
+app.add_typer(module_app, name="module")
+
+
+def _fail(e: Exception) -> typer.Exit:
+    typer.echo(str(e), err=True)
+    return typer.Exit(2)
+
+
+@module_app.command("add")
+def module_add(
+    ctx: typer.Context,
+    id: Annotated[str, typer.Argument(help="Module id, e.g. MOD-billing.")],
+    owner: Annotated[str, typer.Option("--owner", help="Team key or @handle (or TODO).")],
+    risk: Annotated[str, typer.Option("--risk", help="low, standard or high.")] = "standard",
+    title: Annotated[str | None, typer.Option("--title")] = None,
+) -> None:
+    """Add a module with no paths (planned)."""
+    try:
+        add_module(Path(ctx.obj["root"]), id, owner=owner, risk=risk, title=title)
+    except ConfigError as e:
+        raise _fail(e) from e
+    typer.echo(f"Added {id} (planned: no paths yet)")
+
+
+@module_app.command("paths")
+def module_paths(
+    ctx: typer.Context,
+    id: Annotated[str, typer.Argument(help="Module id.")],
+    accept: Annotated[bool, typer.Option("--accept", help="Write the paths suggested from r[impl] evidence.")] = False,
+    set_: Annotated[list[str] | None, typer.Option("--set", help="Set the module's paths to these globs (repeatable).")] = None,
+) -> None:
+    """Set a module's paths: from evidence (--accept) or explicitly (--set)."""
+    root = Path(ctx.obj["root"])
+    if accept == bool(set_):
+        typer.echo("give exactly one of --accept or --set GLOB", err=True)
+        raise typer.Exit(2)
+    try:
+        config = load_config(root / "kb.config.yaml")
+        module = next((m for m in config.modules if m.id == id), None)
+        if module is None:
+            raise ConfigError([f"unknown module {id}"])
+        if set_:
+            globs = list(set_)
+        else:
+            suggested = suggest_paths(root, config, KbRepo.load(root), repo_files(root)).get(id)
+            if not suggested:
+                typer.echo(f"no suggestion for {id}: no r[impl] evidence for new paths", err=True)
+                raise typer.Exit(1)
+            globs = sorted({*module.paths, *suggested})
+        set_paths(root, id, globs)
+    except (ConfigError, GitError) as e:
+        raise _fail(e) from e
+    typer.echo(f"{id}: paths = {', '.join(globs)}")
+
+
+@module_app.command("list")
+def module_list(ctx: typer.Context) -> None:
+    """List modules and their paths."""
+    try:
+        config = load_config(Path(ctx.obj["root"]) / "kb.config.yaml")
+    except ConfigError as e:
+        raise _fail(e) from e
+    for m in config.modules:
+        typer.echo(f"{m.id}  {', '.join(m.paths) if m.paths else '(planned: no paths yet)'}  owner: {m.owner}  risk: {m.risk}")

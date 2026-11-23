@@ -270,3 +270,12 @@ def apply_drafts(repo: Path, drafts: Path) -> None:
     """Simulate an agent following the brief: copy the drafted files over the repo (its kb.config.yaml,
     which carries the proposed modules, replaces the repo's)."""
     shutil.copytree(drafts, repo, dirs_exist_ok=True)
+
+
+def ctx(repo: Path):
+    """(root, config, kb repo, repo files): the arguments of suggest_paths."""
+    from kb.config.load import load_config
+    from kb.gitfiles import repo_files
+    from kb.records.repo import KbRepo
+
+    return repo, load_config(repo / "kb.config.yaml"), KbRepo.load(repo), repo_files(repo)
