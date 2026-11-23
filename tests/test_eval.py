@@ -50,13 +50,16 @@ def test_claude_command_is_sandboxed_with_kb():
     assert flag(cmd, "--tools") == ["Read,Grep,Glob,Bash"]
     assert flag(cmd, "--allowedTools") == ["Read", "Grep", "Glob", "Bash(kb context:*)", "Bash(kb trace:*)"]
     assert flag(cmd, "--disallowedTools") == ["Edit", "Write", "NotebookEdit"]
+    assert flag(cmd, "--setting-sources") == ["project"]
 
 
-def test_claude_command_without_kb_has_no_bash_and_cannot_read_kb():
+def test_claude_command_without_kb_has_no_bash():
+    """kb/ is kept out by running in a copy without it, not by deny rules."""
     cmd = run.build_command("claude", "Q?", with_kb=False)
     assert flag(cmd, "--tools") == ["Read,Grep,Glob"] and flag(cmd, "--allowedTools") == ["Read", "Grep", "Glob"]
-    assert flag(cmd, "--disallowedTools") == ["Edit", "Write", "NotebookEdit", "Bash", "Read(kb/**)", "Grep(kb/**)", "Glob(kb/**)"]
+    assert flag(cmd, "--disallowedTools") == ["Edit", "Write", "NotebookEdit", "Bash"]
     assert flag(cmd, "--permission-mode") == ["dontAsk"] and "--strict-mcp-config" in cmd
+    assert flag(cmd, "--setting-sources") == ["project"]
 
 
 def test_codex_command_and_unknown_agent():
@@ -113,9 +116,9 @@ def test_run_eval_with_a_fake_runner(tmp_path):
     assert all(cwd == tmp_path for _, cwd in seen)
 
 
-def test_main_writes_results_per_agent_and_mode(tmp_path):
+def test_main_writes_results_per_agent_and_mode(md_repo_ingested, tmp_path):
     fake = lambda cmd, cwd: json.dumps({"result": "REQ-F-002 no refund"})  # noqa: E731
-    args = ["--agent", "claude", "--repo", str(tmp_path), "--results-dir", str(tmp_path / "out")]
+    args = ["--agent", "claude", "--repo", str(md_repo_ingested), "--results-dir", str(tmp_path / "out")]
     assert run.main([*args, "--with-kb"], fake) == 0
     assert run.main([*args, "--without-kb"], fake) == 0
     data = json.loads((tmp_path / "out/phase1-claude.json").read_text())
@@ -167,3 +170,52 @@ def test_main_refuses_when_the_repo_holds_a_secret(acme_repo_ingested, tmp_path,
     args = ["--agent", "claude", "--repo", str(acme_repo_ingested), "--results-dir", str(tmp_path / "out")]
     assert run.main(args, lambda c, d: pytest.fail("agent must not run")) == 2
     assert "source.secret_in_original" in capsys.readouterr().err and not (tmp_path / "out").exists()
+
+
+# --- I9: an uncontaminated without-kb baseline -------------------------------------------------
+
+KB_BLOCK = "<!-- kb:begin kb -->\nUse kb context and cite REQ ids.\n<!-- kb:end kb -->\n"
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex"])
+def test_without_kb_runs_in_a_copy_without_any_kb_trace(md_repo_ingested, agent):
+    root = md_repo_ingested
+    for rel, text in {
+        "AGENTS.md": "Team notes.\n\n" + KB_BLOCK, "CLAUDE.md": KB_BLOCK, ".kb/cache/ingest/brief.md": "brief",
+        ".claude/settings.json": "{}", ".codex/hooks.json": "{}", "docs/kb/keep.md": "nested kb dir stays",
+    }.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    seen = []
+
+    def fake(cmd, cwd):
+        names = {p.relative_to(cwd).as_posix() for p in cwd.rglob("*") if ".git" not in p.relative_to(cwd).parts}
+        seen.append((cwd, names, (cwd / "AGENTS.md").read_text(), (cwd / "CLAUDE.md").read_text()))
+        return json.dumps({"result": "x"}) if agent == "claude" else json.dumps({"item": {"type": "agent_message", "text": "x"}})
+
+    run.run_eval(questions()[:1], agent, False, root, fake)
+    cwd, names, agents_md, claude_md = seen[0]
+    assert cwd != root and not cwd.exists()
+    assert not {n for n in names if n.split("/")[0] in {"kb", ".kb", ".claude", ".codex"}}
+    assert "docs/kb/keep.md" in names and "docs/n.md" in names
+    assert agents_md == "Team notes.\n" and "kb:begin" not in claude_md
+    run.run_eval(questions()[:1], agent, True, root, lambda c, d: seen.append(d) or "")
+    assert seen[-1] == root
+
+
+def test_claude_is_error_result_is_an_error(tmp_path):
+    fake = lambda cmd, cwd: json.dumps({"is_error": True, "result": "Credit balance is too low"})  # noqa: E731
+    result = run.run_eval(questions()[:1], "claude", True, tmp_path, fake)
+    (entry,) = result["results"]
+    assert result["errors"] == 1 and entry["wrong"] and "Credit balance" in entry["error"]
+
+
+def test_secret_check_fails_closed(tmp_path, capsys):
+    from helpers import make_git_repo
+
+    bare = make_git_repo(None, tmp_path, extra={"kb.config.yaml": 'version: 1\nsources:\n  - paths: ["docs/**"]\n'})
+    for repo in (tmp_path / "nothing", bare):
+        repo.mkdir(exist_ok=True)
+        args = ["--agent", "claude", "--repo", str(repo), "--results-dir", str(tmp_path / "out")]
+        assert run.main(args, lambda c, d: pytest.fail("agent must not run")) == 2
+        assert "run kb init and kb source add first" in capsys.readouterr().err

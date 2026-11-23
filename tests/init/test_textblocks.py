@@ -31,3 +31,16 @@ def test_upsert_block_adds_newline_before_block():
 def test_upsert_block_refuses_unbalanced_markers():
     with pytest.raises(ValueError):
         upsert_block("<!-- kb:begin x -->\nhalf\n", "x", "c", "html")
+
+
+def test_remove_block_undoes_upsert():
+    import pytest
+
+    from kb.textblocks import remove_block, upsert_block
+
+    for text in ("", "mine\n", "mine\n\nmore\n"):
+        assert remove_block(upsert_block(text, "kb", "x", "html"), "kb", "html") == text
+    middle = "a\n<!-- kb:begin kb -->\nx\n<!-- kb:end kb -->\nb\n"
+    assert remove_block(middle, "kb", "html") == "a\nb\n" and remove_block("a\n", "kb", "html") == "a\n"
+    with pytest.raises(ValueError):
+        remove_block("<!-- kb:end kb -->\n<!-- kb:begin kb -->\n", "kb", "html")

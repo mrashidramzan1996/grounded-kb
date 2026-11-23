@@ -26,3 +26,20 @@ def upsert_block(text: str, name: str, content: str, style: Literal["html", "has
         raise ValueError(f"unbalanced or repeated '{begin}' / '{end}' markers")
     tail = lines[ends[0] + 1 :]
     return "".join(lines[: starts[0]]) + block + "".join(tail)
+
+
+def remove_block(text: str, name: str, style: Literal["html", "hash"]) -> str:
+    """Return `text` without the block `name` (and the blank line upsert_block put before it); unchanged when
+    absent. Raises ValueError if the markers are unbalanced or repeated."""
+    begin, end = _markers(name, style)
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, l in enumerate(lines) if l.strip() == begin]
+    ends = [i for i, l in enumerate(lines) if l.strip() == end]
+    if not starts and not ends:
+        return text
+    if len(starts) != 1 or len(ends) != 1 or ends[0] < starts[0]:
+        raise ValueError(f"unbalanced or repeated '{begin}' / '{end}' markers")
+    head, tail = "".join(lines[: starts[0]]), "".join(lines[ends[0] + 1 :])
+    if not tail.strip():
+        head = head.rstrip("\n") + "\n" if head.strip() else ""
+    return head + tail
