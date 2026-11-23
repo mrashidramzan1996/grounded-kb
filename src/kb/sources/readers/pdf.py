@@ -8,8 +8,9 @@ from dataclasses import dataclass
 
 import pdfplumber
 
-from kb.sources.readers import NormalisedText, SourceError, join_blocks, table_rows
+from kb.sources.readers import MAX_TEXT_CHARS, NormalisedText, SourceError, join_blocks, table_rows
 
+MAX_PDF_PAGES = 500
 EDGE_LINES = 2  # header/footer zone: top and bottom lines of a page
 MIN_REPEAT_PAGES = 2
 HEADER_BAND = 3.0  # a repeated header/footer line sits at the same height (in points) on each page
@@ -138,6 +139,9 @@ def read(data: bytes) -> NormalisedText:
     except Exception as e:  # pdfminer raises a variety of parse errors
         raise SourceError(f"cannot read PDF: {e}") from e
     with pdf:
+        if len(pdf.pages) > MAX_PDF_PAGES:
+            raise SourceError(f"PDF has {len(pdf.pages)} pages, more than {MAX_PDF_PAGES} (MAX_PDF_PAGES)")
+        chars = 0
         line_pages: list[list[_Line]] = []
         table_pages: list[list[tuple[float, str]]] = []
         for page in pdf.pages:
@@ -152,6 +156,9 @@ def read(data: bytes) -> NormalisedText:
             ])
             line_pages.append([_line(raw) for raw in text_area.extract_text_lines(return_chars=True)
                                if raw["text"].strip()])
+            chars += sum(len(line.text) for line in line_pages[-1]) + sum(len(t) for _, t in table_pages[-1])
+            if chars > MAX_TEXT_CHARS:
+                raise SourceError(f"PDF text has more than {MAX_TEXT_CHARS} characters (MAX_TEXT_CHARS)")
     line_pages = _drop_headers_footers(line_pages)
     sizes = [line.size for page in line_pages for line in page for _ in line.text]  # per character
     body = statistics.median(sizes) if sizes else 0.0

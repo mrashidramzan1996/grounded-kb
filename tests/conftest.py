@@ -81,3 +81,25 @@ def valid_git_ctx(fixtures, tmp_path):
 
     root = make_git_repo(fixtures / "kb_valid", tmp_path)
     return GitCtx(root, _kb_valid_config(root))
+
+
+ACME_CONFIG = """\
+version: 1
+teams:
+  product-owners: {git_team: "@acme/product"}
+  tech-leads: {git_team: "@acme/tech-leads"}
+policy:
+  approvers:
+    intent: [product-owners]
+    decisions: [tech-leads]
+sources:
+  - paths: ["docs/**"]
+modules: []
+"""
+
+
+@pytest.fixture
+def acme_repo(fixtures, tmp_path):
+    from helpers import make_git_repo
+
+    return make_git_repo(fixtures / "repos/acme-billing", tmp_path, extra={"kb.config.yaml": ACME_CONFIG})

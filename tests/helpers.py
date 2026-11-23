@@ -173,3 +173,40 @@ def docx_bytes(doc) -> bytes:
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
+
+
+# --- source helpers ----------------------------------------------------------------------------
+
+def pdf(fixtures):
+    """The normalised text of the acme-billing pricing spec."""
+    from kb.sources.readers import read_document
+
+    path = fixtures / "repos/acme-billing/docs/pricing-spec-v3.pdf"
+    return read_document(path.name, path.read_bytes())[0]
+
+
+def nt(text: str):
+    from kb.sources.readers import NormalisedText
+
+    return NormalisedText(text, [(1, 0)])
+
+
+def text_of(segment, text: str) -> str:
+    return text[segment.start : segment.end]
+
+
+def add_all(repo: Path):
+    """Add every file under docs/ as a source; returns the Sources."""
+    from kb.config.load import load_config
+    from kb.sources.store import add_source
+
+    config = load_config(repo / "kb.config.yaml")
+    return [add_source(repo, p.relative_to(repo).as_posix(), config) for p in sorted((repo / "docs").iterdir())]
+
+
+def grep(directory: Path, pattern: str) -> list[Path]:
+    """Files under `directory` whose bytes match the regular expression."""
+    import re
+
+    rx = re.compile(pattern.encode())
+    return [p for p in sorted(directory.rglob("*")) if p.is_file() and rx.search(p.read_bytes())]

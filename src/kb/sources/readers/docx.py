@@ -15,10 +15,9 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
-from kb.sources.readers import NormalisedText, SourceError, join_blocks, row_line
+from kb.sources.readers import MAX_TEXT_CHARS, NormalisedText, SourceError, join_blocks, row_line
 
 MAX_TABLE_DEPTH = 5
-MAX_TEXT_CHARS = 5_000_000
 MAX_TABLE_CELLS = 100_000
 MAX_DOCX_UNCOMPRESSED = 100_000_000  # bytes, all archive members together
 MAX_DOCX_COMPRESSION_RATIO = 200

@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from pathlib import PurePath
 
 
+MAX_TEXT_CHARS = 5_000_000  # extracted characters per document (docx and pdf readers)
+
+
 class SourceError(Exception):
     pass
 
