@@ -49,8 +49,10 @@ def test_marker_eligible_excludes_kb_and_dot_paths():
     assert not marker_eligible(".github/x.py") and not marker_eligible("src/.hidden/x.py")
 
 
-def test_marker_eligible_excludes_agent_instruction_files():
-    from kb.markers import marker_eligible
+def test_agent_rules_contain_no_parseable_marker(tmp_path):
+    from kb.markers import scan_markers
+    from kb.rules import AGENT_RULES
 
-    assert not marker_eligible("AGENTS.md") and not marker_eligible("CLAUDE.md")
-    assert marker_eligible("docs/AGENTS.md")
+    (tmp_path / "A.md").write_text("\n".join(AGENT_RULES))
+    assert scan_markers(tmp_path, ["A.md"]) == []
+    assert "r[impl <ID>]" in AGENT_RULES[3] and "r[verify <ID>]" in AGENT_RULES[3]

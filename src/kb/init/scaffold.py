@@ -244,6 +244,42 @@ def init_repo(
         else:
             files[ci_path] = ci_text
 
-    for rel in sorted(files):
-        _write_atomic(root, rel, files[rel])
+    # kb.config.yaml goes last: a failed run then leaves no config and `kb init` can simply be re-run
+    order = sorted(files, key=lambda rel: (rel == "kb.config.yaml", rel))
+    _write_all(root, files, order)
     return InitResult(sorted(files), issues)
+
+
+def _write_all(root: Path, files: dict[str, str], order: list[str]) -> None:
+    """Write `files` in `order`; on any failure restore every original and remove what this run created."""
+    originals: dict[str, tuple[bytes, int] | None] = {}
+    new_dirs: list[Path] = []
+    for rel in order:
+        path = root / rel
+        try:
+            originals[rel] = (path.read_bytes(), stat.S_IMODE(os.lstat(path).st_mode))
+        except FileNotFoundError:
+            originals[rel] = None
+        parent = path.parent
+        missing = []
+        while parent != root and not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        new_dirs += [d for d in reversed(missing) if d not in new_dirs]
+    try:
+        for rel in order:
+            _write_atomic(root, rel, files[rel])
+    except BaseException:
+        for rel, original in originals.items():
+            path = root / rel
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(original[0])
+                os.chmod(path, original[1])
+        for d in reversed(new_dirs):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        raise

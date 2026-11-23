@@ -123,27 +123,27 @@ def test_github_ci_template(tmp_path):
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     assert "fetch-depth: 0" in text
-    assert "uvx --from grounded-kb==9.9 kb check --base origin/main" in text and "--strict" not in text
+    assert "uvx --from 'grounded-kb==9.9' kb check --base origin/${{ github.base_ref }}" in text and "--strict" not in text
 
 
 def test_default_install_spec(tmp_path):
     repo = make_git_repo(None, tmp_path)
     init_repo(repo)
-    assert f"uvx --from grounded-kb=={__version__} kb check" in (repo / ".github/workflows/kb.yml").read_text()
+    assert f"uvx --from 'grounded-kb=={__version__}' kb check" in (repo / ".github/workflows/kb.yml").read_text()
 
 
 def test_base_branch_follows_repo(tmp_path):
     repo = make_git_repo(None, tmp_path)
     git(repo, "branch", "-m", "trunk")
     init_repo(repo)
-    assert "origin/trunk" in (repo / ".github/workflows/kb.yml").read_text()
+    assert "branches: [trunk]" in (repo / ".github/workflows/kb.yml").read_text()
 
 
 def test_gitlab_ci_template(tmp_path):
     repo = make_git_repo(None, tmp_path)
     r = init_repo(repo, ci="gitlab")
     text = (repo / ".gitlab-ci.yml").read_text()
-    assert 'GIT_DEPTH: "0"' in text and "kb check --base origin/main" in text and "--strict" not in text
+    assert 'GIT_DEPTH: "0"' in text and "kb check --base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" in text and "--strict" not in text
     assert not (repo / ".github").exists() and ".gitlab-ci.yml" in r.files_written
 
 
@@ -152,7 +152,7 @@ def test_existing_gitlab_ci_is_not_overwritten(tmp_path):
     r = init_repo(repo, ci="gitlab")
     assert (repo / ".gitlab-ci.yml").read_text() == "stages: [test]\n"
     assert ".gitlab-ci.yml" not in r.files_written
-    assert any("kb check --base origin/main" in i.message for i in r.issues)
+    assert any("kb-check-mr" in i.message and "kb-check-default-branch" in i.message for i in r.issues)
 
 
 def test_ci_none_writes_no_template(tmp_path):
@@ -215,3 +215,90 @@ def test_init_twice_blocks_idempotent_via_rewrite(tmp_path):
     before = {p: (repo / p).read_text() for p in ("AGENTS.md", "CLAUDE.md", "CODEOWNERS")}
     init_repo(repo)
     assert before == {p: (repo / p).read_text() for p in before}
+
+
+def test_install_spec_is_single_quoted_in_both_templates(tmp_path):
+    from ruamel.yaml import YAML
+
+    for ci, rel in (("github", ".github/workflows/kb.yml"), ("gitlab", ".gitlab-ci.yml")):
+        (tmp_path / ci).mkdir()
+        repo = make_git_repo(None, tmp_path / ci)
+        init_repo(repo, ci=ci, install_spec="grounded-kb>=1")
+        text = (repo / rel).read_text()
+        assert "uvx --from 'grounded-kb>=1' kb check" in text
+        YAML(typ="safe").load(text)
+
+
+@pytest.mark.parametrize("spec", ["a'b", "a b", "a\tb", "a\nb", "a\x00b", "a;b", "a$b", 'a"b', "a`b", "a|b", "a&b"])
+def test_unsafe_specs_rejected(tmp_path, spec):
+    repo = make_git_repo(None, tmp_path)
+    with pytest.raises(Exception):
+        init_repo(repo, install_spec=spec)
+    assert not (repo / "kb.config.yaml").exists()
+
+
+def test_github_workflow_pr_and_push_steps(tmp_path):
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo)
+    text = (repo / ".github/workflows/kb.yml").read_text()
+    wf = YAML(typ="safe").load(text)
+    assert set(wf[True] if True in wf else wf["on"]) == {"pull_request", "push"}
+    steps = wf["jobs"]["check"]["steps"]
+    runs = {s["if"]: s["run"] for s in steps if "run" in s}
+    assert len(runs) == 2
+    assert runs["github.event_name == 'pull_request'"].endswith("kb check --base origin/${{ github.base_ref }}")
+    assert runs["github.event_name == 'push'"].endswith("kb check") and "--base" not in runs["github.event_name == 'push'"]
+    assert wf["jobs"]["check"]["steps"][0]["with"]["fetch-depth"] == 0
+    assert "branches: [main]" in text
+
+
+def test_gitlab_ci_mr_and_default_branch_jobs(tmp_path):
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, ci="gitlab")
+    ci = YAML(typ="safe").load((repo / ".gitlab-ci.yml").read_text())
+    mr, default = ci["kb-check-mr"], ci["kb-check-default-branch"]
+    assert any("--base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" in s for s in mr["script"])
+    assert all("--base" not in s for s in default["script"]) and any("kb check" in s for s in default["script"])
+    assert "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH" in str(default["rules"])
+    assert mr["variables"]["GIT_DEPTH"] == "0" and default["variables"]["GIT_DEPTH"] == "0"
+
+
+def _snapshot(root):
+    return {p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None)
+            for p in sorted(root.rglob("*")) if ".git" not in p.relative_to(root).parts}
+
+
+def test_failed_write_rolls_back_and_init_can_be_rerun(tmp_path, monkeypatch):
+    from kb.init import scaffold
+
+    repo = make_git_repo(None, tmp_path, extra={"AGENTS.md": "mine\n", "docs/a.md": "x\n"})
+    os.chmod(repo / "AGENTS.md", 0o640)
+    before = _snapshot(repo)
+    real, calls = scaffold._write_atomic, []
+
+    def flaky(root, rel, text):
+        calls.append(rel)
+        if len(calls) == 3:
+            raise OSError("disk full")
+        real(root, rel, text)
+
+    monkeypatch.setattr(scaffold, "_write_atomic", flaky)
+    with pytest.raises(OSError):
+        init_repo(repo)
+    assert _snapshot(repo) == before and stat.S_IMODE((repo / "AGENTS.md").stat().st_mode) == 0o640
+    monkeypatch.setattr(scaffold, "_write_atomic", real)
+    assert init_repo(repo).files_written
+
+
+def test_config_is_written_last(tmp_path, monkeypatch):
+    from kb.init import scaffold
+
+    repo = make_git_repo(None, tmp_path)
+    order, real = [], scaffold._write_atomic
+    monkeypatch.setattr(scaffold, "_write_atomic", lambda r, rel, t: (order.append(rel), real(r, rel, t)))
+    init_repo(repo)
+    assert order[-1] == "kb.config.yaml"

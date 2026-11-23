@@ -1,4 +1,4 @@
-kb-check:
+kb-check-mr:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -6,4 +6,13 @@ kb-check:
     GIT_DEPTH: "0"
   script:
     # Honours policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
-    - uvx --from {{install_spec}} kb check --base origin/{{base}}
+    - uvx --from '{{install_spec}}' kb check --base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+
+kb-check-default-branch:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - uvx --from '{{install_spec}}' kb check
