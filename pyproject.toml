@@ -29,6 +29,7 @@ module-name = "kb"
 addopts = "--import-mode=importlib"
 pythonpath = ["tests"]
 testpaths = ["tests"]
+markers = ["slow: builds the wheel and installs it into a throwaway venv (runs in the full suite)"]
 norecursedirs = ["fixtures", ".*", "__pycache__"]
 
 [dependency-groups]

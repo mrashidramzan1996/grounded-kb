@@ -1,0 +1,85 @@
+# Baseline eval questions about Acme Billing (the docs in tests/fixtures/repos/acme-billing).
+# expect: every group must have at least one alternative present in the answer (case-insensitive).
+# forbid: a wrong answer if any of these appears.
+# cites: the answer counts as cited if it names any of these (record IDs or source document names).
+- id: Q01
+  question: Is a refund given when a seat is removed?
+  expect: [["no refund", "not refund", "not be refunded", "isn't refunded", "no refunds"]]
+  cites: [REQ-F-002, pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q02
+  question: Until when does a removed seat stay active?
+  expect: [["end of the billing cycle", "end of the current billing cycle", "end of billing cycle"]]
+  cites: [REQ-F-001, pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q03
+  question: How is a seat added in the middle of a billing cycle charged?
+  expect: [["pro-rata", "pro rata", "prorat"]]
+  cites: [REQ-F-003, pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q04
+  question: How long is billing data kept?
+  expect: [["7 years", "seven years"]]
+  cites: [REQ-NF-002, pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q05
+  question: How are money amounts stored?
+  expect: [["integer cents"]]
+  cites: [ADR-0002, architecture-notes, SRC-architecture-notes]
+- id: Q06
+  question: What is the exact response-time target of the checkout page?
+  expect: [["not specified", "no specific", "no number", "no target", "vague", "unspecified", "does not specify", "doesn't specify", "not defined", "no exact"]]
+  cites: [REQ-NF-001, pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q07
+  question: Where are login sessions stored?
+  expect: [["postgres"]]
+  cites: [ADR-0001, architecture-notes, SRC-architecture-notes]
+- id: Q08
+  question: After how long without activity does a session expire?
+  expect: [["30 minutes", "thirty minutes"]]
+  cites: [INV-001, architecture-notes, SRC-architecture-notes]
+- id: Q09
+  question: What does a seat cost on the Starter plan?
+  expect: [["$8"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q10
+  question: What does a seat cost on the Team plan?
+  expect: [["$12"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q11
+  question: How many seats must an Enterprise subscription have at least?
+  expect: [["25"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q12
+  question: Which plans offer annual billing?
+  expect: [["team"], ["enterprise"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q13
+  question: Do annual plans get two months free?
+  expect: [["no ", "not ", "n't", "cannot", "nothing"]]
+  forbid: ["yes,", "yes."]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q14
+  question: When is an invoice issued?
+  expect: [["first day"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q15
+  question: How are invoices delivered to the customer?
+  expect: [["email", "e-mail"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q16
+  question: How fast must invoice generation for 10,000 subscriptions be?
+  expect: [["15 minutes", "fifteen minutes"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q17
+  question: Which team owns the sessions service?
+  expect: [["platform"]]
+  cites: [architecture-notes, SRC-architecture-notes]
+- id: Q18
+  question: What is out of scope for the first release?
+  expect: [["tax"], ["currenc"]]
+  cites: [product-brief, SRC-product-brief]
+- id: Q19
+  question: Can a subscription have fewer seats than the minimum of its plan?
+  expect: [["no", "not", "cannot"]]
+  cites: [pricing-spec-v3, SRC-pricing-spec-v3]
+- id: Q20
+  question: How close to the billing page must billing alerts be?
+  expect: [["one click"]]
+  cites: [REQ-F-004, product-brief, SRC-product-brief]

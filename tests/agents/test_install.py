@@ -108,3 +108,33 @@ def test_pre_commit_hooks_yaml_exposes_kb_check():
 
     data = load_yaml_strict((Path(__file__).parents[2] / ".pre-commit-hooks.yaml").read_text())
     assert data[0]["id"] == "kb-check" and "kb hook pre-commit" in data[0]["entry"]
+
+
+def test_generic_install_honours_core_hooks_path(acme_repo):
+    from helpers import git
+
+    git(acme_repo, "config", "core.hooksPath", ".githooks")
+    lines = install(acme_repo, "generic")
+    hook = acme_repo / ".githooks/pre-commit"
+    assert "kb hook pre-commit" in hook.read_text() and stat.S_IMODE(hook.stat().st_mode) == 0o755
+    assert not (acme_repo / ".git/hooks/pre-commit").exists() and any("pre-commit" in line for line in lines)
+
+
+def test_generic_install_in_a_worktree(acme_repo, tmp_path):
+    from helpers import git
+
+    wt = tmp_path / "wt"
+    git(acme_repo, "worktree", "add", str(wt), "-b", "other")
+    assert (wt / ".git").is_file()
+    install(wt, "generic")
+    assert "kb hook pre-commit" in (acme_repo / ".git/hooks/pre-commit").read_text()
+
+
+def test_generic_install_refuses_symlinked_pre_commit(acme_repo):
+    hook = acme_repo / ".git/hooks/pre-commit"
+    hook.unlink(missing_ok=True)
+    target = acme_repo / "elsewhere.sh"
+    target.write_text("x")
+    hook.symlink_to(target)
+    assert invoke(acme_repo, "agents", "install", "generic").exit_code == 2
+    assert target.read_text() == "x"

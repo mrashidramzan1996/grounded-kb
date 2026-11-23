@@ -100,3 +100,25 @@ def test_cli_hook_stop_reads_stdin(valid_git_repo, fixtures):
         app, ["-C", str(valid_git_repo), "hook", "stop", "--agent", "claude-code"], input=payload(fixtures, "claude_code/stop")
     )
     assert result.exit_code == 0 and json.loads(result.stdout)["decision"] == "block"
+
+
+def test_hook_without_dash_c_resolves_the_repo_root_from_a_subdirectory(valid_git_repo, fixtures, monkeypatch):
+    from typer.testing import CliRunner
+
+    from kb.cli import app
+
+    break_ref(valid_git_repo)
+    sub = valid_git_repo / "kb" / "requirements"
+    monkeypatch.chdir(sub)
+    result = CliRunner().invoke(app, ["hook", "stop", "--agent", "claude-code"], input=payload(fixtures, "claude_code/stop"))
+    assert result.exit_code == 0 and json.loads(result.stdout)["decision"] == "block"
+
+
+def test_hook_outside_a_git_repo_stays_fail_safe(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from kb.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(app, ["hook", "stop"], input="")
+    assert result.exit_code == 0 and result.stdout == ""

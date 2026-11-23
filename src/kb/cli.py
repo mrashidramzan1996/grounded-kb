@@ -2,6 +2,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 import json
+import subprocess
 import sys
 
 import typer
@@ -34,10 +35,10 @@ app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
 def main(
     ctx: typer.Context,
     root: Annotated[
-        Path, typer.Option("-C", "--root", help="Repository root.")
-    ] = Path("."),
+        Path | None, typer.Option("-C", "--root", help="Repository root (default: the current directory).")
+    ] = None,
 ) -> None:
-    ctx.obj = {"root": root}
+    ctx.obj = {"root": root if root is not None else Path("."), "root_explicit": root is not None}
 
 
 @app.command()
@@ -365,8 +366,13 @@ def hook(
 ) -> None:
     """Agent hook entry point: reads the hook payload on stdin, answers in the agent's format."""
     stdin = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
+    root = Path(ctx.obj["root"])
+    if not ctx.obj["root_explicit"]:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
+        if top.returncode == 0 and top.stdout.strip():
+            root = Path(top.stdout.strip())
     try:
-        out, code = run_hook(Path(ctx.obj["root"]), event, agent, stdin)
+        out, code = run_hook(root, event, agent, stdin)
     except KeyError as e:
         typer.echo(e.args[0], err=True)
         raise typer.Exit(2) from e
