@@ -196,3 +196,8 @@ def built_acme(acme_repo_ingested, fixtures):
 def built_acme_with_web_impl(built_acme):
     _write_files(built_acme, {"web/billing/checkout.ts": "// r[impl REQ-F-001]\nexport const checkout = 1;\n"})
     return built_acme
+
+
+@pytest.fixture
+def valid_git_repo(valid_git_ctx):
+    return valid_git_ctx.root

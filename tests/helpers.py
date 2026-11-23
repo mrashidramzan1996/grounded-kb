@@ -285,3 +285,16 @@ def write(repo: Path, rel: str, text: str) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
+
+
+# --- check helpers -----------------------------------------------------------------------------
+
+def break_ref(root: Path) -> None:
+    """Make REQ-F-001 name a feature that does not exist (-> ref.missing)."""
+    path = root / "kb/requirements/REQ-F-001.yaml"
+    path.write_text(path.read_text() + "features:\n- FEAT-999\n")
+
+
+def set_mode(root: Path, mode: str) -> None:
+    path = root / "kb.config.yaml"
+    path.write_text(path.read_text() + f"  mode: {mode}\n")

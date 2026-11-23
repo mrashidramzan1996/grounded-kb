@@ -8,6 +8,7 @@ import typer
 import kb
 from kb.config.edit import add_module, set_paths
 from kb.config.load import ConfigError, load_config
+from kb.check import run_check
 from kb.baseline import BaselineError, freeze_baseline
 from kb.gitfiles import GitError, repo_files
 from kb.modules import suggest_paths
@@ -218,3 +219,43 @@ def baseline_freeze(ctx: typer.Context, version: Annotated[str, typer.Argument(h
         raise _fail(e) from e
     rel = path.relative_to(Path(ctx.obj["root"])).as_posix()
     typer.echo(f"wrote {rel}; tagged HEAD as kb-baseline-{version}; commit the baseline file")
+
+
+@app.command()
+def check(
+    ctx: typer.Context,
+    format: Annotated[str, typer.Option("--format", help="text or json.")] = "text",
+    strict: Annotated[bool, typer.Option("--strict", help="Exit 1 on any error, whatever the policy mode.")] = False,
+    base: Annotated[str | None, typer.Option("--base", help="Also guard accepted decisions against this ref.")] = None,
+    changed: Annotated[bool, typer.Option("--changed", help="Limit file-level checks to files changed against --base (default: the default branch).")] = False,
+) -> None:
+    """Run every gate: config, records, quotes, anchors, sources, modules, triage."""
+    if format not in ("text", "json"):
+        typer.echo(f"unknown format {format!r}: use text or json", err=True)
+        raise typer.Exit(2)
+    root = Path(ctx.obj["root"])
+    if not (root / "kb.config.yaml").exists():
+        typer.echo(f"{root / 'kb.config.yaml'} not found; run `kb init` to create it", err=True)
+        raise typer.Exit(2)
+    try:
+        report = run_check(root, base=base, changed_only=changed)
+    except (ConfigError, GitError, OSError) as e:
+        raise _fail(e) from e
+    errors = sum(i.severity == "error" for i in report.issues)
+    warnings = len(report.issues) - errors
+    if format == "json":
+        typer.echo(json.dumps({
+            "mode": report.mode,
+            "issues": [
+                {"code": i.code, "severity": i.severity, "path": i.path, "record": i.record, "message": i.message}
+                for i in report.issues
+            ],
+            "summary": {"errors": errors, "warnings": warnings},
+        }, indent=2))
+    else:
+        for i in report.issues:
+            message = " ".join(i.message.split())
+            typer.echo(f"{i.severity} {i.code} {i.path or '-'} {i.record or '-'}: {message}")
+    typer.echo(f"{errors} errors, {warnings} warnings (mode: {report.mode})", err=True)
+    if errors and (strict or report.mode == "enforce"):
+        raise typer.Exit(1)
