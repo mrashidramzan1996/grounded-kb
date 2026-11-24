@@ -10,6 +10,9 @@ EVAL = Path(__file__).parents[1] / "eval"
 spec = importlib.util.spec_from_file_location("eval_run", EVAL / "run.py")
 run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run)
+staleness_spec = importlib.util.spec_from_file_location("eval_staleness", EVAL / "staleness.py")
+staleness = importlib.util.module_from_spec(staleness_spec)
+staleness_spec.loader.exec_module(staleness)
 
 
 def questions():
@@ -239,3 +242,41 @@ def test_without_kb_copy_has_no_kb_in_git(md_repo_ingested):
     status, history, diff = seen[0]
     assert status == "" and diff == ""
     assert history.strip() and not any(line.startswith(("kb/", ".kb/")) for line in history.splitlines())
+
+
+def test_staleness_changes_cover_the_seeded_kinds():
+    from collections import Counter
+
+    kinds = Counter(c.kind for c in staleness.CHANGES)
+    assert kinds == {"refactor": 5, "format": 3, "rename": 3, "deleted_test": 3, "segment_reword": 3, "quote_removal": 2, "unrelated": 1}
+    assert len({c.id for c in staleness.CHANGES}) == 20
+
+
+def test_staleness_eval_runs_and_writes_results(tmp_path, monkeypatch):
+    import os
+    import sys
+
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}:{os.environ['PATH']}")  # linked tests find pytest
+    out = tmp_path / "staleness.json"
+    assert staleness.main(["--out", str(out)]) == 0
+    text = out.read_text()
+    data = json.loads(text)
+    assert data["changes"] == 20 and len(data["per_change"]) == 20
+    assert 0 <= data["precision"] <= 1 and 0 <= data["recall"] <= 1
+    assert text == json.dumps(data, indent=2, sort_keys=True) + "\n"
+    assert str(tmp_path) not in text and "kb-staleness-" not in text
+    for c in data["per_change"]:
+        assert set(c["expected"]) == set(c["predicted"]) and set(c["predicted"].values()) <= set(staleness.LABELS)
+
+
+def test_staleness_score_counts_matching_labels_per_id():
+    def change(expected, predicted):
+        return {"expected": expected, "predicted": predicted}
+
+    per_change = [
+        change({"A": "broken", "B": "none"}, {"A": "broken", "B": "changed"}),  # 1 tp, 1 fp
+        change({"A": "stale", "B": "none"}, {"A": "broken", "B": "none"}),  # wrong label: 1 fp, 1 fn
+        change({"A": "changed", "B": "none"}, {"A": "none", "B": "none"}),  # missed: 1 fn
+    ]
+    assert staleness.score(per_change) == (1 / 3, 1 / 3)
+    assert staleness.score([change({"A": "none"}, {"A": "none"})]) == (1.0, 1.0)

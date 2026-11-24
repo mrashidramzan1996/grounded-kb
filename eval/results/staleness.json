@@ -1,0 +1,422 @@
+{
+  "changes": 20,
+  "per_change": [
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "refactor-local-variable",
+      "kind": "refactor",
+      "predicted": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "refactor-extend",
+      "kind": "refactor",
+      "predicted": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "refactor-guard-duplicates",
+      "kind": "refactor",
+      "predicted": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "refactor-extract-helper",
+      "kind": "refactor",
+      "predicted": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "refactor-rename-parameter",
+      "kind": "refactor",
+      "predicted": {
+        "FEAT-001.C1": "changed",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "format-spacing",
+      "kind": "format",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "format-line-wrap",
+      "kind": "format",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "format-quotes-and-blank-lines",
+      "kind": "format",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "rename-function",
+      "kind": "rename",
+      "predicted": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "rename-file",
+      "kind": "rename",
+      "predicted": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "rename-into-class",
+      "kind": "rename",
+      "predicted": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "delete-test-file",
+      "kind": "deleted_test",
+      "predicted": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "delete-test-function",
+      "kind": "deleted_test",
+      "predicted": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "FEAT-001.C1",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "rename-test-function",
+      "kind": "deleted_test",
+      "predicted": {
+        "FEAT-001.C1": "broken",
+        "REQ-F-001": "none",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "REQ-F-001",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "stale",
+        "REQ-F-002": "stale",
+        "REQ-F-003": "none"
+      },
+      "id": "reword-seg-03-prefix",
+      "kind": "segment_reword",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "stale",
+        "REQ-F-002": "stale",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "REQ-F-001",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "stale",
+        "REQ-F-002": "stale",
+        "REQ-F-003": "none"
+      },
+      "id": "reword-seg-03-suffix",
+      "kind": "segment_reword",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "stale",
+        "REQ-F-002": "stale",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "REQ-F-003"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "stale"
+      },
+      "id": "reword-seg-02-suffix",
+      "kind": "segment_reword",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "stale"
+      }
+    },
+    {
+      "checked": [
+        "REQ-F-001",
+        "REQ-F-002"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "stale",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      },
+      "id": "remove-quote-no-refund",
+      "kind": "quote_removal",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "stale",
+        "REQ-F-002": "broken",
+        "REQ-F-003": "none"
+      }
+    },
+    {
+      "checked": [
+        "REQ-F-003"
+      ],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "broken"
+      },
+      "id": "remove-quote-pro-rata",
+      "kind": "quote_removal",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "broken"
+      }
+    },
+    {
+      "checked": [],
+      "correct": true,
+      "expected": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      },
+      "id": "unrelated-readme",
+      "kind": "unrelated",
+      "predicted": {
+        "FEAT-001.C1": "none",
+        "REQ-F-001": "none",
+        "REQ-F-002": "none",
+        "REQ-F-003": "none"
+      }
+    }
+  ],
+  "precision": 1.0,
+  "recall": 1.0
+}

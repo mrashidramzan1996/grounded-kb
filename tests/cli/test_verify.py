@@ -1,38 +1,10 @@
 import json
 from pathlib import Path
 
-from helpers import git, invoke, set_mode
+from helpers import commit, fail_claim_test, forge_file, git, head, invoke, set_mode, verdicts
 
 from kb.ports.forge import COMMENT_MARKER
 from kb.verify.report import COMMENT_PATH, STATUS_PATH
-
-CLAIM_TEST = "tests/test_seats.py"
-
-
-def head(repo: Path) -> str:
-    return git(repo, "rev-parse", "HEAD").strip()
-
-
-def commit(repo: Path, message: str = "change") -> None:
-    git(repo, "add", "-A")
-    git(repo, "commit", "-m", message)
-
-
-def fail_claim_test(repo: Path) -> None:
-    """Make the test linked to FEAT-001.C1 fail."""
-    path = repo / CLAIM_TEST
-    path.write_text(path.read_text().replace("    ...\n", "    assert False\n", 1))
-
-
-def forge_file(tmp_path: Path, repo: Path, **extra) -> Path:
-    path = tmp_path / "forge.json"
-    data = {"pr": {"number": 7, "head_sha": head(repo), "author": "alice"}, "reviews": [], "teams": {}, "comments": []}
-    path.write_text(json.dumps(data | extra))
-    return path
-
-
-def verdicts(stdout: str) -> dict[str, dict]:
-    return {v["id"]: v for v in json.loads(stdout)["verdicts"]}
 
 
 def test_verify_all_green_exit_0_and_writes_status_json(verify_repo):

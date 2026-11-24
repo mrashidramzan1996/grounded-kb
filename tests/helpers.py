@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -346,3 +347,34 @@ def clean_drafted_acme(repo: Path) -> None:
     triage.write_text(triage.read_text().replace("[REQ-F-005]", '"none: annual pricing is drafted elsewhere"'))
     remove_secret_paragraph(repo / "docs/architecture-notes.docx")
     assert invoke(repo, "source", "sync").exit_code == 0
+
+
+# --- verify helpers (a git copy of kb_valid: the verify_repo fixture) ----------------------------
+
+CLAIM_TEST = "tests/test_seats.py"
+
+
+def head(repo: Path) -> str:
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
+def commit(repo: Path, message: str = "change") -> None:
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", message)
+
+
+def fail_claim_test(repo: Path) -> None:
+    """Make the test linked to FEAT-001.C1 fail."""
+    path = repo / CLAIM_TEST
+    path.write_text(path.read_text().replace("    ...\n", "    assert False\n", 1))
+
+
+def forge_file(tmp_path: Path, repo: Path, **extra) -> Path:
+    path = tmp_path / "forge.json"
+    data = {"pr": {"number": 7, "head_sha": head(repo), "author": "alice"}, "reviews": [], "teams": {}, "comments": []}
+    path.write_text(json.dumps(data | extra))
+    return path
+
+
+def verdicts(stdout: str) -> dict[str, dict]:
+    return {v["id"]: v for v in json.loads(stdout)["verdicts"]}
