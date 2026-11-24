@@ -7,11 +7,13 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write   # lets kb verify --comment post and update its PR comment
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # lets kb verify --comment post and update its PR comment
     env:
       # How CI installs kb: a pinned spec such as 'git+https://github.com/<owner>/grounded-kb@<tag>' (see kb/README.md).
       # While it is empty the check is skipped with a warning.
@@ -37,6 +39,7 @@ jobs:
           path: |
             .kb/cache/status.json
             .kb/cache/verify.md
-          if-no-files-found: ignore
+          include-hidden-files: true
+          if-no-files-found: warn
       - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
         run: uvx --from "$KB_INSTALL_SPEC" kb verify --all

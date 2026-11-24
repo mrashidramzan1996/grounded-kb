@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +18,6 @@ def run_verify(repo: Path, env: dict[str, str]) -> tuple[bytes, bytes]:
 
 
 def test_verify_json_identical_under_actions_env_and_plain(verify_repo, tmp_path):
-    import os
-
     path = f"{Path(sys.executable).parent}:{os.environ['PATH']}"
     one, two = tmp_path / "h1", tmp_path / "h2"
     one.mkdir()
@@ -26,6 +26,7 @@ def test_verify_json_identical_under_actions_env_and_plain(verify_repo, tmp_path
                "LANG": "C.UTF-8", "HOME": str(one)}
     plain = {"PATH": path, "HOME": str(two), "TZ": "Asia/Karachi"}
     out_a, status_a = run_verify(verify_repo, actions)
+    shutil.rmtree(verify_repo / ".kb/cache")
     out_b, status_b = run_verify(verify_repo, plain)
     assert out_a and out_a == out_b
     assert status_a == status_b

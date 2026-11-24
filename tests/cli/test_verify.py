@@ -212,3 +212,26 @@ def test_test_command_that_cannot_start_exits_2(verify_repo):
     cfg.write_text(cfg.read_text().replace("preset: pytest", "run: kb-no-such-runner {tests} --junitxml={junit}"))
     r = invoke(verify_repo, "verify", "--all")
     assert r.exit_code == 2 and "cannot run test command" in r.stderr
+
+
+def test_comment_post_failure_is_a_warning(verify_repo, tmp_path, monkeypatch):
+    from kb.forge import ForgeError
+    from kb.forge.local import LocalForge
+
+    class Denied(LocalForge):
+        def upsert_comment(self, pr, body):
+            raise ForgeError("403 Resource not accessible by integration")
+
+    path = forge_file(tmp_path, verify_repo)
+    monkeypatch.setattr("kb.cli.forge_from_option", lambda value, root: Denied(path))
+    r = invoke(verify_repo, "verify", "--forge", "auto", "--comment")
+    assert r.exit_code == 0, r.output
+    assert "kb: could not post the PR comment: 403 Resource not accessible by integration" in r.stderr
+
+
+def test_cache_files_written_for_every_format(verify_repo):
+    for fmt in ("text", "json", "markdown"):
+        for name in (STATUS_PATH, COMMENT_PATH):
+            (verify_repo / name).unlink(missing_ok=True)
+        assert invoke(verify_repo, "verify", "--all", "--format", fmt).exit_code == 0
+        assert (verify_repo / STATUS_PATH).is_file() and (verify_repo / COMMENT_PATH).is_file(), fmt

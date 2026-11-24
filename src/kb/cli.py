@@ -363,6 +363,8 @@ def verify(
         else:
             try:
                 port.upsert_comment(report.pr, render_markdown(report))
+            except ForgeError as e:  # e.g. a read-only token on a fork PR: the exit code is decided by policy only
+                typer.echo(f"kb: could not post the PR comment: {e}", err=True)
             except TOOL_ERRORS as e:
                 raise _fail(e) from e
     typer.echo(summary_line(report), err=True)

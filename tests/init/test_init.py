@@ -341,7 +341,8 @@ def test_github_template_runs_verify_with_comment_and_artifact(tmp_path):
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     wf = YAML(typ="safe").load(text)
-    assert wf["permissions"] == {"contents": "read", "pull-requests": "write"}
+    assert wf["permissions"] == {"contents": "read"}
+    assert wf["jobs"]["check"]["permissions"] == {"contents": "read", "pull-requests": "write"}
     assert "# install your project's test dependencies here" in text
     steps = wf["jobs"]["check"]["steps"]
     verify = next(s for s in steps if "--comment" in s.get("run", ""))
@@ -350,6 +351,7 @@ def test_github_template_runs_verify_with_comment_and_artifact(tmp_path):
     upload = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact@v4"))
     assert upload["if"] == "always()"
     assert ".kb/cache/status.json" in upload["with"]["path"] and ".kb/cache/verify.md" in upload["with"]["path"]
+    assert upload["with"]["include-hidden-files"] is True and upload["with"]["if-no-files-found"] == "warn"
     assert any(s.get("uses") == "actions/checkout@v4" for s in steps)
 
 
