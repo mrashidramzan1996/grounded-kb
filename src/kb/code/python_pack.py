@@ -36,6 +36,7 @@ _METHODS = """
     ])))
 ])
 """
+_IMPORTS = Query(_LANGUAGE, "[(import_statement) (import_from_statement)] @imp")
 _QUERIES = {kind: Query(_LANGUAGE, text) for kind, text in (("function", _FUNCTIONS), ("class", _CLASSES), ("method", _METHODS))}
 
 
@@ -81,6 +82,35 @@ class PythonPack:
         if node is not None:
             _tokens(node, tokens)
         return hashlib.sha256("\n".join(tokens).encode("utf-8")).hexdigest()[:16]
+
+    def imports(self, path: str, source: bytes) -> list[str]:
+        """Sorted unique dotted modules imported anywhere in the file; relative imports resolve against the file's package."""
+        tree = Parser(_LANGUAGE).parse(source)
+        package = list(PurePosixPath(path).parent.parts)
+        found: set[str] = set()
+        for node in QueryCursor(_IMPORTS).captures(tree.root_node).get("imp", []):
+            if node.type == "import_statement":
+                for child in node.children_by_field_name("name"):
+                    found.add(_text(child if child.type == "dotted_name" else child.child_by_field_name("name")))
+                continue
+            module = node.child_by_field_name("module_name")
+            if module is None:
+                continue
+            if module.type == "relative_import":
+                dots = next(c for c in module.children if c.type == "import_prefix").text.decode().count(".")
+                base = package[: max(len(package) - (dots - 1), 0)]
+                tail = [_text(c) for c in module.children if c.type == "dotted_name"]
+                parts = base + (tail[0].split(".") if tail else [])
+            else:
+                parts = _text(module).split(".")
+            if not parts:
+                continue
+            found.add(".".join(parts))
+            for child in node.children_by_field_name("name"):
+                name = child if child.type == "dotted_name" else child.child_by_field_name("name")
+                if name is not None and name.type == "dotted_name":
+                    found.add(".".join(parts + _text(name).split(".")))
+        return sorted(found)
 
 
 _TEXT_LEAVES = frozenset({"identifier", "integer", "float"})
