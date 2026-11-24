@@ -210,3 +210,30 @@ def render_redraft_report(r: RedraftReport) -> str     # Markdown: "# Redraft re
 - [ ] **Step 3: Implement**, then write A-17 and the docs.
 - [ ] **Step 4: Run** `uv run pytest -q`. Expected: everything passes.
 - [ ] **Step 5: Commit** `feat(redraft): kb redraft --report gates redrafts; A-17 and docs`.
+
+### Task 4: `kb redraft --new` — draft from new text; combined change+new flow
+
+**Files:**
+- Modify: `src/kb/ingest/redraft.py` (selection of new segments; brief part 2), `src/kb/ingest/templates/redraft.md`, `src/kb/ingest/redraft_report.py`, `src/kb/cli.py` (`--new` flag; sync hint), docs (README, kb_readme.md template, A-17 wording in kb_spec.md)
+- Test: `tests/ingest/test_redraft_new.py`, extend `tests/e2e/test_redraft.py`
+
+**Interfaces:**
+- `untriaged(repo: KbRepo) -> list[str]` in redraft.py: sorted "SRC-x#seg-NN" refs of stored segments with no triage entry (same notion as `kb.gates.triage.triage_gate`).
+- `REDRAFT_NEW = ".kb/cache/redraft/new"`: the new-segment refs (one per line, sorted) the brief offered, plus the changed-segment refs used by `--changed`; written with the brief. The report reads it as the set of segments new records may cite ("allowed segments").
+- `kb redraft --new` selects untriaged segments; `--new` combines with ids / `--flagged` / `--changed`. With `--new` alone and nothing untriaged → "nothing to redraft", exit 0, no files. The selection is empty only when both the record selection and the new segments are empty.
+- `kb source sync` hint: when there are untriaged segments after the sync that were not present before it (new refs), add a line: `<n> new segments have no records yet: <refs, at most 10, then "… and N more">.` and the run line becomes `Run \`kb redraft --changed --new\` to redraft and draft them.` (only `--changed` when no new segments; only `--new` when no changed-text records).
+
+**Brief (redraft.md):** keep part 1 (records to redraft) when records are selected; add part 2 "New text to draft from" when new segments are selected:
+  - the rules for new records: draft from these segments only; one fact per requirement; quote word for word; next free IDs; never duplicate an existing requirement — check the list; flag vague lines instead of inventing numbers; write a triage entry for every new segment (IDs drafted, or "none: <reason>"); `drafted_by: "agent:<your name> via kb redraft brief v1"`.
+  - "Existing requirements" list: each live requirement as `- <id>: <statement>` (statement passed through `inline_code` so it can't inject markup), sorted.
+  - the new segments rendered with `_segments(..., only=new_refs)` (fenced, ⚠ flags).
+
+**Report (redraft_report):** in addition to Task 3's rules:
+  - A new REQ/ADR/INV id at head (absent at base) is in scope when every one of its quotes cites a ref in the allowed segments, or (ADR/INV) it supersedes a selected id. Otherwise `redraft.out_of_scope` (error), message `"<id> quotes text outside this redraft; new records may cite only the new or changed segments"`.
+  - New records go into a new list `drafted: list[str]` on RedraftReport ("Drafted" section in the Markdown, after "Redrafted"), excluding rejected ones.
+  - Any ref from REDRAFT_NEW's new segments still untriaged at head → warning `segment.untriaged` listed under Flagged (reuse the code), so the reviewer sees text nobody accounted for.
+  - Triage edits under kb/sources/*/triage.yaml are allowed (they are store files → not "drafted"; confirm `_drafted_paths` excludes triage.yaml; if it does not, treat triage.yaml edits as in scope).
+
+- [ ] Tests: test_untriaged_lists_new_segments; test_new_alone_selects_untriaged_and_writes_brief_part_2; test_new_and_changed_combined_brief_has_both_parts; test_existing_requirements_listed_for_dedupe; test_sync_hint_names_new_segments_and_suggests_changed_new; test_new_record_citing_new_segment_accepted; test_new_record_citing_old_segment_out_of_scope; test_new_segment_left_untriaged_flagged; e2e: add a section + reword a cited sentence in a Markdown doc → sync hint → `kb redraft --changed --new` → apply edits (update one record, add one new REQ, triage) → `kb redraft --report --strict` exit 0.
+- [ ] Run focused tests, then the full suite once at the end.
+- [ ] Commit `feat(redraft): --new drafts from new document text; combined change+new flow`.
