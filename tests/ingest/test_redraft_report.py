@@ -207,7 +207,7 @@ def test_render_sections_in_order():
     assert "Documents changed since base" not in text
     heads = [line for line in text.splitlines() if line.startswith("## ")]
     assert heads == [
-        "## Redrafted (1)", "## Rejected (1)", "## Flagged (0)", "## Sources (0)", "## Still flagged (1)", "## Not redrafted (1)",
+        "## Redrafted (1)", "## Drafted (0)", "## Rejected (1)", "## Flagged (0)", "## Sources (0)", "## Still flagged (1)", "## Not redrafted (1)",
     ]
     assert "- `REQ-F-002` · `quote.not_found` · `` bad `quote` ``" in text
     assert render_redraft_report(r) == text

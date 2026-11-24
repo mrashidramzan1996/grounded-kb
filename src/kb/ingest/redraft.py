@@ -1,4 +1,4 @@
-"""Which records `kb redraft` should look at: those citing changed text, flagged, or whose quote vanished."""
+"""What `kb redraft` offers: records citing changed text, flagged, or whose quote vanished, and new text no record covers."""
 
 from importlib.resources import files
 from pathlib import Path
@@ -10,10 +10,12 @@ from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.sources.guard import has_injection
+from kb.textfmt import inline_code
 
 REDRAFT_BRIEF = ".kb/cache/redraft/brief.md"
 REDRAFT_BASE = ".kb/cache/redraft/base"  # HEAD when the brief was written
 REDRAFT_IDS = ".kb/cache/redraft/ids"  # selected ids, one per line, sorted
+REDRAFT_NEW = ".kb/cache/redraft/new"  # segments new records may cite: the new ones offered plus the changed ones shown
 
 _Cited = Requirement | Decision | Invariant
 
@@ -31,6 +33,23 @@ def changed_segments(before: KbRepo, after: KbRepo) -> set[str]:
     """Refs of `before` whose hash differs at `after`, or that are gone there."""
     now = segment_hashes(after)
     return {ref for ref, h in segment_hashes(before).items() if now.get(ref) != h}
+
+
+def ref_key(ref: str) -> tuple[str, int, str]:
+    """Sort key for "SRC-x#seg-NN" refs: by source, then segment number."""
+    src, _, seg = ref.partition("#")
+    num = seg.rsplit("-", 1)[-1]
+    return src, int(num) if num.isdigit() else -1, seg
+
+
+def untriaged(repo: KbRepo) -> list[str]:
+    """Refs of stored segments with no triage entry (as the triage gate sees them), in segment order."""
+    out = []
+    for src in repo.sources:
+        tri = repo.triage(src)
+        done = tri.segments if tri else {}
+        out.extend(f"{src}#{seg.id}" for seg in repo.segments(src) if seg.id not in done)
+    return sorted(out, key=ref_key)
 
 
 def _live_cited(repo: KbRepo) -> list[tuple[str, _Cited]]:
@@ -100,9 +119,15 @@ def select(repo: KbRepo, ids: list[str], *, flagged_: bool, changed: bool, befor
     return {rid: sorted(reasons[rid]) for rid in sorted(reasons)}
 
 
-def _present(repo: KbRepo, ref: str) -> bool:
+def present(repo: KbRepo, ref: str) -> bool:
+    """Whether the segment "SRC-x#seg-NN" is stored in `repo`."""
     src, _, seg_id = ref.partition("#")
     return src in repo.sources and any(s.id == seg_id for s in repo.segments(src))
+
+
+def changed_shown(before: KbRepo, repo: KbRepo) -> set[str]:
+    """Changed refs still stored in `repo` and cited by a live record there: the changed text a --changed brief shows."""
+    return {ref for ref in changed_segments(before, repo) if present(repo, ref) and citing(repo, {ref})}
 
 
 def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
@@ -119,19 +144,39 @@ def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
         lines.append("Cited segments: no quotes")
         return "\n".join(lines)
     lines.append("Cited segments:")
-    present = [r for r in refs if _present(repo, r)]
-    lines.extend(f"\ncited segment {r} is missing" for r in refs if r not in present)
-    if present:
-        lines.append("\n" + _segments(repo, sorted({r.partition("#")[0] for r in present}), only=set(present)))
+    stored = [r for r in refs if present(repo, r)]
+    lines.extend(f"\ncited segment {r} is missing" for r in refs if r not in stored)
+    if stored:
+        lines.append("\n" + _segments(repo, sorted({r.partition("#")[0] for r in stored}), only=set(stored)))
     return "\n".join(lines)
 
 
-def build_redraft_brief(root: Path, repo: KbRepo, selection: dict[str, list[str]], base: str) -> str:
-    """The brief for the selected records; deterministic for the same repo state and selection."""
-    template = Template(files("kb.ingest").joinpath("templates", "redraft.md").read_text(encoding="utf-8"))
-    return template.substitute(
+def _existing_requirements(repo: KbRepo) -> str:
+    """Each live requirement as `- <id>: <statement>`, the statement as inline code so it cannot add markup."""
+    lines = [f"- {rid}: {inline_code(rec.statement)}" for rid, rec in _live_cited(repo) if isinstance(rec, Requirement)]
+    return "\n".join(lines) or "- none"
+
+
+def _template(name: str) -> Template:
+    return Template(files("kb.ingest").joinpath("templates", name).read_text(encoding="utf-8"))
+
+
+def build_redraft_brief(root: Path, repo: KbRepo, selection: dict[str, list[str]], base: str, new: list[str] | None = None) -> str:
+    """The brief for the selected records (part 1) and the new segments `new` to draft from (part 2); deterministic
+    for the same repo state, selection and segments."""
+    parts = []
+    if selection:
+        records = "\n\n".join(_record_section(repo, rid, selection[rid]) for rid in sorted(selection))
+        parts.append(_template("redraft_records.md").substitute(version=BRIEF_VERSION, records=records))
+    if new:
+        parts.append(_template("redraft_new.md").substitute(
+            version=BRIEF_VERSION,
+            requirements=_existing_requirements(repo),
+            segments=_segments(repo, sorted({r.partition("#")[0] for r in new}), only=set(new)),
+        ))
+    return _template("redraft.md").substitute(
         version=BRIEF_VERSION,
         base=base,
         next_ids="\n".join(f"- {label}: {nid}" for label, nid in next_ids(repo)),
-        records="\n\n".join(_record_section(repo, rid, selection[rid]) for rid in sorted(selection)),
+        parts="\n".join(parts),
     )

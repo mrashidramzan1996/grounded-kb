@@ -42,7 +42,7 @@ def test_unknown_or_rejected_id_raises(md_repo_ingested):
 def test_no_selection_args_exits_2(md_repo_ingested):
     r = invoke(md_repo_ingested, "redraft")
     assert r.exit_code == 2
-    assert "name record ids, or use --flagged or --changed" in r.stderr
+    assert "name record ids, or use --flagged, --changed or --new" in r.stderr
 
 
 def test_empty_selection_writes_nothing(md_repo_ingested):

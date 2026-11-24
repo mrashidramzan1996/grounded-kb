@@ -21,7 +21,8 @@ from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
 from kb.cache import write_cache
 from kb.ingest.redraft import (
-    REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, RedraftError, build_redraft_brief, changed_segments, citing, select, unfound,
+    REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, REDRAFT_NEW, RedraftError, build_redraft_brief, changed_segments, changed_shown,
+    citing, ref_key, segment_hashes, select, unfound, untriaged,
 )
 from kb.ingest.redraft_report import redraft_report, render_redraft_report
 from kb.ingest.report import ingest_report, render_report
@@ -136,11 +137,26 @@ def source_sync(ctx: typer.Context) -> None:
     _run(ctx, sync_sources)
     after = KbRepo.load(root)
     ids = sorted(set(citing(after, changed_segments(before, after))) | set(unfound(after)))
-    if ids:
-        names = ", ".join(
-            f"{i} ({', '.join(after.records[i].flags)})" if getattr(after.records[i], "flags", None) else i for i in ids
-        )
-        typer.echo(f"{len(ids)} records cite changed text: {names}. Run `kb redraft --changed` to redraft them.", err=True)
+    known = segment_hashes(before)
+    fresh = [ref for ref in untriaged(after) if ref not in known]  # untriaged segments the sync added
+    for line in _sync_hint(after, ids, fresh):
+        typer.echo(line, err=True)
+
+
+def _sync_hint(after: KbRepo, ids: list[str], fresh: list[str]) -> list[str]:
+    """Name the records citing changed text and the new segments with no records yet, and the redraft to run."""
+    if not ids and not fresh:
+        return []
+    names = ", ".join(
+        f"{i} ({', '.join(after.records[i].flags)})" if getattr(after.records[i], "flags", None) else i for i in ids
+    )
+    if not fresh:
+        return [f"{len(ids)} records cite changed text: {names}. Run `kb redraft --changed` to redraft them."]
+    refs = ", ".join(fresh[:10]) + (f" … and {len(fresh) - 10} more" if len(fresh) > 10 else "")
+    lines = [f"{len(ids)} records cite changed text: {names}."] if ids else []
+    lines.append(f"{len(fresh)} new segments have no records yet: {refs}.")
+    lines.append("Run `kb redraft --changed --new` to redraft and draft them." if ids else "Run `kb redraft --new` to draft them.")
+    return lines
 
 
 @app.command()
@@ -191,6 +207,7 @@ def redraft(
     ids: Annotated[list[str] | None, typer.Argument(help="Record ids (REQ-*, ADR-*, INV-*) to redraft.")] = None,
     flagged: Annotated[bool, typer.Option("--flagged", help="Also select live requirements with flags.")] = False,
     changed: Annotated[bool, typer.Option("--changed", help="Also select records citing changed text or with a quote not found.")] = False,
+    new: Annotated[bool, typer.Option("--new", help="Also offer the segments with no triage entry, to draft new records from.")] = False,
     report: Annotated[bool, typer.Option("--report", help="Gate what the agent redrafted and print a report.")] = False,
     strict: Annotated[bool, typer.Option("--strict", help="With --report: exit 1 when anything was rejected.")] = False,
     base: Annotated[str | None, typer.Option(
@@ -200,8 +217,8 @@ def redraft(
     """Write a focused brief for your coding agent to redraft selected records; --report gates the redraft."""
     root = Path(ctx.obj["root"])
     if report:
-        if ids or flagged or changed:
-            typer.echo("--report takes no ids, --flagged or --changed", err=True)
+        if ids or flagged or changed or new:
+            typer.echo("--report takes no ids, --flagged, --changed or --new", err=True)
             raise typer.Exit(2)
         try:
             result = redraft_report(root, base)
@@ -214,20 +231,24 @@ def redraft(
     if strict:
         typer.echo("--strict needs --report", err=True)
         raise typer.Exit(2)
-    if not ids and not flagged and not changed:
-        typer.echo("name record ids, or use --flagged or --changed", err=True)
+    if not ids and not flagged and not changed and not new:
+        typer.echo("name record ids, or use --flagged, --changed or --new", err=True)
         raise typer.Exit(2)
     try:
         repo = KbRepo.load(root)
         before = KbRepo.at_ref(root, base or "HEAD") if changed else None
         selection = select(repo, sorted(set(ids or [])), flagged_=flagged, changed=changed, before=before)
-        if not selection:
+        fresh = untriaged(repo) if new else []
+        if not selection and not fresh:
             typer.echo("nothing to redraft", err=True)
             return
+        # the segments new records may cite: the new ones offered, and the changed ones the brief shows
+        offered = sorted(set(fresh) | (changed_shown(before, repo) if before else set()), key=ref_key)
         commit = head_commit(root)
-        write_cache(root, REDRAFT_BRIEF, build_redraft_brief(root, repo, selection, commit))
+        write_cache(root, REDRAFT_BRIEF, build_redraft_brief(root, repo, selection, commit, fresh))
         write_cache(root, REDRAFT_BASE, commit + "\n")
         write_cache(root, REDRAFT_IDS, "".join(f"{rid}\n" for rid in selection))
+        write_cache(root, REDRAFT_NEW, "".join(f"{ref}\n" for ref in offered))
     except (RedraftError, *TOOL_ERRORS) as e:
         raise _fail(e) from e
     typer.echo(f"Brief: {REDRAFT_BRIEF}")

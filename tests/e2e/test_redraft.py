@@ -89,3 +89,47 @@ def test_supersede_adr_after_document_change(tmp_path):
     assert "- ADR-0002 (supersedes a selected record)" in out.stdout and "## Rejected (0)" in out.stdout
     out = invoke(repo, "check", "--strict")
     assert out.exit_code == 0, out.output
+
+
+def test_changed_and_new_text_redrafted_and_drafted(tmp_path):
+    repo = make_git_repo(None, tmp_path, extra={"kb.config.yaml": CONFIG, "docs/product.md": DOC})
+    assert invoke(repo, "ingest", "docs/").exit_code == 0
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          REQ.format(statement="Pages load fast.", quote="Pages should load fast.", flags="flags: [vague]\n"))
+    write(repo, "kb/sources/SRC-product/triage.yaml", "segments:\n  seg-01: [REQ-NF-001]\n")
+    out = invoke(repo, "ingest", "--report", "--strict")
+    assert out.exit_code == 0, out.output
+    commit(repo, "drafts")
+
+    # 1. the document gains a target for the cited sentence and a new section; sync names both
+    refunds = "Refunds are paid within 14 days."
+    write(repo, "docs/product.md", DOC.replace("load fast.", "load in under 2 seconds.") + f"\n# Refunds\n\n{refunds}\n")
+    out = invoke(repo, "source", "sync")
+    assert out.exit_code == 0, out.output
+    assert out.stderr.splitlines() == [
+        "1 records cite changed text: REQ-NF-001 (vague).",
+        "1 new segments have no records yet: SRC-product#seg-02.",
+        "Run `kb redraft --changed --new` to redraft and draft them.",
+    ]
+
+    # 2. one brief: the record to redraft, then the new text to draft from
+    out = invoke(repo, "redraft", "--changed", "--new")
+    assert out.exit_code == 0, out.output
+    brief = (repo / ".kb/cache/redraft/brief.md").read_text()
+    assert "## REQ-NF-001" in brief and "## New text to draft from" in brief and refunds in brief
+    assert "- REQ-NF-001: `Pages load fast.`" in brief
+
+    # 3. the "agent" redrafts REQ-NF-001 in place, drafts REQ-F-001 from the new section and triages both
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          REQ.format(statement="Pages load in under 2 seconds.", quote="Pages should load in under 2 seconds.", flags=""))
+    write(repo, "kb/requirements/REQ-F-001.yaml",
+          REQ.format(statement=refunds, quote=refunds, flags="").replace("REQ-NF-001", "REQ-F-001")
+          .replace("seg-01", "seg-02").replace("kb ingest brief", "kb redraft brief"))
+    write(repo, "kb/sources/SRC-product/triage.yaml", "segments:\n  seg-01: [REQ-NF-001]\n  seg-02: [REQ-F-001]\n")
+
+    # 4. the report accepts both, and the KB checks clean
+    out = invoke(repo, "redraft", "--report", "--strict")
+    assert out.exit_code == 0, out.output
+    assert "## Redrafted (1)\n\n- REQ-NF-001\n" in out.stdout and "## Drafted (1)\n\n- REQ-F-001\n" in out.stdout
+    assert "## Rejected (0)" in out.stdout and "## Flagged (0)" in out.stdout
+    assert invoke(repo, "check").exit_code == 0
