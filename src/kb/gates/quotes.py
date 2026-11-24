@@ -52,7 +52,11 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
             if src not in repo.sources or seg is None:
                 continue  # id_gate reports the missing source or segment
             if find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is None:
-                issues.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
+                if rid in live:
+                    issues.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
+                else:  # a superseded or rejected record stays as it was, even when its document moved on
+                    issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
+                                        "warning", path, rid))
         grounded = set().union(*(_numbers(q.text) for q in ev.quotes))
         missing = sorted(_numbers(_claimed_text(rec)) - grounded)
         if missing:

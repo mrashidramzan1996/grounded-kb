@@ -1,4 +1,4 @@
-from helpers import codes, req, set_field
+from helpers import add_adr, codes, req, set_field
 
 from kb.gates.base import run_gates
 from kb.gates.quotes import MAX_QUOTES_PER_CLAIM, quote_gate
@@ -60,3 +60,21 @@ def test_missing_segment_is_left_to_id_gate(valid_ctx_with):
 def test_not_found_in_valid_fixture(valid_ctx_with):
     ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"quotes": [{"source": "SRC-pricing-spec-v3#seg-03", "text": "Refunds are always given."}]}))
     assert codes(run_gates(ctx, [quote_gate])) == ["quote.not_found"]
+
+
+GONE = {"quotes": [{"source": "SRC-pricing-spec-v3#seg-03", "text": "Refunds are always given."}]}
+
+
+def test_superseded_record_quote_not_found_is_warning(valid_ctx_with):
+    ctx = valid_ctx_with(
+        set_field("REQ-F-001", evidence=GONE, status="rejected"),
+        add_adr("ADR-0901", evidence=GONE),
+        add_adr("ADR-0902", supersedes="ADR-0901"),
+    )
+    found = [i for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"]
+    assert [(i.record, i.severity) for i in found] == [("ADR-0901", "warning"), ("REQ-F-001", "warning")]
+    assert found[0].message == (
+        "ADR-0901: quote no longer in the current source (SRC-pricing-spec-v3#seg-03); the record is superseded or rejected"
+    )
+    live = valid_ctx_with(add_adr("ADR-0901", evidence=GONE))
+    assert [i.severity for i in run_gates(live, [quote_gate]) if i.code == "quote.not_found"] == ["error"]

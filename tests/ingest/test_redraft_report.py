@@ -191,8 +191,9 @@ def test_default_base_is_the_recorded_one(kb):
     assert r.base == recorded and r.redrafted == ["REQ-NF-001"]
     assert redraft_report(kb, "HEAD").redrafted == []
     (kb / REDRAFT_BASE).write_text("0" * 40 + "\n")  # falls back to HEAD, which is not the brief's commit
-    with pytest.raises(RedraftError, match="the redraft files don't match; run `kb redraft` again"):
+    with pytest.raises(RedraftError) as e:
         redraft_report(kb, None)
+    assert str(e.value) == "the redraft files don't match; run `kb redraft` again; or pass --base <sha>"
 
 
 def test_render_sections_in_order():
@@ -333,3 +334,30 @@ def test_brief_base_must_match(kb):
     assert invoke(kb, "redraft", "--report", "--base", "HEAD").exit_code == 0  # an explicit base is the user's choice
     brief.unlink()
     assert invoke(kb, "redraft", "--report", "--base", "HEAD").exit_code == 2
+
+
+WIDER = (
+    "id: REQ-NF-001\nstatement: Pages load fast.\nevidence:\n  quotes:\n  - source: SRC-n#seg-02\n    text: Pages load fast.\n"
+    "  - source: SRC-n#seg-01\n    text: A seat costs 5 EUR.\nmodules:\n- MOD-a\nflags:\n- vague\n"
+)
+
+
+def widened(kb, seg01: str) -> RedraftReport:
+    put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n  seg-02: [REQ-NF-001]\n")
+    commit(kb)
+    redraft(kb, "REQ-NF-001")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", WIDER)  # now also quotes seg-01, which REQ-F-001 owns
+    put(kb, TRIAGE, f"segments:\n  seg-01: {seg01}\n  seg-02: [REQ-NF-001]\n")
+    return redraft_report(kb, None)
+
+
+def test_triage_widened_by_new_quote_cannot_drop_mappings(kb):
+    r = widened(kb, "[REQ-NF-001]")
+    assert [(i.code, i.message) for i in r.rejected] == [
+        ("redraft.out_of_scope", "SRC-n#seg-01: triage changed for a segment outside this redraft")
+    ]
+
+
+def test_triage_new_citation_may_add_ids(kb):
+    r = widened(kb, "[REQ-F-001, REQ-NF-001]")
+    assert (r.rejected, r.redrafted) == ([], ["REQ-NF-001"])

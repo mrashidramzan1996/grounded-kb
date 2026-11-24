@@ -82,8 +82,10 @@ def _check_files(root: Path, before: KbRepo, selected: list[str], commit: str, b
     brief = (_read(root, REDRAFT_BRIEF) or b"").decode("utf-8", errors="replace")
     headings = set(brief.splitlines())
     m = _BRIEF_BASE.search(brief)
-    if any(f"## {rid}" not in headings for rid in selected) or (not base_given and (m is None or m.group(1) != commit)):
+    if any(f"## {rid}" not in headings for rid in selected):
         raise RedraftError(MISMATCH)
+    if not base_given and (m is None or m.group(1) != commit):  # e.g. the recorded base is no longer an ancestor of HEAD
+        raise RedraftError(f"{MISMATCH}; or pass --base <sha>")
 
 
 def _superseding(head: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
@@ -95,35 +97,42 @@ def _superseding(head: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
     )
 
 
-def _cited(repos: list[KbRepo], ids: set[str]) -> set[str]:
-    """'SRC-x#seg-NN' refs quoted by `ids` in any of `repos`."""
+def _cited(repo: KbRepo, ids: set[str]) -> set[str]:
+    """'SRC-x#seg-NN' refs quoted by `ids` in `repo`."""
     return {
-        q.source for repo in repos for rid in ids
+        q.source for rid in ids
         if (rec := repo.records.get(rid)) is not None and getattr(rec, "evidence", None) for q in rec.evidence.quotes
     }
 
 
-def _triage_changes(head: KbRepo, before: KbRepo, src: str) -> list[str]:
-    """Segment ids whose triage entry was added, changed or removed since base."""
+def _triage_scope(head: KbRepo, before: KbRepo, src: str, path: str, at_base: set[str], at_head: set[str]) -> list[Issue]:
+    """Triage entries changed since base, per segment id. An entry may change freely for a segment the selection
+    cited at base; for one it cites only at head, ids may only be added (a "none: ..." entry may become a list).
+    Any other change is out of scope."""
     now, then = head.triage(src), before.triage(src)
     a, b = (now.segments if now else {}), (then.segments if then else {})
-    return sorted(seg for seg in set(a) | set(b) if a.get(seg) != b.get(seg))
+    issues = []
+    for seg in sorted(set(a) | set(b)):
+        old, new, ref = b.get(seg), a.get(seg), f"{src}#{seg}"
+        if old == new or ref in at_base:
+            continue
+        if ref in at_head and isinstance(new, list) and (not isinstance(old, list) or set(old) <= set(new)):
+            continue
+        issues.append(Issue("redraft.out_of_scope", f"{ref}: triage changed for a segment outside this redraft", path=path))
+    return issues
 
 
 def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[str], selected: set[str]) -> list[Issue]:
-    """redraft.out_of_scope for drafted files that are not the selection's (a triage file only for entries of
-    segments the selection does not cite); redraft.id_changed for selected records whose file is gone or now
-    holds another id."""
+    """redraft.out_of_scope for drafted files that are not the selection's (a triage file: see _triage_scope);
+    redraft.id_changed for selected records whose file is gone or now holds another id."""
     at_head, at_base = {p: r for r, p in head.id_paths}, {p: r for r, p in before.id_paths}
-    cited = _cited([head, before], allowed)
+    # superseding records are new, so at base only the selected records (the ones they supersede) cite anything
+    cited_base, cited_head = _cited(before, selected), _cited(head, allowed)
     issues = []
     for path in sorted(drafted):
         rid = at_head.get(path) or at_base.get(path)
         if rid is None and (m := _TRIAGE.fullmatch(path)):
-            issues.extend(
-                Issue("redraft.out_of_scope", f"{m.group(1)}#{seg}: triage changed for a segment outside this redraft", path=path)
-                for seg in _triage_changes(head, before, m.group(1)) if f"{m.group(1)}#{seg}" not in cited
-            )
+            issues.extend(_triage_scope(head, before, m.group(1), path, cited_base, cited_head))
         elif rid is None:
             issues.append(Issue("redraft.out_of_scope", f"{path} is not in this redraft; redraft only the listed records", path=path))
         elif at_base.get(path) not in selected and rid not in allowed:
