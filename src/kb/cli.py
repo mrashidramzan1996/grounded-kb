@@ -16,7 +16,7 @@ from kb.hooks import run_hook
 from kb.safewrite import WriteRefused
 from kb.baseline import BaselineError, freeze_baseline
 from kb.init.scaffold import InitError, init_repo
-from kb.gitfiles import GitError, changed_files, head_commit, repo_files, toplevel
+from kb.gitfiles import GitError, changed_files, head_commit, repo_files, rev_parse, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
 from kb.cache import remove_cache, write_cache
@@ -136,33 +136,50 @@ def source_sync(ctx: typer.Context) -> None:
     before = KbRepo.load(root)
     _run(ctx, sync_sources)
     after = KbRepo.load(root)
-    ids = sorted(set(citing(after, changed_segments(before, after))) | set(unfound(after)))
+    changed = changed_segments(before, after)
+    ids = citing(after, changed)
+    broken = set(unfound(after))
+    # quotes broken before the sync are named apart, and only when the sync changed which quotes are found
+    still_broken = sorted(broken - set(ids)) if broken != set(unfound(before)) else []
     known = segment_hashes(before)
     added = [ref for ref in new_text(after, after) if ref not in known]  # new text the sync added
     _, uncited = changed_text(before, after)
-    for line in _sync_hint(after, ids, added, sorted(uncited, key=ref_key)):
+    for line in _sync_hint(after, ids, still_broken, added, sorted(uncited, key=ref_key)):
         typer.echo(line, err=True)
-    touched = changed_segments(before, after) | (set(segment_hashes(after)) - set(known))
+    touched = changed | (set(segment_hashes(after)) - set(known))
     for issue in untriaged_cited(after, after, touched):  # --new does not offer these
         typer.echo(f"warning {issue.code}: {issue.message}", err=True)
 
 
-def _sync_hint(after: KbRepo, ids: list[str], added: list[str], uncited: list[str]) -> list[str]:
-    """Name the records citing changed text and the new or changed segments with no records yet (`added`: new and
-    untriaged; `uncited`: changed, cited by no live record), and the redraft to run."""
+def _count(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def _sync_hint(after: KbRepo, ids: list[str], broken: list[str], added: list[str], uncited: list[str]) -> list[str]:
+    """Name the records citing changed text, the records whose quotes were already not found (`broken`), and the
+    new or changed segments with no records yet (`added`: new and untriaged; `uncited`: changed, cited by no live
+    record), and the redraft to run before committing the sync."""
     fresh = sorted(set(added) | set(uncited), key=ref_key)
-    if not ids and not fresh:
+    if not ids and not broken and not fresh:
         return []
-    names = ", ".join(
-        f"{i} ({', '.join(after.records[i].flags)})" if getattr(after.records[i], "flags", None) else i for i in ids
-    )
-    if not fresh:
-        return [f"{len(ids)} records cite changed text: {names}. Run `kb redraft --changed` to redraft them."]
-    refs = ", ".join(fresh[:10]) + (f" … and {len(fresh) - 10} more" if len(fresh) > 10 else "")
-    lines = [f"{len(ids)} records cite changed text: {names}."] if ids else []
-    lines.append(f"{len(fresh)} new or changed segments have no records yet: {refs}.")
-    flags = " ".join(f for f, on in [("--changed", ids or uncited), ("--new", added)] if on)
-    lines.append(f"Run `kb redraft {flags}` to {'redraft and draft' if ids else 'draft'} them.")
+
+    def names(rids: list[str]) -> str:
+        return ", ".join(
+            f"{i} ({', '.join(after.records[i].flags)})" if getattr(after.records[i], "flags", None) else i for i in rids
+        )
+
+    lines = []
+    if ids:
+        lines.append(f"{_count(len(ids), 'record cites', 'records cite')} changed text: {names(ids)}.")
+    if broken:
+        lines.append(f"{_count(len(broken), 'record has', 'records have')} quotes not found: {names(broken)}.")
+    if fresh:
+        refs = ", ".join(fresh[:10]) + (f" … and {len(fresh) - 10} more" if len(fresh) > 10 else "")
+        what = _count(len(fresh), "new or changed segment has", "new or changed segments have")
+        lines.append(f"{what} no records yet: {refs}.")
+    flags = " ".join(f for f, on in [("--changed", ids or broken or uncited), ("--new", added)] if on)
+    verb = ("redraft and draft" if ids or broken else "draft") if fresh else "redraft"
+    lines.append(f"Before committing, run `kb redraft {flags}` to {verb} them.")
     return lines
 
 
@@ -218,7 +235,8 @@ def redraft(
     report: Annotated[bool, typer.Option("--report", help="Gate what the agent redrafted and print a report.")] = False,
     strict: Annotated[bool, typer.Option("--strict", help="With --report: exit 1 when anything was rejected.")] = False,
     base: Annotated[str | None, typer.Option(
-        "--base", help="The ref --changed compares against (default HEAD), or --report (default: the brief's commit).",
+        "--base", help="With --changed: the commit before the sync, when it is already committed (default HEAD). "
+        "With --report: the commit to compare against (default: the brief's commit).",
     )] = None,
 ) -> None:
     """Write a focused brief for your coding agent to redraft selected records; --report gates the redraft."""
@@ -241,9 +259,16 @@ def redraft(
     if not ids and not flagged and not changed and not new:
         typer.echo("name record ids, or use --flagged, --changed or --new", err=True)
         raise typer.Exit(2)
+    if base and not changed:
+        typer.echo("--base needs --changed or --report", err=True)
+        raise typer.Exit(2)
     try:
+        # the brief, its base file and a later --report all name the commit compared against
+        commit = rev_parse(root, base) if base else head_commit(root)
+        if commit is None:
+            raise GitError(f"unknown base {base!r}")
         repo = KbRepo.load(root)
-        before = KbRepo.at_ref(root, base or "HEAD") if changed or new else None
+        before = KbRepo.at_ref(root, commit) if changed or new else None
         selection = select(repo, sorted(set(ids or [])), flagged_=flagged, changed=changed, before=before)
         cited, uncited = changed_text(before, repo) if changed and before else (set(), set())
         # text to draft from: untriaged segments no record cites at base (--new), and changed segments no live
@@ -255,11 +280,11 @@ def redraft(
         if not selection and not fresh:
             for rel in REDRAFT_FILES:  # a later --report must not gate against a stale brief
                 remove_cache(root, rel)
-            typer.echo("nothing to redraft", err=True)
+            hint = "; if you already committed the sync, pass --base <commit before it>" if changed and not base else ""
+            typer.echo(f"nothing to redraft{hint}", err=True)
             return
         # the segments new records may cite: those offered to draft from, and the changed ones the records cite
         offered = sorted(set(fresh) | cited, key=ref_key)
-        commit = head_commit(root)
         write_cache(root, REDRAFT_BRIEF, build_redraft_brief(root, repo, selection, commit, fresh))
         write_cache(root, REDRAFT_BASE, commit + "\n")
         write_cache(root, REDRAFT_IDS, "".join(f"{rid}\n" for rid in selection))

@@ -76,3 +76,9 @@ def test_readme_covers_install_every_command_and_posix():
                 "kb module paths", "kb check", "kb context", "kb trace", "kb status", "kb baseline freeze",
                 "kb agents install", "kb hook"):
         assert f"`{cmd}" in readme, cmd
+    # kb redraft takes --base with --changed (a committed sync) and with --report
+    assert "`kb redraft [IDs] [--flagged] [--changed [--base REF]] [--new]`" in readme
+    assert "`kb redraft --report [--strict] [--base REF]`" in readme
+    kb_readme = (Path(__file__).parents[1] / "src/kb/init/templates/kb_readme.md").read_text()
+    assert "2. Before committing, run the `kb redraft` it suggests" in kb_readme
+    assert "run `kb redraft --changed --base <commit before it>`" in kb_readme

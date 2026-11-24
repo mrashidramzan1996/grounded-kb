@@ -114,9 +114,9 @@ def test_existing_requirements_listed_for_dedupe(kb):
 def test_sync_hint_names_new_segments_and_suggests_changed_new(kb):
     r = sync(kb, ADDED.replace("5 EUR", "7 EUR"))
     assert r.stderr.splitlines() == [
-        "1 records cite changed text: REQ-F-001.",
-        "1 new or changed segments have no records yet: SRC-n#seg-03.",
-        "Run `kb redraft --changed --new` to redraft and draft them.",
+        "1 record cites changed text: REQ-F-001.",
+        "1 new or changed segment has no records yet: SRC-n#seg-03.",
+        "Before committing, run `kb redraft --changed --new` to redraft and draft them.",
     ]
     put(kb, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", "A seat costs 7 EUR."))
     commit(kb)
@@ -125,7 +125,7 @@ def test_sync_hint_names_new_segments_and_suggests_changed_new(kb):
     refs = ", ".join(f"SRC-n#seg-{n:02d}" for n in range(4, 14))
     assert r.stderr.splitlines() == [
         f"12 new or changed segments have no records yet: {refs} … and 2 more.",
-        "Run `kb redraft --new` to draft them.",
+        "Before committing, run `kb redraft --new` to draft them.",
     ]
 
 
@@ -262,14 +262,14 @@ def test_sync_hint_counts_changed_uncited_segments(kb):
     settled_support(kb)
     r = sync(kb, SUPPORT.replace("Support is friendly.", ANSWER))
     assert r.stderr.splitlines() == [
-        "1 new or changed segments have no records yet: SRC-n#seg-03.",
-        "Run `kb redraft --changed` to draft them.",
+        "1 new or changed segment has no records yet: SRC-n#seg-03.",
+        "Before committing, run `kb redraft --changed` to draft them.",
     ]
     commit(kb)
     r = sync(kb, SUPPORT.replace("Support is friendly.", "Support answers within 8 hours.") + f"\n# Refunds\n\n{REFUND}\n")
     assert r.stderr.splitlines() == [
         "2 new or changed segments have no records yet: SRC-n#seg-03, SRC-n#seg-04.",
-        "Run `kb redraft --changed --new` to draft them.",
+        "Before committing, run `kb redraft --changed --new` to draft them.",
     ]
 
 
@@ -380,3 +380,13 @@ def test_sync_hint_warns_untriaged_cited_changed_segment(kb):
     untriaged_cited_seg02(kb)
     r = sync(kb, DOC.replace(VAGUE, "Pages load in 2 seconds."))
     assert f"warning segment.untriaged_cited: {UNTRIAGED_CITED}" in r.stderr.splitlines()
+
+
+def test_new_record_overwriting_an_unselected_file_rejected(kb):
+    sync(kb, ADDED)
+    redraft(kb, "--new")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", req_yaml("REQ-F-002", REFUND, seg="seg-03"))  # replaces REQ-NF-001
+    put(kb, TRIAGE, TRIAGED + "  seg-03: [REQ-F-002]\n")
+    r = redraft_report(kb, None)
+    assert r.drafted == [] and ("REQ-F-002", "id.filename_mismatch") in rejected(r)
+    assert invoke(kb, "redraft", "--report", "--strict").exit_code == 1

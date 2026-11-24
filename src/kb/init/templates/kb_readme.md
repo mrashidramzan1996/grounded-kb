@@ -13,7 +13,7 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 ## When a document changes
 
 1. Edit the document, then run `kb source sync`. It names the records that cite changed text and the new or changed segments that have no records yet.
-2. Run the `kb redraft` it suggests (`--changed`, `--new`, or both) and ask your coding agent to follow `.kb/cache/redraft/brief.md`. Only those records are redrafted; ids are kept, and an ADR or INV changes only through a new record that supersedes it. New records are drafted only from the new or changed text, with the next free ids, and every new segment gets a triage entry.
+2. Before committing, run the `kb redraft` it suggests (`--changed`, `--new`, or both) and ask your coding agent to follow `.kb/cache/redraft/brief.md`. If you already committed the sync, run `kb redraft --changed --base <commit before it>`. Only those records are redrafted; ids are kept, and an ADR or INV changes only through a new record that supersedes it. New records are drafted only from the new or changed text, with the next free ids, and every new segment gets a triage entry.
 3. Run `kb redraft --report`, then `kb check`, and commit the document, the sync and the redraft together.
 
 After the baseline, this is a pull request: the intent approvers sign off on stale requirements. `kb redraft --report` is a local check; `kb check` and `kb verify` in CI and the pull-request review are what decide.

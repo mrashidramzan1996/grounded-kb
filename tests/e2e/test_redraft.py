@@ -31,7 +31,10 @@ def test_redraft_flow_markdown_source(tmp_path):
     write(repo, "docs/product.md", DOC.replace("load fast.", "load in under 2 seconds."))
     out = invoke(repo, "source", "sync")
     assert out.exit_code == 0, out.output
-    assert "1 records cite changed text: REQ-NF-001 (vague). Run `kb redraft --changed` to redraft them." in out.stderr
+    assert out.stderr.splitlines() == [
+        "1 record cites changed text: REQ-NF-001 (vague).",
+        "Before committing, run `kb redraft --changed` to redraft them.",
+    ]
 
     # 3. kb redraft --changed writes the brief for that record only
     out = invoke(repo, "redraft", "--changed")
@@ -116,9 +119,9 @@ def test_changed_and_new_text_redrafted_and_drafted(tmp_path):
     out = invoke(repo, "source", "sync")
     assert out.exit_code == 0, out.output
     assert out.stderr.splitlines() == [
-        "1 records cite changed text: REQ-NF-001 (vague).",
+        "1 record cites changed text: REQ-NF-001 (vague).",
         "2 new or changed segments have no records yet: SRC-product#seg-02, SRC-product#seg-03.",
-        "Run `kb redraft --changed --new` to redraft and draft them.",
+        "Before committing, run `kb redraft --changed --new` to redraft and draft them.",
     ]
 
     # 2. one brief: the record to redraft, then the new and changed text to draft from
@@ -144,3 +147,29 @@ def test_changed_and_new_text_redrafted_and_drafted(tmp_path):
     assert "## Drafted (2)\n\n- REQ-F-001\n- REQ-NF-002\n" in out.stdout
     assert "## Rejected (0)" in out.stdout and "## Flagged (0)" in out.stdout
     assert invoke(repo, "check").exit_code == 0
+
+
+def test_committed_sync_with_base_flow(tmp_path):
+    repo = make_git_repo(None, tmp_path, extra={"kb.config.yaml": CONFIG, "docs/product.md": DOC})
+    assert invoke(repo, "ingest", "docs/").exit_code == 0
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          REQ.format(statement="Pages load fast.", quote="Pages should load fast.", flags="flags: [vague]\n"))
+    write(repo, "kb/sources/SRC-product/triage.yaml", "segments:\n  seg-01: [REQ-NF-001]\n")
+    assert invoke(repo, "ingest", "--report", "--strict").exit_code == 0
+    commit(repo, "drafts")
+    pre = git(repo, "rev-parse", "HEAD").strip()
+
+    # the document change and the sync are committed before redrafting
+    write(repo, "docs/product.md", DOC.replace("load fast.", "load in under 2 seconds."))
+    assert invoke(repo, "source", "sync").exit_code == 0
+    commit(repo, "doc + sync")
+
+    # --base names the commit before the sync: the brief and the report compare the same range
+    out = invoke(repo, "redraft", "--changed", "--base", pre)
+    assert out.exit_code == 0, out.output
+    assert "cites changed text SRC-product#seg-01" in (repo / ".kb/cache/redraft/brief.md").read_text()
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          REQ.format(statement="Pages load in under 2 seconds.", quote="Pages should load in under 2 seconds.", flags=""))
+    out = invoke(repo, "redraft", "--report", "--strict")
+    assert out.exit_code == 0, out.output
+    assert f"Base: {pre}" in out.stdout and "## Redrafted (1)\n\n- REQ-NF-001\n" in out.stdout

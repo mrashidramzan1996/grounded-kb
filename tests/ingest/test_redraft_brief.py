@@ -166,3 +166,35 @@ def test_cli_changed_uses_base(md_repo_ingested):
     r = invoke(root, "redraft", "--changed")
     assert r.exit_code == 0, r.stderr
     assert "cites changed text SRC-n#seg-01" in (root / REDRAFT_BRIEF).read_text()
+
+
+def test_cli_changed_with_base_records_that_commit(md_repo_ingested):
+    root = md_repo_ingested
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "req")
+    pre = git(root, "rev-parse", "HEAD").strip()
+    sync(root, "# Seats\n\nA seat costs 7 EUR.\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "sync")
+    r = invoke(root, "redraft", "--changed", "--base", "HEAD~1")
+    assert r.exit_code == 0, r.stderr
+    assert (root / REDRAFT_BASE).read_text() == pre + "\n"
+    assert f"this brief was written at commit {pre}." in (root / REDRAFT_BRIEF).read_text()
+    r = invoke(root, "redraft", "--changed", "--base", "no-such-ref")
+    assert r.exit_code == 2 and "no-such-ref" in r.stderr
+
+
+@pytest.mark.parametrize("args", [["REQ-F-001"], ["--flagged"], ["--new"]])
+def test_cli_base_needs_changed(md_repo_ingested, args):
+    put(md_repo_ingested, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    r = invoke(md_repo_ingested, "redraft", *args, "--base", "HEAD")
+    assert r.exit_code == 2 and "--base needs --changed or --report" in r.stderr
+
+
+def test_cli_changed_nothing_suggests_base(md_repo_ingested):
+    r = invoke(md_repo_ingested, "redraft", "--changed")
+    assert r.exit_code == 0
+    assert "nothing to redraft; if you already committed the sync, pass --base <commit before it>" in r.stderr
+    r = invoke(md_repo_ingested, "redraft", "--changed", "--base", "HEAD")
+    assert r.exit_code == 0 and r.stderr.strip() == "nothing to redraft"
