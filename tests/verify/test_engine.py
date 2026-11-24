@@ -208,6 +208,23 @@ def test_no_runner_is_unverified_with_hint(tmp_path):
     assert state(v) == ("unverified", "E1", ("no test command: set modules[].tests",), ())
 
 
+def test_failure_beats_no_runner(tmp_path):
+    marks = {"tests/test_seats.py": [("verify", "FEAT-001.C1", 5, TEST_B), ("verify", "INV-001", 5, TEST_B)]}
+    recs = [feature(), requirement(), invariant()]
+    got = verdicts(tmp_path, recs, outcomes={TEST: "no_runner", TEST_B: "failed"}, markers=marks)
+    assert state(got["FEAT-001.C1"]) == ("broken", "E1", (f"{TEST_B} failed",), ())
+    assert state(got["INV-001"]) == ("broken", "E1", (f"{TEST_B} failed",), ())
+    assert got["REQ-F-001"].status == "broken"
+
+
+def test_unsafe_linked_test_reason(tmp_path):
+    unsafe = "../outside.py::test_x"
+    recs = [feature(claim(test=unsafe))]
+    v = one(tmp_path, recs, "FEAT-001.C1", outcomes={unsafe: "passed"})
+    assert state(v) == ("broken", "E1", (f"linked test {unsafe} is not a safe path",), ())
+    assert tests_needed(make_input(tmp_path, recs), all_of(recs)) == {}
+
+
 @pytest.mark.parametrize("outcome", ["failed", "skipped", "missing"])
 def test_failed_skipped_or_missing_test_is_broken(tmp_path, outcome):
     marks = {"tests/test_seats.py": [("verify", "FEAT-001.C1", 5, TEST_B)]}
@@ -250,19 +267,19 @@ def test_requirement_tests_pass_is_verified_e2(tmp_path):
 def test_quote_gone_is_broken(tmp_path):
     text = TEXT.replace(QUOTE, "Seats cost 12 dollars each.")
     v = one(tmp_path, [feature(), requirement()], "REQ-F-001", outcomes={TEST: "passed"}, text=text)
-    assert v.status == "broken" and v.level == "E0"
+    assert v.status == "broken" and v.level == "E2"  # the level is the code side's
     assert v.reasons == (f"quote not found in {SEG}",)
 
 
 def test_cited_segment_missing_is_broken(tmp_path):
     v = one(tmp_path, [feature(), requirement(seg="SRC-spec#seg-09")], "REQ-F-001", outcomes={TEST: "passed"})
-    assert state(v) == ("broken", "E0", ("cited segment SRC-spec#seg-09 is missing",), ())
+    assert state(v) == ("broken", "E2", ("cited segment SRC-spec#seg-09 is missing",), ())
 
 
 def test_segment_changed_quote_found_is_stale(tmp_path):
     chg = changes(segments={SEG: "changed"})
     v = one(tmp_path, [feature(), requirement()], "REQ-F-001", outcomes={TEST: "passed"}, chg=chg)
-    assert state(v) == ("stale", "E0", (f"cited segment {SEG} changed; needs intent approvers' review",), ())
+    assert state(v) == ("stale", "E2", (f"cited segment {SEG} changed; needs intent approvers' review",), ())
 
 
 def test_requirement_with_broken_claim_is_broken(tmp_path):
@@ -287,10 +304,21 @@ def test_requirement_own_tests_follow_claim_rules(tmp_path):
              "tests/test_seats.py": [("verify", "REQ-F-001", 5, TEST_B)]}
     recs = [feature(), requirement()]
     v = one(tmp_path, recs, "REQ-F-001", outcomes={TEST: "passed", TEST_B: "failed"}, markers=marks)
-    assert state(v) == ("broken", "E0", (f"{TEST_B} failed",), ())
+    assert state(v) == ("broken", "E1", (f"{TEST_B} failed",), ())
     assert v.tests == (TEST, TEST_B)
     v = one(tmp_path, recs, "REQ-F-001", outcomes={TEST: "passed", TEST_B: "flaky"}, markers=marks)
-    assert state(v) == ("unverified", "E0", (f"{TEST_B} is flaky; quarantined",), ("flaky",))
+    assert state(v) == ("unverified", "E1", (f"{TEST_B} is flaky; quarantined",), ("flaky",))
+
+
+def test_stale_requirement_keeps_code_level(tmp_path):
+    chg = changes(segments={SEG: "changed"})
+    passing = one(tmp_path, [feature(), requirement()], "REQ-F-001", outcomes={TEST: "passed"}, chg=chg)
+    assert (passing.status, passing.level) == ("stale", "E2")
+    marks = {"billing/seats.py": [("impl", "REQ-F-001", 1, None)]}
+    built = one(tmp_path, [requirement(features=[], modules=["MOD-billing"])], "REQ-F-001", markers=marks, chg=chg)
+    assert (built.status, built.level) == ("stale", "E1")
+    unbuilt = one(tmp_path, [feature(claim(code=None)), requirement()], "REQ-F-001", outcomes={TEST: "passed"}, chg=chg)
+    assert (unbuilt.status, unbuilt.level) == ("stale", "E0")
 
 
 def test_broken_beats_stale(tmp_path):

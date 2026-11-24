@@ -90,14 +90,14 @@ class _Engine:
     def invariant_tests(self, inv: Invariant) -> list[str]:
         return sorted(set(inv.tests) | set(self.inp.index.tests_for(inv.id)))
 
-    def test_exists(self, ref: str) -> bool | None:
-        """True if the test resolves, False if it is gone (or its path is unsafe), None when no adapter can tell."""
+    def test_presence(self, ref: str) -> Literal["found", "deleted", "unsafe", "unknown"]:
+        """Whether the test resolves; `unknown` when no adapter can tell."""
         try:
-            return resolve_test(self.inp.root, ref, self.symbols) is not None
+            return "found" if resolve_test(self.inp.root, ref, self.symbols) is not None else "deleted"
         except UnsafePath:
-            return False
+            return "unsafe"
         except NoAdapter:
-            return None  # the runner decides: a test it cannot find reports `missing`
+            return "unknown"  # the runner decides: a test it cannot find reports `missing`
 
     def anchor_resolves(self, anchor: str | None) -> bool:
         if not anchor:
@@ -110,15 +110,17 @@ class _Engine:
     # --- rules 6-9 -------------------------------------------------------------------------------
 
     def judge_tests(self, refs: list[str]) -> _TestResult:
-        deleted = [r for r in refs if self.test_exists(r) is False]
-        if deleted:
-            return _TestResult("broken", tuple(f"linked test {r} was deleted" for r in deleted), False)
+        gone = {"deleted": "was deleted", "unsafe": "is not a safe path"}
+        lost = [(r, gone[p]) for r in refs if (p := self.test_presence(r)) in gone]
+        if lost:
+            return _TestResult("broken", tuple(f"linked test {r} {why}" for r, why in lost), False)
         outcomes = {r: self.inp.outcomes.get(r, "missing") for r in refs}  # absent from the run: not passing
-        if "no_runner" in outcomes.values():
-            return _TestResult("unverified", (NO_RUNNER_HINT,), False)
+        # a deterministic failure is never masked by another test lacking a runner: rule 7 before 6b
         failing = [(r, o) for r, o in outcomes.items() if o in ("failed", "skipped", "missing")]
         if failing:
             return _TestResult("broken", tuple(f"{r} {o}" for r, o in failing), False)
+        if "no_runner" in outcomes.values():
+            return _TestResult("unverified", (NO_RUNNER_HINT,), False)
         flaky = [r for r, o in outcomes.items() if o == "flaky"]
         if flaky:
             return _TestResult("unverified", tuple(f"{r} is flaky; quarantined" for r in flaky), True)
@@ -189,29 +191,31 @@ class _Engine:
             return "stale", _unique(stale)
         return None, []
 
-    def _code_side(self, req: Requirement, tests: list[str]) -> tuple[State, list[str], bool]:
+    def _code_side(self, req: Requirement, tests: list[str]) -> tuple[State, list[str], bool, bool]:
+        """(status, reasons, flaky, whether there is impl evidence)."""
         index = self.inp.index
         claims = self.requirement_claims(req.id)
-        broken = [c.id for _, c in claims if self.claim_verdict(c.id).status == "broken"]
-        if broken:
-            return "broken", [f"claim {cid} is broken" for cid in broken], False
         built = (
             bool(index.impl_files(req.id))
             or any(self.anchor_resolves(c.code) or index.impl_files(c.id) for _, c in claims)
         )
+        broken = [c.id for _, c in claims if self.claim_verdict(c.id).status == "broken"]
+        if broken:
+            return "broken", [f"claim {cid} is broken" for cid in broken], False, built
         if not built:
-            return "not_built", ["no implementation evidence"], False
+            return "not_built", ["no implementation evidence"], False, built
         if not tests:
-            return "built", ["no linked test"], False
+            return "built", ["no linked test"], False, built
         result = self.judge_tests(tests)
-        return result.status or "verified", list(result.reasons), result.flaky
+        return result.status or "verified", list(result.reasons), result.flaky, built
 
     def requirement_verdict(self, req: Requirement) -> Verdict:
         tests = self.requirement_tests(req.id)
         intent, intent_reasons = self._intent(req)
-        code, code_reasons, flaky = self._code_side(req, tests)
+        code, code_reasons, flaky, built = self._code_side(req, tests)
         status: State = "broken" if "broken" in (intent, code) else intent or code
-        level: Level = "E2" if status == "verified" else "E1" if status == "built" else "E0"
+        # the level measures the code side's evidence only, whatever the intent side says
+        level: Level = "E2" if code == "verified" else "E1" if built else "E0"
         notes = ("flaky",) if flaky else ()
         return Verdict(req.id, "requirement", status, level, tuple(intent_reasons + code_reasons), notes, tuple(tests))
 
@@ -269,14 +273,14 @@ def _selected(engine: _Engine, affected: Affected):
 def tests_needed(inp: EngineInput, affected: Affected) -> dict[str | None, list[str]]:
     """The test refs `derive` needs outcomes for, by the module whose runner runs them (None: no runner).
 
-    `inp.outcomes` is ignored. Tests that no longer exist are left out: they break their records without a run.
+    `inp.outcomes` is ignored. Tests that are deleted or have unsafe paths are left out: they break their records without a run.
     """
     engine = _Engine(inp)
     wanted: dict[str | None, set[str]] = {}
 
     def need(record_modules: list[str], refs: Iterable[str]) -> None:
         for ref in refs:
-            if engine.test_exists(ref) is not False:
+            if engine.test_presence(ref) in ("found", "unknown"):
                 wanted.setdefault(engine.runner_module(record_modules, ref), set()).add(ref)
 
     for kind, item in _selected(engine, affected):
