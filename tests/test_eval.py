@@ -280,3 +280,26 @@ def test_staleness_score_counts_matching_labels_per_id():
     ]
     assert staleness.score(per_change) == (1 / 3, 1 / 3)
     assert staleness.score([change({"A": "none"}, {"A": "none"})]) == (1.0, 1.0)
+
+
+def test_staleness_changed_label_only_on_verified():
+    """A-4: `changed` means a changed fingerprint whose tests still pass; on an unverified claim it is not a label."""
+    from types import SimpleNamespace
+
+    def v(status, *notes):
+        return SimpleNamespace(status=status, notes=notes)
+
+    assert staleness.label_of(v("verified", "changed")) == "changed"
+    assert staleness.label_of(v("unverified", "changed", "flaky")) == "none"
+    assert staleness.label_of(v("broken", "changed")) == "broken" and staleness.label_of(v("stale")) == "stale"
+
+
+def test_staleness_expected_ids_are_always_scored(tmp_path, monkeypatch):
+    """An expected id that is neither a fixture id nor in the verdicts still counts (as a miss), never silently drops."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(staleness, "run_verify", lambda *a, **k: SimpleNamespace(verdicts=[]))
+    change = staleness.Change("x", "unrelated", staleness.write("README.md", "x\n"), {"FEAT-999.C1": "broken"})
+    out = staleness.run_change(change, tmp_path, staleness.FIXTURE, ["FEAT-001.C1"])
+    assert out["expected"] == {"FEAT-001.C1": "none", "FEAT-999.C1": "broken"}
+    assert out["predicted"] == {"FEAT-001.C1": "none", "FEAT-999.C1": "none"} and not out["correct"]

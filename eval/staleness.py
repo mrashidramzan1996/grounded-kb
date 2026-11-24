@@ -10,8 +10,10 @@ forge=None)` derives the verdicts. Linked tests run with `python -m pytest` from
 puts the project's interpreter first).
 
 Every claim and requirement gets one label per change, from {changed, stale, broken, none}:
-  broken: status broken; stale: status stale; changed: the note `changed`; none: anything else, or not affected.
-Each change lists the labels it expects; every claim or requirement it does not list expects `none`.
+  broken: status broken; stale: status stale; changed: status verified with the note `changed` (A-4); none: anything
+  else, or not affected.
+Each change lists the labels it expects; every claim or requirement it does not list expects `none`. The ids scored
+per change are the fixture's, the ones `kb verify` checked and the ones the change expects.
 A predicted label other than `none` that equals the expected label for the same id is a true positive:
   precision = true positives / predicted labels other than none   (1.0 when nothing is predicted)
   recall    = true positives / expected labels other than none    (1.0 when nothing is expected)
@@ -197,7 +199,7 @@ def _fixture_copy(dest: Path, fixture: Path) -> Path:
 def label_of(verdict) -> str:
     if verdict.status in ("broken", "stale"):
         return verdict.status
-    return "changed" if "changed" in verdict.notes else "none"
+    return "changed" if verdict.status == "verified" and "changed" in verdict.notes else "none"
 
 
 def labelled_ids(fixture: Path) -> list[str]:
@@ -214,7 +216,7 @@ def run_change(change: Change, scratch: Path, fixture: Path, ids: list[str]) -> 
     _git(root, "commit", "-q", "-m", change.id)
     report = run_verify(root, base="main", all_=False, forge=None)
     found = {v.id: label_of(v) for v in report.verdicts if v.kind in ("claim", "requirement")}
-    every = sorted(set(ids) | set(found))
+    every = sorted(set(ids) | set(found) | set(change.expect))
     expected = {i: change.expect.get(i, "none") for i in every}
     predicted = {i: found.get(i, "none") for i in every}
     return {
