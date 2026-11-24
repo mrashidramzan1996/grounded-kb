@@ -58,8 +58,48 @@ def test_vague_cleared_without_target_rejected(kb):
     put(kb, "kb/requirements/REQ-NF-001.yaml", req_yaml("REQ-NF-001", VAGUE, seg="seg-02"))
     r = redraft_report(kb, None)
     assert rejected(r) == [("REQ-NF-001", "vague.cleared_without_target")]
-    assert r.rejected[0].message == "REQ-NF-001: vague was removed but no quote states a measurable target"
+    assert r.rejected[0].message == UNTARGETED.format("REQ-NF-001")
     assert r.redrafted == []
+
+
+UNTARGETED = "{}: vague was removed but the statement's target is not quoted from its own or the offered text"
+SEAT = "  - source: SRC-n#seg-01\n    text: 'A seat costs 5 EUR.'\n"
+
+
+def with_quote(text: str, quote: str) -> str:
+    """REQ-NF-001 (no flags) stating `text`, quoting seg-02 and then `quote` (an extra quote item)."""
+    return req_yaml("REQ-NF-001", VAGUE, seg="seg-02").replace("statement: 'Pages load fast.'", f"statement: {text!r}").replace(
+        "modules:", quote + "modules:")
+
+
+def test_vague_cleared_by_unrelated_number_quote_rejected(kb):
+    # the statement is unchanged; a quote from a segment the record never cited (and not offered) has a number
+    redraft(kb, "--flagged")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", with_quote(VAGUE, SEAT))
+    r = redraft_report(kb, None)
+    assert [(i.record, i.code, i.message) for i in r.rejected] == [
+        ("REQ-NF-001", "vague.cleared_without_target", UNTARGETED.format("REQ-NF-001"))
+    ]
+    out = invoke(kb, "redraft", "--report", "--strict")
+    assert out.exit_code == 1
+
+
+def test_vague_cleared_by_statement_number_from_unrelated_segment_rejected(kb):
+    # the statement's number is in a quote, but from a segment outside the record's own and the offered text
+    redraft(kb, "--flagged")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", with_quote("Pages load in 5 seconds.", SEAT))
+    r = redraft_report(kb, None)
+    assert ("REQ-NF-001", "vague.cleared_without_target") in rejected(r)
+
+
+def test_vague_cleared_by_target_from_offered_segment_accepted(kb):
+    target = "Pages load in 2 seconds."
+    sync(kb, DOC + f"\n# Speed target\n\n{target}\n")
+    redraft(kb, "REQ-NF-001", "--new")
+    put(kb, "kb/requirements/REQ-NF-001.yaml",
+        with_quote(target, f"  - source: SRC-n#seg-03\n    text: {target!r}\n"))
+    r = redraft_report(kb, None)
+    assert (r.rejected, r.redrafted) == ([], ["REQ-NF-001"])
 
 
 def test_vague_removed_on_rejected_requirement_is_fine(kb):

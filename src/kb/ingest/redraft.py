@@ -140,7 +140,7 @@ def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
     fence = _fence(content)
     # the file holds copied quotes, so it is source text too: flagged like a segment
     flag = [INJECTION_FLAG] if has_injection(content) else []
-    lines = [f"## {rid}", "", "Reasons: " + "; ".join(why), "", f"Current file `{path}`:", "", *flag, f"{fence}{lang}\n{content}{fence}", ""]
+    lines = [f"## {rid}", "", "Reasons: " + "; ".join(why), "", f"Current file {inline_code(path)}:", "", *flag, f"{fence}{lang}\n{content}{fence}", ""]
     quotes = repo.records[rid].evidence.quotes if repo.records[rid].evidence else []
     refs = sorted({q.source for q in quotes})
     if not refs:

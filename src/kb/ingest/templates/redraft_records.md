@@ -4,8 +4,9 @@
 2. Keep every record's ID and file.
 3. Quote word for word from the current segment text below.
 4. Never invent numbers. Every number in a statement must be in a quote.
-5. Remove `vague` only when the new quote states a measurable target. If the document is still
-   vague, keep the flag and leave the statement as it is.
+5. Remove `vague` only when the statement now states a measurable target whose number is in a quote
+   from the record's own segments or the new text below. If the document is still vague, keep the flag
+   and leave the statement as it is.
 6. A requirement is edited in place. A live ADR or INV is never edited: draft a new record with
    `supersedes: <id>`, using the next free ID.
 7. If the cited text is gone and no replacement exists, set `status: rejected` on the requirement.

@@ -12,7 +12,7 @@ _NUMBER = re.compile(r"\d[\d,.]*")
 _ID_LIKE = re.compile(r"\b[A-Z]+(?:-[A-Z]+)*-\d+\b|\bseg-\d+\b")  # REQ-F-001, ADR-0002, seg-03: not numbers
 
 
-def _numbers(text: str) -> set[str]:
+def numbers(text: str) -> set[str]:
     """Number tokens with thousands separators and trailing punctuation removed (units are optional)."""
     return {m.group().replace(",", "").rstrip(".") for m in _NUMBER.finditer(_ID_LIKE.sub(" ", text))}
 
@@ -57,8 +57,8 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
                 else:  # a superseded or rejected record stays as it was, even when its document moved on
                     issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
                                         "warning", path, rid))
-        grounded = set().union(*(_numbers(q.text) for q in ev.quotes))
-        missing = sorted(_numbers(_claimed_text(rec)) - grounded)
+        grounded = set().union(*(numbers(q.text) for q in ev.quotes))
+        missing = sorted(numbers(_claimed_text(rec)) - grounded)
         if missing:
             what = "title and body" if isinstance(rec, Decision) else "statement"
             issues.append(Issue("statement.number_not_in_quote", f"{rid}: {what} numbers not in any quote: {', '.join(missing)}", "warning", path, rid))

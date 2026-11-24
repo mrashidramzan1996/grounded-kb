@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from kb.config.load import load_config
+from kb.gates.quotes import numbers
 from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.ingest.redraft import (
@@ -37,7 +38,6 @@ from kb.textfmt import inline_code
 
 _SELECTABLE = re.compile(rf"{REQ_ID}|{ADR_ID}|{INV_ID}")
 _REF = re.compile(SOURCE_REF)
-_DIGIT = re.compile(r"\d")
 _TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
 _BRIEF_BASE = re.compile(r"this brief was written at commit ([0-9a-f]+)\.")
 NO_REDRAFT = f"no redraft selection in {REDRAFT_IDS}; run `kb redraft` first"
@@ -226,7 +226,16 @@ def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[
     return issues
 
 
-def _flag_issues(head: KbRepo, before: KbRepo) -> list[Issue]:
+def _targeted(rec: Requirement, old: Requirement, offered: set[str]) -> bool:
+    """Whether a number of the statement is in a quote citing a segment the record cited at base or an offered one:
+    the target comes from the record's own text or the new text, not from an unrelated quote."""
+    own = {q.source for q in old.evidence.quotes} if old.evidence else set()
+    stated = numbers(rec.statement)
+    quotes = rec.evidence.quotes if rec.evidence else []
+    return any(stated & numbers(q.text) for q in quotes if q.source in own | offered)
+
+
+def _flag_issues(head: KbRepo, before: KbRepo, offered: set[str]) -> list[Issue]:
     """vague.cleared_without_target, and flag.cleared for any other flag removed since base."""
     issues = []
     for rid, rec in sorted(head.records.items()):
@@ -237,11 +246,10 @@ def _flag_issues(head: KbRepo, before: KbRepo) -> list[Issue]:
         for flag in [f for f in old.flags if f not in rec.flags]:
             if flag != "vague":
                 issues.append(Issue("flag.cleared", f"{rid}: {flag} was removed; reviewer to confirm", "warning", path, rid))
-                continue
-            quotes = rec.evidence.quotes if rec.evidence else []
-            if rec.status != "rejected" and not any(_DIGIT.search(q.text) for q in quotes):
+            elif rec.status != "rejected" and not _targeted(rec, old, offered):
                 issues.append(Issue("vague.cleared_without_target",
-                                    f"{rid}: vague was removed but no quote states a measurable target", path=path, record=rid))
+                                    f"{rid}: vague was removed but the statement's target is not quoted from its own or the "
+                                    "offered text", path=path, record=rid))
     return issues
 
 
@@ -279,7 +287,7 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
     drafting = _drafting(head, before, set(segments))
     fresh = _fresh(before, segments)
     sources = [i for i in g.issues if i.code.startswith("source.")] + deleted_sources(head, before, ref)
-    flags = _flag_issues(head, before)
+    flags = _flag_issues(head, before, set(segments))
     rejected = (
         [i for i in g.mine if i.severity == "error"]
         + _scope_issues(head, before, g.drafted, chosen | set(superseding) | set(drafting), chosen, fresh)

@@ -97,6 +97,14 @@ def test_brief_flags_injection_in_record_content(md_repo_ingested):
     assert brief.count(INJECTION_FLAG) == 1  # REQ-F-001 and the cited segment are clean
 
 
+def test_brief_record_path_is_inline_code(md_repo_ingested):
+    root = md_repo_ingested
+    put(root, "kb/requirements/REQ-F-0`01.yaml", req_yaml("REQ-F-001"))  # a file name holding a backtick
+    repo = KbRepo.load(root)
+    brief = build_redraft_brief(root, repo, select(repo, ["REQ-F-001"], flagged_=False, changed=False, before=None), "abc")
+    assert "Current file ``kb/requirements/REQ-F-0`01.yaml``:" in brief
+
+
 def test_missing_segment_listed_not_crash(md_repo_ingested):
     root = md_repo_ingested
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", seg="seg-09"))

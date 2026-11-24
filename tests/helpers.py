@@ -386,7 +386,7 @@ QUOTE = "A seat costs 5 EUR."
 
 
 def req_yaml(rid: str, text: str = QUOTE, flags: tuple[str, ...] = (), seg: str = "seg-01") -> str:
-    flag_lines = "".join(f"flags:\n- {f}\n" for f in flags[:1]) if flags else ""
+    flag_lines = "flags:\n" + "".join(f"- {f}\n" for f in flags) if flags else ""
     return (
         f"id: {rid}\nstatement: {text!r}\nevidence:\n  quotes:\n  - source: SRC-n#{seg}\n    text: {text!r}\nmodules:\n- MOD-a\n{flag_lines}"
     )

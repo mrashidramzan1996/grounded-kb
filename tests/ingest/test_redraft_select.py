@@ -2,6 +2,7 @@ from helpers import QUOTE, adr_md, invoke, put, req_yaml
 
 from kb.ingest.redraft import changed_segments, citing, flagged, segment_hashes, unfound
 from kb.records.repo import KbRepo
+from kb.yamlio import load_yaml_strict
 
 def resync(root, text: str) -> KbRepo:
     put(root, "docs/n.md", text)
@@ -39,3 +40,7 @@ def test_unfound_lists_records_whose_quote_vanished(md_repo_ingested):
     put(md_repo_ingested, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", text="A seat is free."))
     put(md_repo_ingested, "kb/requirements/REQ-F-003.yaml", req_yaml("REQ-F-003", seg="seg-09"))
     assert unfound(KbRepo.load(md_repo_ingested)) == ["REQ-F-002", "REQ-F-003"]
+
+
+def test_req_yaml_writes_every_flag():
+    assert load_yaml_strict(req_yaml("REQ-F-001", flags=("vague", "conflicting")))["flags"] == ["vague", "conflicting"]
