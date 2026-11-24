@@ -256,6 +256,16 @@ def test_code_and_test_changed_together_is_co_changed(tmp_path):
     assert only_code.notes == ()
 
 
+def test_co_changed_only_on_resolved_anchor(tmp_path):
+    chg = changes(["billing/seats.py", "tests/test_seats.py"])
+    gone = one(tmp_path, [feature(claim(code="billing/seats.py#gone"))], "FEAT-001.C1", outcomes={TEST: "passed"}, chg=chg)
+    assert gone.status == "broken" and gone.notes == ()
+    chg = changes(["web/app.ts", "tests/test_seats.py"])
+    no_adapter = one(tmp_path, [feature(claim(code="web/app.ts#addSeat"))], "FEAT-001.C1", outcomes={TEST: "passed"},
+                     chg=chg)
+    assert no_adapter.status == "unverified" and no_adapter.notes == ()
+
+
 # --- requirement rules ---------------------------------------------------------------------------
 
 def test_requirement_tests_pass_is_verified_e2(tmp_path):
@@ -319,6 +329,14 @@ def test_stale_requirement_keeps_code_level(tmp_path):
     assert (built.status, built.level) == ("stale", "E1")
     unbuilt = one(tmp_path, [feature(claim(code=None)), requirement()], "REQ-F-001", outcomes={TEST: "passed"}, chg=chg)
     assert (unbuilt.status, unbuilt.level) == ("stale", "E0")
+
+
+def test_requirement_with_unverified_claim_is_not_verified(tmp_path):
+    recs = [feature(claim(), claim("FEAT-001.C2", code="web/app.ts#addSeat", test=TEST_B)), requirement()]
+    got = verdicts(tmp_path, recs, outcomes={TEST: "passed", TEST_B: "passed"})
+    assert got["FEAT-001.C1"].status == "verified"
+    assert got["FEAT-001.C2"].status == "unverified"
+    assert state(got["REQ-F-001"]) == ("unverified", "E1", ("claim FEAT-001.C2 is unverified",), ())
 
 
 def test_broken_beats_stale(tmp_path):
@@ -418,6 +436,13 @@ def test_tests_needed_groups_refs_by_runner_module(tmp_path):
         "MOD-qa": ["tests/qa/test_s.py::test_s"],
         None: ["tests/test_inv.py::test_i"],
     }
+
+
+def test_requirement_runner_falls_back_to_feature_module(tmp_path):
+    recs = [Feature(id="FEAT-002", title="t", module="MOD-billing"), requirement(features=["FEAT-002"], modules=[])]
+    marks = {"tests/test_seats.py": [("verify", "REQ-F-001", 5, TEST_B)]}
+    inp = make_input(tmp_path, recs, markers=marks)
+    assert tests_needed(inp, all_of(recs)) == {"MOD-billing": [TEST_B]}
 
 
 def test_tests_needed_covers_requirement_claims_outside_affected(tmp_path):

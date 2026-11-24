@@ -143,8 +143,6 @@ class _Engine:
 
         if claim.code:
             path = claim.code.partition("#")[0]
-            if changes is not None and path in changes.files and any(t.partition("::")[0] in changes.files for t in tests):
-                notes.add("co-changed")
             try:
                 resolved = resolve_anchor(self.inp.root, claim.code, self.symbols) is not None
             except NoAdapter:
@@ -154,6 +152,8 @@ class _Engine:
             if not resolved:
                 hint = "; file has syntax errors" if self.symbols.has_syntax_errors(path) else ""
                 return done("broken", "E0", f"anchor {claim.code} no longer resolves{hint}")
+            if changes is not None and path in changes.files and any(t.partition("::")[0] in changes.files for t in tests):
+                notes.add("co-changed")
             base_fp, head_fp = changes.fingerprints.get(claim.code, (None, None)) if changes else (None, None)
             if base_fp is not None and head_fp is not None and base_fp != head_fp:
                 notes.add("changed")
@@ -207,7 +207,15 @@ class _Engine:
         if not tests:
             return "built", ["no linked test"], False, built
         result = self.judge_tests(tests)
-        return result.status or "verified", list(result.reasons), result.flaky, built
+        status: State = result.status or "verified"
+        reasons = list(result.reasons)
+        if status != "broken":
+            # verified only when every claim is: a claim with no adapter, test or runner caps it
+            unverified = [c.id for _, c in claims if self.claim_verdict(c.id).status == "unverified"]
+            if unverified:
+                status = "unverified"
+                reasons += [f"claim {cid} is unverified" for cid in unverified]
+        return status, reasons, result.flaky, built
 
     def requirement_verdict(self, req: Requirement) -> Verdict:
         tests = self.requirement_tests(req.id)
