@@ -216,8 +216,8 @@ def acme_repo_drafted(acme_repo_ingested, fixtures):
 
 @pytest.fixture
 def verify_repo(fixtures, tmp_path, monkeypatch):
-    """kb_valid as a git repo on main, with a pytest preset on MOD-billing and `.kb/` gitignored (as `kb init`
-    does), and the subprocess pytest resolving to this interpreter."""
+    """kb_valid as a git repo on main, with a pytest preset on MOD-billing and only `.kb/` gitignored (as `kb init`
+    does: a test run must not leave `__pycache__/`), and the subprocess pytest resolving to this interpreter."""
     import sys
 
     from helpers import make_git_repo
@@ -227,5 +227,5 @@ def verify_repo(fixtures, tmp_path, monkeypatch):
     config = (fixtures / "kb_valid/kb.config.yaml").read_text()
     config = config.replace("  risk: high\n", "  risk: high\n  tests:\n    preset: pytest\n", 1)
     return make_git_repo(
-        fixtures / "kb_valid", tmp_path, extra={"kb.config.yaml": config, ".gitignore": ".kb/\n__pycache__/\n"}
+        fixtures / "kb_valid", tmp_path, extra={"kb.config.yaml": config, ".gitignore": ".kb/\n"}
     )

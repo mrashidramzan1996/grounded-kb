@@ -69,15 +69,18 @@ def requirement_modules(config: KbConfig, repo: KbRepo) -> dict[str, list[str]]:
 
 
 def verified_ids(root: Path) -> set[str] | None:
-    """Requirements the last `kb verify` found verified, when it ran on HEAD and the tree is still clean;
-    None when there is no such run (no status.json, another commit, local changes, or unreadable)."""
+    """Requirements the last `kb verify` found verified, when it checked every claim (scope "all") on HEAD and
+    the tree is still clean; None otherwise (no status.json, a partial run, another commit, local changes,
+    or unreadable). A run on the affected claims only would undercount."""
     root = Path(root)
     try:
         data = read_regular(root, STATUS_PATH)
         if data is None:
             return None
         doc = json.loads(data)
-        if not isinstance(doc, dict) or doc.get("head") != head_commit(root) or is_dirty(root, "."):
+        if not isinstance(doc, dict) or doc.get("scope") != "all":
+            return None
+        if doc.get("head") != head_commit(root) or is_dirty(root, "."):
             return None
         verdicts = doc.get("verdicts")
         if not isinstance(verdicts, list):

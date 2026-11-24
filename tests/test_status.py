@@ -113,12 +113,24 @@ def test_status_shows_verified_after_verify_on_clean_head(verify_repo):
 
 def test_status_without_fresh_verify_omits_verified(verify_repo):
     r = invoke(verify_repo, "status")
-    assert "verified" not in r.stdout and "run `kb verify` for verified counts" in r.stderr
+    assert "verified" not in r.stdout and "run `kb verify --all` for verified counts" in r.stderr
     assert invoke(verify_repo, "verify", "--all").exit_code == 0
     write(verify_repo, "services/billing/seats.py", "def remove_seat(account, seat): ...\n")  # dirty tree
     r = invoke(verify_repo, "status")
-    assert "verified" not in r.stdout and "run `kb verify` for verified counts" in r.stderr
+    assert "verified" not in r.stdout and "run `kb verify --all` for verified counts" in r.stderr
     git(verify_repo, "commit", "-qam", "edit")  # clean again, but HEAD moved past the verified commit
     r = invoke(verify_repo, "status")
-    assert "verified" not in r.stdout and "run `kb verify` for verified counts" in r.stderr
+    assert "verified" not in r.stdout and "run `kb verify --all` for verified counts" in r.stderr
     assert "verified" not in json.loads(invoke(verify_repo, "status", "--format", "json").stdout)["total"]
+
+
+def test_status_ignores_partial_verify(verify_repo):
+    git(verify_repo, "checkout", "-q", "-b", "feature")
+    write(verify_repo, "tests/test_seats.py", (verify_repo / "tests/test_seats.py").read_text() + "\n")
+    git(verify_repo, "commit", "-qam", "touch the claim's test")
+    r = invoke(verify_repo, "verify")  # base: main; only the affected claims are checked
+    assert r.exit_code == 0, r.output
+    assert json.loads((verify_repo / ".kb/cache/status.json").read_text())["scope"] == "affected"
+    assert git(verify_repo, "status", "--porcelain") == ""
+    r = invoke(verify_repo, "status")
+    assert "verified" not in r.stdout and "run `kb verify --all` for verified counts" in r.stderr

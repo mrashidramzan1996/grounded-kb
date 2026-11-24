@@ -68,6 +68,15 @@ def test_pytest_preset_outcomes(project):
                           A + "TestSeats::test_x": "passed", A + "test_nope": "missing"}
 
 
+def test_test_run_leaves_no_pycache(project, monkeypatch):
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    (project / "tests/helper_mod.py").write_text("X = 1\n")
+    (project / "tests/test_imp.py").write_text("import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent))\n"
+                                               "import helper_mod\n\ndef test_imp():\n    assert helper_mod.X\n")
+    assert _runner().run(project, ["tests/test_imp.py::test_imp"]).outcomes == {"tests/test_imp.py::test_imp": "passed"}
+    assert list(project.rglob("__pycache__")) == []
+
+
 def test_parametrized_cases_all_must_pass(project):
     r = _runner().run(project, [A + "test_param_ok", A + "test_param_bad"])
     assert r.outcomes == {A + "test_param_ok": "passed", A + "test_param_bad": "failed"}

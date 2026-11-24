@@ -93,6 +93,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
         issues=issues,
         blocking=blocking_issues(issues, list(config.policy.fail_on)),
         mode=config.policy.mode,
+        scope="all" if all_ or changes is None else "affected",
         pr=pr,
         required=required,
         max_items=config.review.max_items_per_pr,

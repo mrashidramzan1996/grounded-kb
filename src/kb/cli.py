@@ -251,7 +251,7 @@ def status(
     except TOOL_ERRORS as e:
         raise _fail(e) from e
     if verified is None:
-        typer.echo("run `kb verify` for verified counts", err=True)
+        typer.echo("run `kb verify --all` for verified counts", err=True)
     failed = sorted({i.path for i in repo.errors if i.path})
     if repo.errors:
         typer.echo(f"{len(failed)} KB files failed to load (run `kb check`): {', '.join(failed[:3])}", err=True)

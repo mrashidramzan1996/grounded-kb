@@ -70,7 +70,7 @@ def test_base_computes_changes_and_affected_only(verify_repo):
     commit(verify_repo)
     r = invoke(verify_repo, "verify", "--base", "main", "--format", "json")
     data = json.loads(r.stdout)
-    assert data["base"] == git(verify_repo, "rev-parse", "main").strip()
+    assert data["base"] == git(verify_repo, "rev-parse", "main").strip() and data["scope"] == "affected"
     assert "INV-001" not in verdicts(r.stdout)  # not affected by the change
     assert verdicts(r.stdout)["FEAT-001.C1"]["status"] == "broken"
     blocking = data["blocking"]
@@ -83,7 +83,8 @@ def test_json_stdout_only_messages_stderr(verify_repo):
     r = invoke(verify_repo, "verify", "--all", "--format", "json")
     assert r.exit_code == 0, r.output
     data = json.loads(r.stdout)
-    assert set(data) == {"base", "head", "mode", "verdicts", "issues", "blocking", "summary"}
+    assert set(data) == {"base", "head", "mode", "scope", "verdicts", "issues", "blocking", "summary"}
+    assert data["scope"] == "all"
     assert set(data["summary"]) == {"broken", "stale", "unverified", "verified", "errors", "warnings"}
     assert set(data["verdicts"][0]) == {"id", "kind", "status", "level", "notes", "reasons", "tests"}
     assert r.stdout == (verify_repo / STATUS_PATH).read_text()
@@ -179,7 +180,7 @@ def test_no_default_branch_acts_as_all(verify_repo):
     r = invoke(verify_repo, "verify", "--format", "json")
     assert r.exit_code == 0, r.output
     data = json.loads(r.stdout)
-    assert data["base"] is None and "INV-001" in verdicts(r.stdout)
+    assert data["base"] is None and data["scope"] == "all" and "INV-001" in verdicts(r.stdout)
 
 
 def test_unknown_forge_value_exits_2(verify_repo):

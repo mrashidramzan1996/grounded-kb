@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from kb.cache import write_cache
 from kb.issues import Issue
@@ -23,6 +24,7 @@ VERDICT_CODES = frozenset({
 })
 APPROVAL_CODES = frozenset({"missing_owner_approval", "owner_approval.deferred"})
 _OWN_CATEGORY = frozenset({"decision_guard", "missing_owner_approval", "stale_context"})
+Scope = Literal["all", "affected"]
 _STATUS_ORDER = {"broken": 0, "stale": 1, "unverified": 2}
 
 
@@ -34,6 +36,7 @@ class VerifyReport:
     issues: list[Issue]  # run_check issues + verdict issues + stale_context + approval issues, sorted
     blocking: list[Issue]
     mode: str
+    scope: Scope = "affected"  # "all": every live claim was checked (--all, or no base resolved)
     pr: PullRequest | None = None  # the forge's pull request, when there is one
     required: dict[str, list[str]] | None = None  # owners who must approve; None when not checked (no PR)
     max_items: int = 40  # config.review.max_items_per_pr: rows in the comment's claims table
@@ -101,6 +104,7 @@ def render_json(r: VerifyReport) -> str:
         "base": r.base_ref,
         "head": r.head,
         "mode": r.mode,
+        "scope": r.scope,
         "verdicts": [
             {
                 "id": v.id, "kind": v.kind, "status": v.status, "level": v.level,

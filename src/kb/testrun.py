@@ -75,6 +75,7 @@ class CommandRunner:
     def _once(self, root: Path, refs: list[str]) -> tuple[dict[str, Outcome], str, bool]:
         """(outcomes, log tail, whether a junit report was produced)."""
         env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_GIT_ENV}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"  # no __pycache__/ left behind: a run must not dirty the tree
         with tempfile.TemporaryDirectory(prefix="kb-junit-") as tmp:
             junit = Path(tmp) / "junit.xml"
             argv: list[str] = []
