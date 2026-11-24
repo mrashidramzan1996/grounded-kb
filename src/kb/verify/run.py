@@ -10,7 +10,6 @@ from kb.gitfiles import (
     find_default_branch,
     head_commit,
     merge_base,
-    resolve_base,
     rev_parse,
 )
 from kb.issues import Issue
@@ -27,16 +26,17 @@ from kb.verify.stale_context import stale_context
 
 
 def _bases(root: Path, base: str | None, all_: bool) -> tuple[str | None, str | None]:
-    """(base branch name, merge-base commit). No base given: the default branch, unless --all; when it does
-    not resolve, (None, None) and every claim is checked."""
+    """(base branch name, merge-base commit). No base given: the default branch, unless --all; with no default
+    branch at all, (None, None) and every claim is checked. A default branch without a merge-base (a shallow
+    clone) is a GitError with the fetch-depth hint, not a silent full run."""
     if base:
         ref = merge_base(root, base)  # GitError, with the fetch-depth hint, when there is none
         # merge_base falls back to origin/<base> (a CI checkout has no local base branch): so do we
         return (base if rev_parse(root, base) is not None else f"origin/{base}"), ref
     if not all_:
-        ref = resolve_base(root)
-        if ref is not None:
-            return find_default_branch(root), ref
+        branch = find_default_branch(root)
+        if branch is not None:
+            return branch, merge_base(root, branch)
     return None, None
 
 

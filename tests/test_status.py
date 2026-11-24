@@ -134,3 +134,17 @@ def test_status_ignores_partial_verify(verify_repo):
     assert git(verify_repo, "status", "--porcelain") == ""
     r = invoke(verify_repo, "status")
     assert "verified" not in r.stdout and "run `kb verify --all` for verified counts" in r.stderr
+
+
+def test_status_unreadable_status_json_is_ignored(verify_repo, monkeypatch):
+    import kb.status
+
+    assert invoke(verify_repo, "verify", "--all").exit_code == 0
+
+    def unreadable(root, rel):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(kb.status, "read_regular", unreadable)
+    r = invoke(verify_repo, "status")
+    assert r.exit_code == 0, r.output
+    assert "verified" not in r.stdout and "run `kb verify --all` for verified counts" in r.stderr

@@ -1,3 +1,4 @@
+import os
 import tempfile
 from pathlib import Path
 
@@ -222,7 +223,7 @@ def verify_repo(fixtures, tmp_path, monkeypatch):
 
     from helpers import make_git_repo
 
-    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}:{__import__('os').environ['PATH']}")
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}:{os.environ['PATH']}")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     config = (fixtures / "kb_valid/kb.config.yaml").read_text()
     config = config.replace("  risk: high\n", "  risk: high\n  tests:\n    preset: pytest\n", 1)

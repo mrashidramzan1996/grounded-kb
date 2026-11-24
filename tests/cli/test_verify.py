@@ -175,6 +175,21 @@ def test_shallow_clone_exits_2_with_hint(verify_repo):
     assert "fetch-depth: 0" in r.stderr and "Traceback" not in r.output
 
 
+def test_shallow_clone_default_path_exits_2_with_hint(verify_repo, tmp_path):
+    git(verify_repo, "checkout", "-q", "-b", "feature")
+    for n in (1, 2):  # two commits: depth 1 cuts the branch off from main's tip
+        (verify_repo / "services/billing/notes.py").write_text(f"X = {n}\n")
+        commit(verify_repo, f"extra commit {n}")
+    git(verify_repo, "checkout", "-q", "main")  # the remote's HEAD names its default branch
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", "--depth", "1", "--no-single-branch", "--branch", "feature",
+        f"file://{verify_repo}", str(clone))
+    assert git(clone, "rev-parse", "--verify", "origin/main").strip()  # the default branch resolves...
+    r = invoke(clone, "verify")  # ...but its merge-base with HEAD is not in the shallow history
+    assert r.exit_code == 2, r.output
+    assert "fetch-depth: 0" in r.stderr and "Traceback" not in r.output
+
+
 def test_no_default_branch_acts_as_all(verify_repo):
     git(verify_repo, "branch", "-m", "main", "trunk")
     r = invoke(verify_repo, "verify", "--format", "json")

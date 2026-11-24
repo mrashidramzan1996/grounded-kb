@@ -90,7 +90,7 @@ def verified_ids(root: Path) -> set[str] | None:
             if isinstance(v, dict) and v.get("kind") == "requirement" and v.get("status") == "verified"
             and isinstance(v.get("id"), str)
         }
-    except (UnsafePath, ValueError, GitError):
+    except (UnsafePath, ValueError, GitError, OSError):
         return None
 
 
