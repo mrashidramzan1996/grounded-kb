@@ -255,7 +255,7 @@ class TestsCfg(_Model):
 - Produces the port, in `kb/ports/tests.py`:
 
 ```python
-Outcome = Literal["passed", "failed", "skipped", "missing", "flaky"]
+Outcome = Literal["passed", "failed", "skipped", "missing", "flaky", "no_runner"]
 
 @dataclass(frozen=True)
 class TestRun:
@@ -270,7 +270,7 @@ class TestRunner(Protocol):
   - `CommandRunner(cfg: TestsCfg)`.
   - `parse_junit(xml: bytes, refs: list[str]) -> dict[str, Outcome]`.
   - `runner_for(config: KbConfig, module_id: str | None) -> CommandRunner | None`.
-  - `run_tests(root, config, refs_by_module: dict[str | None, list[str]], reruns: int = 2) -> dict[str, Outcome]`. Refs under `None` (no module with a `tests` config) map to `missing`, and the caller turns that into an `unverified` reason "no test command: set modules[].tests".
+  - `run_tests(root, config, refs_by_module: dict[str | None, list[str]], reruns: int = 2) -> dict[str, Outcome]`. Refs under `None` (no module with a `tests` config) map to `no_runner` without running anything; the engine turns that into `unverified` with the reason "no test command: set modules[].tests".
 
 **Junit matching.** A ref `path::[Class::]func` matches a `<testcase>` when both of these hold:
 - its `name`, with any `[...]` parametrisation suffix stripped, equals `func`;
@@ -373,7 +373,7 @@ class EngineInput:
     index: AnchorIndex
     outcomes: dict[str, Outcome]  # every ref in tests_needed(...) for the affected set
 
-def tests_needed(inp_without_outcomes, affected: Affected) -> dict[str | None, list[str]]:  # by runner module
+def tests_needed(inp: EngineInput, affected: Affected) -> dict[str | None, list[str]]:  # by runner module; inp.outcomes is ignored (pass {})
 def derive(inp: EngineInput, affected: Affected) -> list[Verdict]:  # sorted by (kind order claim<requirement<invariant, id)
 ```
 
@@ -384,6 +384,7 @@ def derive(inp: EngineInput, affected: Affected) -> list[Verdict]:  # sorted by 
 4. Otherwise the level is E1. Add the note `changed` when `changes.fingerprints[anchor]` has two different non-None values.
 5. The tests are `claim.test` plus `index.tests_for(claim.id)`. With none: `unverified`, E1, "no linked test".
 6. A linked test does not resolve (`resolve_test`): `broken`, E1, "linked test <ref> was deleted".
+6b. Any outcome is `no_runner`: `unverified`, E1, "no test command: set modules[].tests".
 7. Any outcome is `failed`, `skipped` or `missing`: `broken`, E1, "<ref> <outcome>" for each.
 8. Any outcome is `flaky`: `unverified`, E1, with the note `flaky`, "<ref> is flaky; quarantined".
 9. Otherwise `verified`, E2.
