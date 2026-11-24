@@ -33,7 +33,7 @@ def test_marker_in_method_uses_double_colon(tmp_path):
 
 def test_marker_outside_test_has_no_ref(tmp_path):
     _, idx = index(tmp_path, {
-        TESTS: "# r[verify REQ-F-002]\n\n\ndef test_a():\n    pass\n",
+        TESTS: "# r[verify REQ-F-002]\nX = 1\n\n\ndef test_a():\n    pass\n",
         "services/billing/seats.py": "# r[impl REQ-F-002]\ndef remove_seat():\n    pass\n",
     })
     assert idx.tests_for("REQ-F-002") == []
@@ -87,3 +87,22 @@ def test_write_cache_importable():
     from kb.cache import write_cache
     from kb.ingest import brief
     assert brief.write_cache is write_cache
+
+
+def test_marker_above_test_function_links_test(tmp_path):
+    _, idx = index(tmp_path, {TESTS: (
+        "import pytest\n\n\n"
+        "# r[verify REQ-F-002]\ndef test_a():\n    pass\n\n\n"
+        "# r[verify REQ-F-003]\n\n@pytest.mark.slow\ndef test_b():\n    pass\n"
+    )})
+    assert idx.tests_for("REQ-F-002") == [f"{TESTS}::test_a"]
+    assert idx.tests_for("REQ-F-003") == [f"{TESTS}::test_b"]
+
+
+def test_marker_above_non_test_def_has_no_ref(tmp_path):
+    _, idx = index(tmp_path, {TESTS: (
+        "# r[verify REQ-F-002]\ndef helper():\n    pass\n\n\n"
+        "# r[verify REQ-F-003]\nX = 1\n\n\ndef test_c():\n    pass\n"
+    )})
+    assert idx.tests_for("REQ-F-002") == []
+    assert idx.tests_for("REQ-F-003") == []

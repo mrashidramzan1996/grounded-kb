@@ -65,6 +65,14 @@ def _line_starts(source: bytes) -> list[int]:
     return starts
 
 
+def _only_comments_between(source: bytes, starts: list[int], line: int, def_start: int) -> bool:
+    """Whether the lines after marker line `line` up to the definition at `def_start` are all blank, comment or decorator lines."""
+    if line >= len(starts) or def_start < starts[line]:
+        return False
+    gap = source[starts[line]:def_start].decode("utf-8", errors="replace")
+    return all(not t or t.startswith(("#", "@")) for t in (ln.strip() for ln in gap.splitlines()))
+
+
 def _card(path: str, source: bytes, markers: list[Marker], config: KbConfig) -> FileCard:
     adapter = adapter_for(path)
     symbols = adapter.symbols(path, source) if adapter else []
@@ -75,6 +83,8 @@ def _card(path: str, source: bytes, markers: list[Marker], config: KbConfig) -> 
         ref = None
         offset = starts[min(m.line - 1, len(starts) - 1)]
         inside = [s for s in tests if s.start_byte <= offset < s.end_byte]
+        if not inside:
+            inside = [s for s in tests if _only_comments_between(source, starts, m.line, s.start_byte)][:1]
         if inside:
             inner = min(inside, key=lambda s: s.end_byte - s.start_byte)
             ref = f"{path}::{inner.name.replace('.', '::')}"
