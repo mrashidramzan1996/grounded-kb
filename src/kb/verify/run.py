@@ -17,7 +17,7 @@ from kb.ports.forge import Forge
 from kb.records.repo import KbRepo
 from kb.testrun import run_tests
 from kb.verify.affected import affected
-from kb.verify.approvals import owner_approval, required_owners
+from kb.verify.approvals import codeowners_rules, owner_approval, required_owners
 from kb.verify.changes import compute_changes
 from kb.verify.engine import EngineInput, Verdict, derive, snapshot, tests_needed
 from kb.verify.index import INDEX_PATH, build_index
@@ -76,9 +76,11 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
         stale_context(root, config, repo, base_branch, base_ref, list(changes.files))
         if base_branch and base_ref and changes is not None else []
     )
-    # The project's tests are untrusted code: everything read from the tree or the forge's event is read first.
+    # The project's tests are untrusted code: everything read from the tree or the forge's event is read first
+    # (config, repos, changes and index above; the PR, HEAD, CODEOWNERS and the parsed head files here).
     pr = forge.pull_request() if forge else None
     head = head_commit(root)
+    owners_rules = codeowners_rules(root) if forge and pr else None
     inp = snapshot(EngineInput(root, config, repo, base_repo, changes, index, {}), hit)
     inp = replace(inp, outcomes=run_tests(root, config, tests_needed(inp, hit)))
     verdicts = derive(inp, hit)
@@ -86,7 +88,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     issues = check.issues + verdict_issues(verdicts, repo) + stale
     required = None
     if forge and pr:
-        required = required_owners(root, config, repo, base_repo, changes, verdicts)
+        required = required_owners(root, config, repo, base_repo, changes, verdicts, rules=owners_rules)
         issues += owner_approval(forge, pr, config, required)
 
     issues = sorted(issues, key=lambda i: (*i.sort_key, i.message))

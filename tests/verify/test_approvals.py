@@ -167,3 +167,15 @@ def test_codeowners_github_lookup_order(tmp_path):
     (tmp_path / "CODEOWNERS").write_text("src/** @root\n")
     req = required_owners(tmp_path, cfg(), repo_of({}), None, changes("src/a/x.py"), [])
     assert list(req) == ["@gh"]
+
+
+def test_rules_taken_earlier_override_the_working_tree(tmp_path):
+    from kb.verify.approvals import codeowners_rules
+
+    (tmp_path / "CODEOWNERS").write_text("src/** @first\n")
+    rules = codeowners_rules(tmp_path)
+    (tmp_path / "CODEOWNERS").write_text("* @mallory\n")
+    req = required_owners(tmp_path, cfg(), repo_of({}), None, changes("src/a/x.py"), [], rules=rules)
+    assert req == {"@first": ["changes src/a/x.py"]}
+    none = required_owners(tmp_path, cfg(), repo_of({}), None, changes("src/a/x.py"), [], rules=None)
+    assert none == {"@alice-owner": ["changes src/a/x.py"]}  # no CODEOWNERS when snapshotted: module owners

@@ -234,3 +234,29 @@ def test_pr_snapshot_taken_before_tests(verify_repo, tmp_path):
     assert verdicts(r.stdout)["FEAT-001.C1"]["status"] == "verified"
     assert {"code": "missing_owner_approval", "record": None} in data["blocking"]
     assert any(head(verify_repo)[:7] in i["message"] for i in data["issues"] if i["code"] == "missing_owner_approval")
+
+
+def test_codeowners_snapshot_taken_before_tests(verify_repo):
+    """A linked test that rewrites CODEOWNERS (and kb.config.yaml) mid-run cannot change who must approve: both are
+    read before any test runs."""
+    (verify_repo / "CODEOWNERS").write_text("services/** @acme/billing\n")
+    commit(verify_repo, "codeowners")
+    git(verify_repo, "checkout", "-q", "-b", "feature")
+    seats = verify_repo / "services/billing/seats.py"
+    seats.write_text(seats.read_text() + "\n\ndef add_seat(account):\n    return 1\n")
+    test = verify_repo / CLAIM_TEST
+    test.write_text(test.read_text().replace("    ...\n", (
+        "    import pathlib\n"
+        "    pathlib.Path('CODEOWNERS').write_text('* @mallory\\n')\n"
+        "    cfg = pathlib.Path('kb.config.yaml')\n"
+        "    cfg.write_text(cfg.read_text().replace('owner: team-billing', 'owner: team-platform'))\n"
+    ), 1))
+    commit(verify_repo)
+    path = forge_file(verify_repo.parent, verify_repo)
+    r = invoke(verify_repo, "verify", "--forge", f"local:{path}", "--format", "json")
+    assert r.exit_code == 0, r.output
+    assert (verify_repo / "CODEOWNERS").read_text() == "* @mallory\n"  # the test did run and rewrite it
+    assert verdicts(r.stdout)["FEAT-001.C1"]["status"] == "verified"
+    missing = [i["message"] for i in json.loads(r.stdout)["issues"] if i["code"] == "missing_owner_approval"]
+    assert missing and all(m.startswith("@acme/billing has not approved") for m in missing)
+    assert "@mallory" not in r.stdout and "@acme/platform" not in r.stdout

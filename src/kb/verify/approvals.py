@@ -18,9 +18,13 @@ from kb.verify.engine import Verdict
 # GitHub uses the first CODEOWNERS found in this order: .github/, then the root, then docs/.
 _CODEOWNERS = tuple(p for p in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS") if p in CODEOWNERS_LOCATIONS)
 _SHOWN_PATHS = 3
+CodeownersRules = list[tuple[str, list[str]]]
+_READ_NOW = object()  # required_owners default: read CODEOWNERS from the working tree when called
 
 
-def _codeowners_rules(root: Path):
+def codeowners_rules(root: Path) -> CodeownersRules | None:
+    """The first CODEOWNERS file's rules (GitHub's lookup order), or None when there is none. `kb verify` reads them
+    before the project's tests run, so a test that rewrites CODEOWNERS cannot change who must approve."""
     for rel in _CODEOWNERS:
         try:
             data = read_regular(root, rel)
@@ -65,15 +69,19 @@ def required_owners(
     base_repo: KbRepo | None,
     changes: ChangeSet | None,
     verdicts: Sequence[Verdict],
+    *,
+    rules: "CodeownersRules | None | object" = _READ_NOW,
 ) -> dict[str, list[str]]:
     """{owner handle: reasons}. `changes` None (no base): no changed files; records count as changed against
-    `base_repo` (every record when that is None too)."""
+    `base_repo` (every record when that is None too). `rules`: codeowners_rules(root) taken earlier (None: no
+    CODEOWNERS, module owners apply); left out, CODEOWNERS is read now."""
     reasons: dict[str, set[str]] = {}
 
     def need(handle: str, reason: str) -> None:
         reasons.setdefault(handle, set()).add(reason)
 
-    rules = _codeowners_rules(root)
+    if rules is _READ_NOW:
+        rules = codeowners_rules(root)
     by_owner: dict[str, list[str]] = {}
     for path in sorted(changes.files if changes else ()):
         for h in _file_owners(path, rules, config):
