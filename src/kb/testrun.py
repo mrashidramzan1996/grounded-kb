@@ -12,7 +12,7 @@ from kb.ports.tests import Outcome, TestRun
 # Runs the project's own `python` from PATH, never kb's interpreter.
 PYTEST_PRESET = "python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 {tests} --junitxml={junit}"
 _LOG_TAIL = 4000
-_WORSE: list[Outcome] = ["failed", "skipped", "missing", "no_runner", "flaky", "passed"]
+_WORSE: list[Outcome] = ["failed", "skipped", "missing", "flaky", "passed", "no_runner"]
 
 
 class TestRunError(Exception):
