@@ -22,6 +22,25 @@ only prints a warning. Use a spec you control and pin it:
 Never use an unpinned package name: anyone could publish under a name nobody has claimed. `kb init --install-spec <spec>`
 writes the spec for you.
 
+## Running tests
+
+`kb verify` runs the tests a claim links to, per module, with `modules[].tests` in `kb.config.yaml`:
+
+```yaml
+modules:
+  - id: MOD-billing
+    owner: "@acme/billing"
+    tests:
+      preset: pytest            # or: run: "pytest {tests} --junitxml={junit}" (exactly one of preset / run)
+      id_format: "{path}::{name}"   # optional: how a test id is written on the command line
+      timeout_seconds: 900      # optional
+```
+
+The `pytest` preset runs `python -m pytest` with the project's own `python` from `PATH` (not kb's interpreter), so
+activate the project's environment first. A custom `run` must contain `{tests}` (expanded to one argument per test, with
+no shell involved) and `{junit}` (a JUnit XML report path the command must write). A failing test is re-run twice; one that
+then passes is reported as flaky.
+
 ## Layout
 
 | Path | Holds |

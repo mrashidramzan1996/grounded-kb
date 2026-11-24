@@ -57,3 +57,16 @@ def test_rejects_non_utf8_config(tmp_path):
     (p := tmp_path / "kb.config.yaml").write_bytes(b"\xff\xfe version: 1")
     with pytest.raises(ConfigError):
         load_config(p)
+
+
+def test_module_tests_cfg_loads(tmp_path):
+    (p := tmp_path / "kb.config.yaml").write_text(
+        "version: 1\nmodules: [{id: MOD-a, owner: t, tests: {run: 'x {tests} --junitxml={junit}', timeout_seconds: 5}}]\n")
+    t = load_config(p).modules[0].tests
+    assert t.timeout_seconds == 5 and t.id_format == "{path}::{name}" and t.preset is None
+
+
+def test_module_tests_cfg_must_name_one_runner(tmp_path):
+    (p := tmp_path / "kb.config.yaml").write_text("version: 1\nmodules: [{id: MOD-a, owner: t, tests: {}}]\n")
+    with pytest.raises(ConfigError, match="preset"):
+        load_config(p)

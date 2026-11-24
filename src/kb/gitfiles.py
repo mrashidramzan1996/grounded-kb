@@ -12,11 +12,11 @@ class GitError(Exception):
 
 
 # Set by git for hooks (pre-commit exports GIT_INDEX_FILE); every call here names its repository with -C.
-_SCRUBBED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+SCRUBBED_GIT_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
 def _env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in _SCRUBBED}
+    return {k: v for k, v in os.environ.items() if k not in SCRUBBED_GIT_ENV}
 
 
 NO_COMMITS = "this repository has no commits yet; commit at least once first"

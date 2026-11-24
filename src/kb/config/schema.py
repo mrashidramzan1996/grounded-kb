@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Risk = Literal["low", "standard", "high"]
 FailOn = Literal["broken", "schema", "decision_guard", "missing_owner_approval", "stale_context"]
@@ -19,12 +19,30 @@ class Team(_Model):
 _CATCH_ALL = {"**", "*", "**/*", ".", "./**"}
 
 
+class TestsCfg(_Model):
+    __test__ = False  # not a pytest class, despite the name
+
+    preset: Literal["pytest"] | None = None
+    run: str | None = None  # e.g. "pytest {tests} --junitxml={junit}"; needs both tokens
+    id_format: str = "{path}::{name}"  # {path} file, {name} "Class::func" or "func"
+    timeout_seconds: int = Field(900, ge=1)
+
+    @model_validator(mode="after")
+    def _one_runner(self) -> "TestsCfg":
+        if (self.preset is None) == (self.run is None):
+            raise ValueError("tests needs exactly one of preset or run")
+        if self.run is not None and not ("{tests}" in self.run and "{junit}" in self.run):
+            raise ValueError("tests.run must contain both {tests} and {junit}")
+        return self
+
+
 class ModuleCfg(_Model):
     id: str = Field(pattern=r"^MOD-[a-z0-9][a-z0-9-]*$")
     title: str | None = None
     paths: list[str] = []  # empty: planned module, paths filled in later (A-9)
     owner: str
     risk: Risk = "standard"
+    tests: TestsCfg | None = None
 
     @field_validator("paths")
     @classmethod
