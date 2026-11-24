@@ -3,7 +3,7 @@ import shlex
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from kb.config.schema import KbConfig, TestsCfg
 from kb.gitfiles import SCRUBBED_GIT_ENV
@@ -29,7 +29,11 @@ def _split_ref(ref: str) -> tuple[str, str]:
 
 
 def parse_junit(xml: bytes, refs: list[str]) -> dict[str, Outcome]:
-    """Match each `path::[Class::]func` ref to junit testcases. Unparseable XML fails every ref."""
+    """Match each `path::[Class::]func` ref to junit testcases. Unparseable XML fails every ref.
+
+    A case matches on its full classname, or on `file` when its classname also ends in the file's stem plus the
+    ref's class path (nothing more for a module-level ref): `file` alone would let `TestB::f` stand for `TestA::f`.
+    Any failed case fails the ref; otherwise any skipped case makes it skipped (skipped is not passing)."""
     try:
         cases = list(ET.fromstring(xml).iter("testcase"))
     except ET.ParseError:
@@ -38,14 +42,15 @@ def parse_junit(xml: bytes, refs: list[str]) -> dict[str, Outcome]:
     for ref in refs:
         path, name = _split_ref(ref)
         *classes, func = name.split("::")
-        classname = path.removesuffix(".py").replace("/", ".")
-        if classes:
-            classname += "." + ".".join(classes)
+        classname = ".".join([path.removesuffix(".py").replace("/", "."), *classes])
+        tail = ".".join([PurePosixPath(path).stem, *classes])
         states: list[str] = []
         for c in cases:
             if c.get("name", "").split("[", 1)[0] != func:
                 continue
-            if c.get("file") != path and c.get("classname") != classname:
+            cls = c.get("classname") or ""
+            in_file = c.get("file") == path and (cls == tail or cls.endswith("." + tail))
+            if not in_file and cls != classname:
                 continue
             if c.find("failure") is not None or c.find("error") is not None:
                 states.append("failed")
@@ -57,10 +62,10 @@ def parse_junit(xml: bytes, refs: list[str]) -> dict[str, Outcome]:
             out[ref] = "missing"
         elif "failed" in states:
             out[ref] = "failed"
-        elif "passed" in states:
-            out[ref] = "passed"
-        else:
+        elif "skipped" in states:
             out[ref] = "skipped"
+        else:
+            out[ref] = "passed"
     return out
 
 

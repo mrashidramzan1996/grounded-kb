@@ -55,6 +55,21 @@ def test_importers_of_one_hop(tmp_path):
     assert idx.importers_of("services/billing/__init__.py") == ["services/billing/api.py", "services/other.py"]
 
 
+def test_importers_of_src_layout(tmp_path):
+    """src/pkg/mod.py is imported as pkg.mod: the leading src/ is not part of the import name."""
+    _, idx = index(tmp_path, {
+        "src/pkg/__init__.py": "",
+        "src/pkg/mod.py": "def f():\n    pass\n",
+        "src/pkg/api.py": "from pkg.mod import f\n",
+        "tests/test_mod.py": "import pkg.mod\n",
+        "tests/test_other.py": "import pkg.module_x\n",
+        "tests/test_src.py": "import src.pkg.mod\n",
+    })
+    assert idx.importers_of("src/pkg/mod.py") == ["src/pkg/api.py", "tests/test_mod.py", "tests/test_src.py"]
+    assert idx.importers_of("src/pkg/__init__.py") == [
+        "src/pkg/api.py", "tests/test_mod.py", "tests/test_other.py", "tests/test_src.py"]
+
+
 def test_to_json_is_deterministic(tmp_path):
     root, a = index(tmp_path, {TESTS: "def test_a():\n    # r[verify REQ-F-002]\n    pass\n"})
     b = build_index(root, load_config(root / "kb.config.yaml"))

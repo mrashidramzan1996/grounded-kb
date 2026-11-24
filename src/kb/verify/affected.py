@@ -1,6 +1,7 @@
 """Which live claims, requirements and invariants a change set can have invalidated."""
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from kb.config.schema import KbConfig
 from kb.deps import imported_top_levels
@@ -24,16 +25,31 @@ def _file_of(ref: str | None, sep: str) -> set[str]:
     return {ref.split(sep, 1)[0]} if ref else set()
 
 
-def _marker_files(index: AnchorIndex, *ids: str) -> set[str]:
-    files: set[str] = set()
-    for mid in ids:
-        files.update(index.impl_files(mid))
-        for ref in index.tests_for(mid):
-            files |= _file_of(ref, "::")
-    return files
+def _test_files(refs) -> set[str]:
+    return {f for ref in refs for f in _file_of(ref, "::")}
 
 
-def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: AnchorIndex) -> Affected:
+def _marker_files(index: AnchorIndex, mid: str) -> tuple[set[str], set[str]]:
+    """(files with an impl marker for `mid`, files of the tests a verify marker links to it)."""
+    return set(index.impl_files(mid)), _test_files(index.tests_for(mid))
+
+
+def _orphaned_requirements(repo: KbRepo, base_repo: KbRepo | None) -> set[str]:
+    """Requirements a base claim backed that no live head claim backs any more (the claim was deleted, rejected or
+    re-pointed): they may have lost their proof."""
+    if base_repo is None:
+        return set()
+    base_live, live = live_ids(base_repo), live_ids(repo)
+    head = {(c.id, c.requirement) for f, c in repo.claims() if f.id in live}
+    return {
+        c.requirement for f, c in base_repo.claims()
+        if f.id in base_live and c.requirement and (c.id, c.requirement) not in head
+    }
+
+
+def affected(
+    changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: AnchorIndex, base_repo: KbRepo | None = None
+) -> Affected:
     live = live_ids(repo)
     features = [(f, c) for f, c in repo.claims() if f.id in live]
     reqs = [r for rid, r in sorted(repo.records.items()) if rid in live and isinstance(r, Requirement)]
@@ -46,6 +62,7 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
 
     files = set(changes.files)
     importing = {p for changed in files for p in index.importers_of(changed)}
+    conftest_dirs = {PurePosixPath(f).parent for f in files if PurePosixPath(f).name == "conftest.py"}
     imported = set().union(*(imported_top_levels(list(c.imports)) for c in index.cards.values()))
     hot_modules = {
         m
@@ -57,12 +74,24 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
         hot_modules |= {m for p, c in index.cards.items() if p.endswith(".py") for m in c.modules}
     module_ids = {m.id for m in config.modules}
 
-    def claim_hit(feat: Feature, claim: FeatureClaim) -> bool:
-        anchor = _file_of(claim.code, "#")
-        pointed = anchor | _file_of(claim.test, "::") | _marker_files(index, claim.id)
+    def touched(code: set[str], tests: set[str]) -> bool:
+        """Whether the change set reaches the record's files: one of them changed or imports a changed file (one
+        hop), or a changed conftest.py sits at or above one of its test files."""
+        pointed = code | tests
         return bool(
             pointed & files
-            or anchor & importing
+            or pointed & importing
+            or any(conftest_dirs.intersection(PurePosixPath(t).parents) for t in tests)
+        )
+
+    def record_touched(mid: str, code: set[str] | None = None, tests: set[str] | None = None) -> bool:
+        """touched() over the record's own files plus those its impl and verify markers point at."""
+        impl, marked = _marker_files(index, mid)
+        return touched((code or set()) | impl, (tests or set()) | marked)
+
+    def claim_hit(feat: Feature, claim: FeatureClaim) -> bool:
+        return bool(
+            record_touched(claim.id, _file_of(claim.code, "#"), _file_of(claim.test, "::"))
             or feat.module in hot_modules
             or repo.paths.get(feat.id) in files
         )
@@ -74,17 +103,15 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
             if fid in live and isinstance(f := repo.records.get(fid), Feature)
         }
         return bool(
-            _marker_files(index, req.id) & files
+            record_touched(req.id)
             or modules & hot_modules
             or repo.paths.get(req.id) in files
             or any(q.source in changes.segments for q in req.evidence.quotes)
         )
 
     def invariant_hit(inv: Invariant) -> bool:
-        pointed = {f for t in inv.tests for f in _file_of(t, "::")} | _marker_files(index, inv.id)
         return bool(
-            pointed & files
-            or pointed & importing
+            record_touched(inv.id, tests=_test_files(inv.tests))
             or {g for g in inv.governs if g in module_ids} & hot_modules
             or repo.paths.get(inv.id) in files
             or (inv.evidence and any(q.source in changes.segments for q in inv.evidence.quotes))
@@ -92,7 +119,8 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
 
     claims = {c.id: c.requirement for f, c in features if claim_hit(f, c)}
     req_ids = {r.id for r in reqs}
-    requirements = {r.id for r in reqs if requirement_hit(r)} | {rid for rid in claims.values() if rid in req_ids}
+    backed = set(claims.values()) | _orphaned_requirements(repo, base_repo)
+    requirements = {r.id for r in reqs if requirement_hit(r)} | (backed & req_ids)
     return Affected(
         frozenset(claims),
         frozenset(requirements),

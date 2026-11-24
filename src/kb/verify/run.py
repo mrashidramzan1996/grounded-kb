@@ -71,7 +71,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     changes = compute_changes(root, base_ref, head_repo=repo) if base_ref else None
     index = build_index(root, config)
     write_cache(root, INDEX_PATH, index.to_json())
-    hit = affected(None if all_ else changes, config, repo, index)
+    hit = affected(None if all_ else changes, config, repo, index, base_repo)
     stale = (
         stale_context(root, config, repo, base_branch, base_ref, list(changes.files))
         if base_branch and base_ref and changes is not None else []

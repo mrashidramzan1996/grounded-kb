@@ -44,9 +44,12 @@ class AnchorIndex:
         )
 
     def importers_of(self, path: str) -> list[str]:
-        names = {module_name(path)} - {None}
-        if not names:
+        """Files importing `path`'s module or a submodule of it. In a src layout `src/pkg/mod.py` is imported as
+        `pkg.mod`, so the name without its leading `src.` counts too."""
+        name = module_name(path)
+        if name is None:
             return []
+        names = {name} | ({name.removeprefix("src.")} if name.startswith("src.") else set())
         prefixes = tuple(n + "." for n in names)
         return sorted(
             p for p, c in self.cards.items()

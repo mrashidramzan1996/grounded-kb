@@ -147,3 +147,38 @@ def test_requirement_module_ignores_non_live_feature():
     repo.paths.update({"FEAT-009": "kb/FEAT-009.md", "REQ-F-009": "kb/REQ-F-009.md"})
     a = affected(cs(["uv.lock"], packages=["stripe"]), CONFIG, repo, index)
     assert "REQ-F-009" not in a.requirements
+
+
+def test_claim_test_importing_changed_helper_is_affected():
+    """A claim's linked test that imports a changed helper re-checks the claim (one import hop, as invariants)."""
+    repo, index = build()
+    index.cards["tests/helpers.py"] = card("tests/helpers.py")
+    index.cards["tests/test_seats.py"] = card("tests/test_seats.py", imports=["tests.helpers"])
+    a = affected(cs(["tests/helpers.py"]), CONFIG, repo, index)
+    assert a.claims == {"FEAT-001.C1"} and a.requirements == {"REQ-F-001"}
+
+
+def test_requirement_marker_test_importing_changed_helper_is_affected():
+    repo, index = build()
+    index.cards["tests/helpers.py"] = card("tests/helpers.py")
+    index.cards["tests/test_req.py"] = card(
+        "tests/test_req.py", imports=["tests.helpers"], markers=[("verify", "REQ-F-002", 2, "tests/test_req.py::test_r")])
+    assert affected(cs(["tests/helpers.py"]), CONFIG, repo, index).requirements == {"REQ-F-002"}
+
+
+def test_conftest_change_affects_tests_below_it():
+    a = run(cs(["tests/conftest.py"]))
+    assert a.claims == {"FEAT-001.C1", "FEAT-002.C1"} and a.invariants == {"INV-001"}
+    assert run(cs(["conftest.py"])).claims == {"FEAT-001.C1", "FEAT-002.C1"}
+    other = run(cs(["other/conftest.py"]))
+    assert other.claims == frozenset() and other.invariants == frozenset()
+
+
+def test_deleted_claim_rederives_requirement():
+    """A PR that deletes a claim re-derives the requirement the claim backed (it may have lost its only proof)."""
+    base_repo, _ = build()
+    repo, index = build()
+    repo.records["FEAT-002"] = Feature(id="FEAT-002", title="t", module="MOD-sessions", requirements=["REQ-F-002"])
+    a = affected(cs(["kb/FEAT-002.md"]), CONFIG, repo, index, base_repo=base_repo)
+    assert a.claims == frozenset() and a.requirements == {"REQ-F-002"}
+    assert affected(cs(["kb/FEAT-002.md"]), CONFIG, repo, index).requirements == frozenset()

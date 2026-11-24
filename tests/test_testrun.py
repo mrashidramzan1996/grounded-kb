@@ -145,6 +145,40 @@ def test_parse_junit_matches_by_classname_without_file():
         "tests/test_a.py::TestSeats::test_x": "passed", "tests/test_a.py::test_x": "missing"}
 
 
+def _xml(*cases: str) -> bytes:
+    return ("<testsuite>" + "".join(cases) + "</testsuite>").encode()
+
+
+def test_same_name_in_two_classes_kept_apart():
+    """xunit1 sets `file` on every case: the class part must still match, or TestB's pass would hide TestA's skip."""
+    xml = _xml(
+        '<testcase file="tests/test_a.py" classname="tests.test_a.TestA" name="test_init"><skipped/></testcase>',
+        '<testcase file="tests/test_a.py" classname="tests.test_a.TestB" name="test_init"/>',
+        '<testcase file="tests/test_a.py" classname="tests.test_a.Outer.Inner" name="test_init"/>',
+    )
+    refs = [A + "TestA::test_init", A + "TestB::test_init", A + "Outer::Inner::test_init", A + "Inner::test_init"]
+    assert parse_junit(xml, refs) == {A + "TestA::test_init": "skipped", A + "TestB::test_init": "passed",
+                                      A + "Outer::Inner::test_init": "passed", A + "Inner::test_init": "missing"}
+
+
+def test_module_level_ref_not_matched_by_class_method():
+    xml = _xml('<testcase file="tests/test_a.py" classname="tests.test_a.TestA" name="test_x"/>')
+    assert parse_junit(xml, [A + "test_x"]) == {A + "test_x": "missing"}
+    xml = _xml('<testcase file="tests/test_a.py" classname="tests.test_a" name="test_x"/>')
+    assert parse_junit(xml, [A + "test_x", A + "TestA::test_x"]) == {A + "test_x": "passed", A + "TestA::test_x": "missing"}
+
+
+def test_skipped_case_makes_parametrised_ref_skipped():
+    """Skipped counts as not passing: one skipped case and no failure make the whole ref skipped."""
+    xml = _xml(
+        '<testcase file="tests/test_a.py" classname="tests.test_a" name="test_p[1]"/>',
+        '<testcase file="tests/test_a.py" classname="tests.test_a" name="test_p[2]"><skipped/></testcase>',
+        '<testcase file="tests/test_a.py" classname="tests.test_a" name="test_q[1]"><failure/></testcase>',
+        '<testcase file="tests/test_a.py" classname="tests.test_a" name="test_q[2]"><skipped/></testcase>',
+    )
+    assert parse_junit(xml, [A + "test_p", A + "test_q"]) == {A + "test_p": "skipped", A + "test_q": "failed"}
+
+
 def _cfg(tests=None):
     return KbConfig(version=1, modules=[{"id": "MOD-a", "owner": "t", "tests": tests or {"preset": "pytest"}},
                                         {"id": "MOD-b", "owner": "t"}])
