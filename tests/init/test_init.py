@@ -124,7 +124,7 @@ def test_github_ci_template(tmp_path):
     assert "fetch-depth: 0" in text and "KB_INSTALL_SPEC: 'grounded-kb==9.9'" in text
     assert 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --comment --forge auto' in text
     assert "--strict" not in text
-    assert "BASE_REF: ${{ github.base_ref }}" in text  # M7: never expanded inside run:
+    assert "BASE_REF: ${{ github.event.pull_request.base.ref }}" in text  # M7: never expanded inside run:
 
 
 @pytest.mark.parametrize("ci, rel", [("github", ".github/workflows/kb.yml"), ("gitlab", ".gitlab-ci.yml")])
@@ -271,15 +271,17 @@ def test_github_workflow_pr_and_push_steps(tmp_path):
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     wf = YAML(typ="safe").load(text)
-    assert set(wf[True] if True in wf else wf["on"]) == {"pull_request", "push"}
+    assert set(wf[True] if True in wf else wf["on"]) == {"pull_request", "pull_request_review", "push"}
     steps = wf["jobs"]["check"]["steps"]
     runs = {s["if"]: s["run"] for s in steps if "run" in s}
     assert len(runs) == 3
-    pr, push = "env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'", "env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"
+    pr = "env.KB_INSTALL_SPEC != '' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')"
+    push = "env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"
     assert runs[pr].endswith('kb verify --base "origin/$BASE_REF" --comment --forge auto') and "${{" not in runs[pr]
     assert runs[push].endswith("kb verify --all") and "--base" not in runs[push]
     assert runs["env.KB_INSTALL_SPEC == ''"].startswith("echo ")
-    assert wf["jobs"]["check"]["env"] == {"KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.base_ref }}"}
+    assert wf["jobs"]["check"]["env"] == {
+        "KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.event.pull_request.base.ref }}"}
     assert wf["jobs"]["check"]["steps"][0]["with"]["fetch-depth"] == 0
     assert "branches: [main]" in text
 
@@ -366,3 +368,28 @@ def test_gitlab_template_runs_verify_and_keeps_artifacts(tmp_path):
     assert mr["artifacts"]["paths"] == [".kb/cache/status.json", ".kb/cache/verify.md"]
     assert mr["artifacts"]["when"] == "always"
     assert any("kb verify --all" in s for s in ci["kb-check-default-branch"]["script"])
+
+
+def test_github_workflow_checks_out_pr_head_and_reruns_on_reviews(tmp_path):
+    """A-5 needs the PR head, not GitHub's test-merge commit (whose merge-base with the base is the base tip, so
+    stale_context could never fire); a review submitted or dismissed re-runs the owner-approval check."""
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, install_spec="grounded-kb==9.9")
+    wf = YAML(typ="safe").load((repo / ".github/workflows/kb.yml").read_text())
+    on = wf[True] if True in wf else wf["on"]
+    assert on["pull_request_review"] == {"types": ["submitted", "dismissed"]}
+    job = wf["jobs"]["check"]
+    checkout = next(s for s in job["steps"] if s.get("uses") == "actions/checkout@v4")
+    # empty on push, so a push keeps the default ref
+    assert checkout["with"] == {"fetch-depth": 0, "ref": "${{ github.event.pull_request.head.sha }}"}
+    assert job["env"]["BASE_REF"] == "${{ github.event.pull_request.base.ref }}"  # set for both PR events
+    verify = next(s for s in job["steps"] if "--comment" in s.get("run", ""))
+    assert verify["if"] == (
+        "env.KB_INSTALL_SPEC != '' && "
+        "(github.event_name == 'pull_request' || github.event_name == 'pull_request_review')"
+    )
+    # the upload runs last, so a push run keeps its --all results too
+    assert str(job["steps"][-1].get("uses", "")).startswith("actions/upload-artifact@v4")
+    assert job["steps"][-1]["if"] == "always()"

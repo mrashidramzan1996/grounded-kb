@@ -93,3 +93,14 @@ def test_deleted_record_on_default_fails(forked):
 def test_unresolvable_base_raises(forked):
     with pytest.raises(GitError, match="nope"):
         stale_context(forked, load_config(forked / "kb.config.yaml"), KbRepo.load(forked), "nope", "HEAD", [SEATS])
+
+
+def test_test_merge_checkout_hides_stale_context(forked):
+    """Why the GitHub template checks out the PR head: from GitHub's test-merge commit (base tip + branch) the
+    merge-base with the base is the base tip itself, so nothing can look stale."""
+    land_adr(forked, "ADR-0041", "MOD-billing")
+    git(forked, "checkout", "--detach", "main")
+    git(forked, "merge", "--no-ff", "-m", "test merge", "feature")
+    assert run(forked) == []
+    git(forked, "checkout", "feature")  # the PR head, as the template checks out
+    assert [i.record for i in run(forked)] == ["ADR-0041"]

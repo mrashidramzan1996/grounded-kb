@@ -2,6 +2,9 @@ name: kb
 
 on:
   pull_request:
+  # a review submitted or dismissed re-runs the owner-approval check
+  pull_request_review:
+    types: [submitted, dismissed]
   push:
     branches: [{{base}}]
 
@@ -18,20 +21,25 @@ jobs:
       # How CI installs kb: a pinned spec such as 'git+https://github.com/<owner>/grounded-kb@<tag>' (see kb/README.md).
       # While it is empty the check is skipped with a warning.
       KB_INSTALL_SPEC: '{{install_spec}}'
-      BASE_REF: ${{ github.base_ref }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # On a pull request, the PR head, not GitHub's test-merge commit: the stale-context check needs the
+          # branch's real fork point. Empty on a push, which keeps the default ref.
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: astral-sh/setup-uv@v5
       - if: env.KB_INSTALL_SPEC == ''
         run: 'echo "::warning::kb: set the install spec in .github/workflows/kb.yml — see kb/README.md"'
       # install your project's test dependencies here (kb verify runs the tests that claims link to, with the project's own python)
       # Both verify steps honour policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
-      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'
+      - if: env.KB_INSTALL_SPEC != '' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --comment --forge auto
+      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
+        run: uvx --from "$KB_INSTALL_SPEC" kb verify --all
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -41,5 +49,3 @@ jobs:
             .kb/cache/verify.md
           include-hidden-files: true
           if-no-files-found: warn
-      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
-        run: uvx --from "$KB_INSTALL_SPEC" kb verify --all
