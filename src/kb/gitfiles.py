@@ -121,6 +121,11 @@ def changed_since(root: Path, commit: str) -> list[str]:
     return sorted(set(changed) | set(untracked))
 
 
+def diff_names(root: Path, a: str, b: str, prefix: str) -> list[str]:
+    """Paths under `prefix` that differ between commits `a` and `b` (added, edited or deleted)."""
+    return _split(_git(root, "diff", "--name-only", "-z", a, b, "--", prefix).stdout)
+
+
 def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:
     out = _git(root, "ls-tree", "-r", "-z", "--name-only", ref, "--", prefix).stdout
     return {p: _git(root, "show", f"{ref}:{p}").stdout for p in _split(out)}
