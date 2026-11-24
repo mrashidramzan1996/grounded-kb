@@ -19,10 +19,10 @@ from kb.init.scaffold import InitError, init_repo
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
-from kb.cache import write_cache
+from kb.cache import remove_cache, write_cache
 from kb.ingest.redraft import (
-    REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, REDRAFT_NEW, RedraftError, build_redraft_brief, changed_segments, changed_text,
-    citing, ref_key, segment_hashes, select, unfound, untriaged,
+    REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_FILES, REDRAFT_IDS, REDRAFT_NEW, RedraftError, build_redraft_brief, changed_segments, changed_text,
+    citing, new_text, ref_key, segment_hashes, select, unfound, untriaged, untriaged_cited,
 )
 from kb.ingest.redraft_report import redraft_report, render_redraft_report
 from kb.ingest.report import ingest_report, render_report
@@ -138,10 +138,13 @@ def source_sync(ctx: typer.Context) -> None:
     after = KbRepo.load(root)
     ids = sorted(set(citing(after, changed_segments(before, after))) | set(unfound(after)))
     known = segment_hashes(before)
-    added = [ref for ref in untriaged(after) if ref not in known]  # untriaged segments the sync added
+    added = [ref for ref in new_text(after, after) if ref not in known]  # new text the sync added
     _, uncited = changed_text(before, after)
     for line in _sync_hint(after, ids, added, sorted(uncited, key=ref_key)):
         typer.echo(line, err=True)
+    touched = changed_segments(before, after) | (set(segment_hashes(after)) - set(known))
+    for issue in untriaged_cited(after, after, touched):  # --new does not offer these
+        typer.echo(f"warning {issue.code}: {issue.message}", err=True)
 
 
 def _sync_hint(after: KbRepo, ids: list[str], added: list[str], uncited: list[str]) -> list[str]:
@@ -240,12 +243,18 @@ def redraft(
         raise typer.Exit(2)
     try:
         repo = KbRepo.load(root)
-        before = KbRepo.at_ref(root, base or "HEAD") if changed else None
+        before = KbRepo.at_ref(root, base or "HEAD") if changed or new else None
         selection = select(repo, sorted(set(ids or [])), flagged_=flagged, changed=changed, before=before)
-        cited, uncited = changed_text(before, repo) if before else (set(), set())
-        # text to draft from: untriaged segments (--new), and changed segments no live record cites (--changed)
-        fresh = sorted(set(untriaged(repo) if new else []) | uncited, key=ref_key)
+        cited, uncited = changed_text(before, repo) if changed and before else (set(), set())
+        # text to draft from: untriaged segments no record cites at base (--new), and changed segments no live
+        # record cites (--changed)
+        fresh = sorted(set(new_text(repo, before) if new and before else []) | uncited, key=ref_key)
+        if new and before:
+            for issue in untriaged_cited(repo, before, set(untriaged(repo)) - cited):
+                typer.echo(f"warning {issue.code}: {issue.message}", err=True)
         if not selection and not fresh:
+            for rel in REDRAFT_FILES:  # a later --report must not gate against a stale brief
+                remove_cache(root, rel)
             typer.echo("nothing to redraft", err=True)
             return
         # the segments new records may cite: those offered to draft from, and the changed ones the records cite

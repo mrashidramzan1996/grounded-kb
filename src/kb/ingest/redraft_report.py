@@ -19,6 +19,8 @@ from kb.ingest.redraft import (
     citing,
     present,
     ref_key,
+    untriaged,
+    untriaged_cited,
 )
 from kb.ingest.report import (
     CONFIG,
@@ -92,7 +94,8 @@ def _check_files(root: Path, head: KbRepo, before: KbRepo, selected: list[str], 
                  base_given: bool) -> None:
     """.kb/cache is the agent's to write, so the selection is checked against the base and the brief: every id
     is live at base and has a section in the brief; every segment is stored at head, shown in the brief, and either
-    had no triage entry at base or changed since base with every live record citing it at base selected (from git,
+    had no triage entry and no live record citing it at base (new text), or changed since base with every live record
+    citing it at base selected (from git,
     so the file cannot widen the scope to settled text or to text an unselected record cites); and (unless --base
     is given) the brief names the base used."""
     for rid in selected:
@@ -106,8 +109,9 @@ def _check_files(root: Path, head: KbRepo, before: KbRepo, selected: list[str], 
     m = _BRIEF_BASE.search(brief)
     changed, chosen = changed_segments(before, head), set(selected)
 
-    def offerable(r: str) -> bool:
-        return not _triaged(before, r) or (r in changed and set(citing(before, {r})) <= chosen)
+    def offerable(r: str) -> bool:  # new text (untriaged, cited by no record), or changed text the selection holds
+        citers = set(citing(before, {r}))
+        return (not _triaged(before, r) and not citers) or (r in changed and citers <= chosen)
 
     if any(f"## {rid}" not in headings for rid in selected) or any(
         r not in shown or not present(head, r) or not offerable(r) for r in segments
@@ -313,7 +317,8 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
         superseding=accepted_superseding,
         rejected=rejected,
         flagged=[i for i in g.mine if i.severity == "warning" and i.record in good]
-        + [i for i in flags if i.code == "flag.cleared"] + _untriaged_issues(head, fresh),
+        + [i for i in flags if i.code == "flag.cleared"] + _untriaged_issues(head, fresh)
+        + untriaged_cited(head, head, set(untriaged(head)) - fresh),  # an offered one is segment.untriaged
         unchanged=[rid for rid in selected if rid not in touched and rid not in replaced],
         still_flagged=[
             rid for rid in selected

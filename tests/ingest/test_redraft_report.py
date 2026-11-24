@@ -43,7 +43,14 @@ def rejected(r: RedraftReport) -> list[tuple[str | None, str]]:
     return [(i.record, i.code) for i in r.rejected]
 
 
+def triaged(kb) -> None:
+    """Triage both segments and commit, so the report has no segment.untriaged_cited warnings."""
+    put(kb, "kb/sources/SRC-n/triage.yaml", "segments:\n  seg-01: [ADR-0001, REQ-F-001]\n  seg-02: [REQ-NF-001]\n")
+    commit(kb)
+
+
 def test_good_redraft_accepted_and_vague_cleared(kb):
+    triaged(kb)
     sync(kb, DOC.replace(VAGUE, TARGET))
     redraft(kb, "--changed")
     put(kb, "kb/requirements/REQ-NF-001.yaml", req_yaml("REQ-NF-001", TARGET, seg="seg-02"))
@@ -116,6 +123,7 @@ def test_vague_kept_when_doc_still_vague_is_still_flagged_not_rejected(kb):
 
 
 def test_other_flag_removed_is_a_warning(kb):
+    triaged(kb)
     put(kb, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", flags=("conflicting",)))
     commit(kb)
     redraft(kb, "REQ-F-001")

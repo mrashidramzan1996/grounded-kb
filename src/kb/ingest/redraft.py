@@ -5,6 +5,7 @@ from pathlib import Path
 from string import Template
 
 from kb.ingest.brief import BRIEF_VERSION, INJECTION_FLAG, _fence, _segments, next_ids
+from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
@@ -16,6 +17,7 @@ REDRAFT_BRIEF = ".kb/cache/redraft/brief.md"
 REDRAFT_BASE = ".kb/cache/redraft/base"  # HEAD when the brief was written
 REDRAFT_IDS = ".kb/cache/redraft/ids"  # selected ids, one per line, sorted
 REDRAFT_NEW = ".kb/cache/redraft/new"  # segments new records may cite: those offered to draft from plus the changed cited ones
+REDRAFT_FILES = (REDRAFT_BRIEF, REDRAFT_BASE, REDRAFT_IDS, REDRAFT_NEW)
 
 _Cited = Requirement | Decision | Invariant
 
@@ -50,6 +52,35 @@ def untriaged(repo: KbRepo) -> list[str]:
         done = tri.segments if tri else {}
         out.extend(f"{src}#{seg.id}" for seg in repo.segments(src) if seg.id not in done)
     return sorted(out, key=ref_key)
+
+
+def citers(repo: KbRepo) -> dict[str, list[str]]:
+    """'SRC-x#seg-NN' -> the live REQ/ADR/INV ids quoting it, sorted."""
+    out: dict[str, list[str]] = {}
+    for rid, rec in _live_cited(repo):
+        for ref in sorted({q.source for q in rec.evidence.quotes} if rec.evidence else set()):
+            out.setdefault(ref, []).append(rid)
+    return out
+
+
+def new_text(repo: KbRepo, base: KbRepo) -> list[str]:
+    """The untriaged segments of `repo` that no live record of `base` cites: text with no records yet, which
+    --new offers. An untriaged segment a record already cites is not new text (see untriaged_cited)."""
+    cited = citers(base)
+    return [ref for ref in untriaged(repo) if ref not in cited]
+
+
+def untriaged_cited(repo: KbRepo, base: KbRepo, refs: set[str] | None = None) -> list[Issue]:
+    """segment.untriaged_cited for each untriaged segment of `repo` (of `refs`, when given) that a live record of
+    `base` cites: its triage entry was never written, and only a person can add it."""
+    cited, issues = citers(base), []
+    for ref in untriaged(repo):
+        if ref in cited and (refs is None or ref in refs):
+            src = ref.partition("#")[0]
+            issues.append(Issue("segment.untriaged_cited",
+                                f"{ref} is cited by {', '.join(cited[ref])} but has no triage entry; add one by hand",
+                                "warning", path=f"kb/sources/{src}/triage.yaml", record=src))
+    return issues
 
 
 def _live_cited(repo: KbRepo) -> list[tuple[str, _Cited]]:

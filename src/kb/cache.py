@@ -24,3 +24,13 @@ def write_cache(root: Path, rel: str, text: str) -> Path:
         Path(tmp).unlink(missing_ok=True)
         raise
     return target
+
+
+def remove_cache(root: Path, rel: str) -> None:
+    """Remove `rel` under .kb/cache when it exists, refusing to go through symlinked directories."""
+    root = Path(root)
+    target = root / rel
+    for p in (root / ".kb", root / ".kb/cache", target.parent):
+        if p.is_symlink():
+            raise UnsafePath(f"{p.relative_to(root)} is a symlink; refusing to remove through it")
+    target.unlink(missing_ok=True)

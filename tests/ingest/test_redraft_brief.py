@@ -2,7 +2,7 @@ import pytest
 from helpers import QUOTE, adr_md, git, invoke, put, req_yaml
 
 from kb.ingest.brief import INJECTION_FLAG
-from kb.ingest.redraft import REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, RedraftError, build_redraft_brief, select
+from kb.ingest.redraft import REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, REDRAFT_NEW, RedraftError, build_redraft_brief, select
 from kb.records.repo import KbRepo
 
 
@@ -49,6 +49,19 @@ def test_empty_selection_writes_nothing(md_repo_ingested):
     r = invoke(md_repo_ingested, "redraft", "--flagged")
     assert r.exit_code == 0 and "nothing to redraft" in r.stderr
     assert not (md_repo_ingested / ".kb/cache/redraft").exists()
+
+
+def test_nothing_to_redraft_clears_stale_files(md_repo_ingested):
+    root = md_repo_ingested
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", flags=("vague",)))
+    assert invoke(root, "redraft", "--flagged").exit_code == 0
+    assert (root / REDRAFT_IDS).read_text() == "REQ-F-001\n"
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    r = invoke(root, "redraft", "--flagged")
+    assert r.exit_code == 0 and "nothing to redraft" in r.stderr
+    assert not [p for p in (REDRAFT_BRIEF, REDRAFT_BASE, REDRAFT_IDS, REDRAFT_NEW) if (root / p).exists()]
+    r = invoke(root, "redraft", "--report")
+    assert r.exit_code == 2 and "run `kb redraft` first" in r.stderr
 
 
 def two_sources(root):

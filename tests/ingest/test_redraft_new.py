@@ -327,3 +327,56 @@ def test_shared_segment_cannot_drop_unselected_mapping(kb):
     ]
     put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-002]\n  seg-02: [REQ-NF-001]\n")  # dropping the selected id is fine
     assert redraft_report(kb, None).rejected == []
+
+
+UNTRIAGED_CITED = "SRC-n#seg-02 is cited by REQ-NF-001 but has no triage entry; add one by hand"
+
+
+def untriaged_cited_seg02(kb) -> None:
+    """seg-02 has no triage entry, but the live REQ-NF-001 cites it, committed."""
+    put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
+    commit(kb)
+
+
+def test_new_does_not_offer_untriaged_segment_a_record_cites(kb):
+    untriaged_cited_seg02(kb)
+    r = invoke(kb, "redraft", "--new")
+    assert r.exit_code == 0 and "nothing to redraft" in r.stderr
+    assert f"warning segment.untriaged_cited: {UNTRIAGED_CITED}" in r.stderr
+    assert not (kb / REDRAFT_NEW).exists()
+    # an honest fix: triage it by hand; kb check no longer reports it
+    assert "SRC-n#seg-02" in invoke(kb, "check").output
+    put(kb, TRIAGE, TRIAGED)
+    assert "SRC-n#seg-02" not in invoke(kb, "check").output
+
+
+def test_new_offers_only_truly_new_text_and_report_warns_untriaged_cited(kb):
+    untriaged_cited_seg02(kb)
+    sync(kb, ADDED)
+    redraft(kb, "--new")
+    assert (kb / REDRAFT_NEW).read_text() == "SRC-n#seg-03\n"
+    assert "### SRC-n#seg-02" not in (kb / REDRAFT_BRIEF).read_text()
+    put(kb, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", REFUND, seg="seg-03"))
+    put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n  seg-03: [REQ-F-002]\n")
+    r = redraft_report(kb, None)
+    assert (r.rejected, r.drafted) == ([], ["REQ-F-002"])
+    assert [(i.record, i.code, i.severity, i.path, i.message) for i in r.flagged] == [
+        ("SRC-n", "segment.untriaged_cited", "warning", TRIAGE, UNTRIAGED_CITED)
+    ]
+
+
+def test_untriaged_cited_segment_cannot_be_widened_into_new_file(kb):
+    untriaged_cited_seg02(kb)
+    sync(kb, ADDED)
+    redraft(kb, "--new")
+    brief = (kb / REDRAFT_BRIEF).read_text()
+    (kb / REDRAFT_NEW).write_text("SRC-n#seg-02\nSRC-n#seg-03\n")
+    (kb / REDRAFT_BRIEF).write_text(brief.replace("## Finish", "### SRC-n#seg-02 · page 1\n\n## Finish"))
+    out = invoke(kb, "redraft", "--report")
+    assert out.exit_code == 2 and "the redraft files don't match; run `kb redraft` again" in out.stderr
+
+
+def test_sync_hint_warns_untriaged_cited_changed_segment(kb):
+    untriaged_cited_seg02(kb)
+    r = sync(kb, DOC.replace(VAGUE, "Pages load in 2 seconds."))
+    assert f"warning segment.untriaged_cited: {UNTRIAGED_CITED}" in r.stderr.splitlines()
