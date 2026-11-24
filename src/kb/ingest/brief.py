@@ -5,13 +5,13 @@ The tool never calls a model. Source text appears in the brief only inside fence
 
 import os
 import re
-import tempfile
 from importlib.resources import files
 from pathlib import Path
 from string import Template
 
 from pathspec import GitIgnoreSpec
 
+from kb.cache import write_cache
 from kb.config.schema import KbConfig
 from kb.gitfiles import head_commit, is_ancestor, repo_files, rev_parse
 from kb.records.ids import valid_segment_id
@@ -222,31 +222,12 @@ def build_brief(root: Path, config: KbConfig, src_ids: list[str], base: str | No
     )
 
 
-def _write_cache(root: Path, rel: str, text: str) -> Path:
-    """Write `rel` under .kb/cache atomically, refusing to write through symlinks."""
-    root = Path(root)
-    target = root / rel
-    for p in (root / ".kb", root / ".kb/cache", target.parent, target):
-        if p.is_symlink():
-            raise UnsafePath(f"{p.relative_to(root)} is a symlink; refusing to write through it")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, target)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-    return target
-
-
 def write_brief(root: Path, text: str) -> Path:
-    return _write_cache(root, BRIEF_PATH, text)
+    return write_cache(root, BRIEF_PATH, text)
 
 
 def write_base(root: Path, commit: str) -> Path:
-    return _write_cache(root, BASE_PATH, commit + "\n")
+    return write_cache(root, BASE_PATH, commit + "\n")
 
 
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
