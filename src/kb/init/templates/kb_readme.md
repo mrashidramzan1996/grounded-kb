@@ -10,6 +10,14 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 - `kb ingest` prepares a drafting brief; drafted records are reviewed in a pull request.
 - `kb check` runs every gate; `kb context` and `kb trace` read the KB.
 
+## When a document changes
+
+1. Edit the document, then run `kb source sync`. It names the records that cite changed text.
+2. Run `kb redraft --changed` and ask your coding agent to follow `.kb/cache/redraft/brief.md`. Only those records are redrafted; ids are kept, and an ADR or INV changes only through a new record that supersedes it.
+3. Run `kb redraft --report`, then `kb check`, and commit the document, the sync and the redraft together.
+
+After the baseline, this is a pull request: the intent approvers sign off on stale requirements.
+
 ## CI
 
 `kb init` writes a CI job (`.github/workflows/kb.yml` or `.gitlab-ci.yml`) that runs `kb verify` on every pull request

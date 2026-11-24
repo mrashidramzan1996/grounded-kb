@@ -110,6 +110,11 @@ These come out of three independent reviews of the implementation plan: simplici
   - **Every segment is triaged** in `triage.yaml`, either to the IDs drafted from it or to "none: <reason>" (§11 coverage accounting).
   - **`kb status`** reports each requirement as not built, built (an `r[impl]` marker exists) or tested (an `r[verify]` marker or a test link also exists). Phase 2 adds verified, meaning the tests actually pass.
   - **`kb baseline freeze`** moves to Phase 1.
+- **A-17 · Targeted redraft** (§6, §11, §12, §16).
+  - **Only the affected records are redrafted.** When a cited source changes (`kb source sync` names the records citing changed text), or a requirement is flagged, `kb redraft` writes a brief for just those records. They go through the same brief, gates and review loop as `kb ingest`, and `kb redraft --report` gates the result.
+  - **IDs are kept.** A redrafted requirement keeps its ID and is edited in place. A record whose text is gone gets `status: rejected`; it is never deleted or renamed.
+  - **`vague` clears only with a measurable quote.** The flag may be removed only when a quote of the record states a measurable target (it contains a number). Removing any other flag is flagged for the reviewer.
+  - **ADRs and INVs change only by superseding** (§2.4). A new record with `supersedes: <old ID>` takes the next free ID; the accepted one stays byte-identical.
 
 ## 1. Problem and goal
 

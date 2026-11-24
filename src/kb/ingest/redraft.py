@@ -4,11 +4,12 @@ from importlib.resources import files
 from pathlib import Path
 from string import Template
 
-from kb.ingest.brief import BRIEF_VERSION, INJECTION_FLAG, _fence, _segments, next_ids  # noqa: F401
+from kb.ingest.brief import BRIEF_VERSION, INJECTION_FLAG, _fence, _segments, next_ids
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
+from kb.sources.guard import has_injection
 
 REDRAFT_BRIEF = ".kb/cache/redraft/brief.md"
 REDRAFT_BASE = ".kb/cache/redraft/base"  # HEAD when the brief was written
@@ -108,7 +109,9 @@ def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
     content = repo.raw[path].decode("utf-8", errors="replace")
     lang = "markdown" if path.endswith(".md") else "yaml"
     fence = _fence(content)
-    lines = [f"## {rid}", "", "Reasons: " + "; ".join(why), "", f"Current file `{path}`:", "", f"{fence}{lang}\n{content}{fence}", ""]
+    # the file holds copied quotes, so it is source text too: flagged like a segment
+    flag = [INJECTION_FLAG] if has_injection(content) else []
+    lines = [f"## {rid}", "", "Reasons: " + "; ".join(why), "", f"Current file `{path}`:", "", *flag, f"{fence}{lang}\n{content}{fence}", ""]
     quotes = repo.records[rid].evidence.quotes if repo.records[rid].evidence else []
     refs = sorted({q.source for q in quotes})
     if not refs:

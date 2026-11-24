@@ -236,11 +236,12 @@ def write_base(root: Path, commit: str) -> Path:
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
-def recorded_base(root: Path) -> str | None:
-    """The commit the last `kb ingest` recorded, when it is still an ancestor of HEAD; else None.
-    (.kb/ is the agent's to write: this only picks what the report compares against; kb check never reads it.)"""
+def recorded_base(root: Path, path: str = BASE_PATH) -> str | None:
+    """The commit recorded at `path` (by default, the one the last `kb ingest` ran on), when it is still an
+    ancestor of HEAD; else None. (.kb/ is the agent's to write: this only picks what a report compares
+    against; kb check never reads it.)"""
     try:
-        data = read_regular(Path(root), BASE_PATH, max_bytes=200)
+        data = read_regular(Path(root), path, max_bytes=200)
     except UnsafePath:
         return None
     text = (data or b"").decode("ascii", errors="replace").strip()

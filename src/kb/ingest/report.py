@@ -48,7 +48,7 @@ class IngestReport:
         return bool(self.rejected) or any(i.severity == "error" for i in self.sources)
 
 
-def _base_config(root: Path, ref: str) -> KbConfig | None:
+def base_config(root: Path, ref: str) -> KbConfig | None:
     data = read_tree_files(root, ref, CONFIG).get(CONFIG)
     if data is None:
         return None
@@ -75,7 +75,7 @@ def _config_issues(head: KbConfig, base: KbConfig | None) -> list[Issue]:
     return issues
 
 
-def _drafted_paths(head: KbRepo, before: KbRepo) -> set[str]:
+def drafted_paths(head: KbRepo, before: KbRepo) -> set[str]:
     """kb/ paths the agent added, changed or deleted since base, including ones that now fail to load."""
     changed = {p for p in set(head.raw) | set(before.raw) if head.raw.get(p) != before.raw.get(p)}
     changed |= {i.path for i in head.errors if i.path} - {i.path for i in before.errors if i.path}
@@ -98,7 +98,7 @@ def _originals_changed(root: Path, before: KbRepo, ref: str) -> list[Issue]:
     return issues
 
 
-def _citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
+def citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
     """(record id, source) for records whose evidence cites one of `src_ids`."""
     out = []
     for rid, rec in sorted(repo.records.items()):
@@ -106,6 +106,18 @@ def _citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
             cited = sorted({q.source.partition("#")[0] for q in rec.evidence.quotes} & src_ids)
             out.extend((rid, src) for src in cited)
     return out
+
+
+def tainted(repo: KbRepo, source_issues: list[Issue]) -> list[Issue]:
+    """An error for each record citing a source with an error: a source with any error is not evidence; a
+    secret in the original is masked in the store, so its stored text still stands."""
+    bad = {i.record: i.code for i in reversed(source_issues)
+           if i.severity == "error" and i.record and i.code != "source.secret_in_original"}
+    return [
+        Issue(bad[src], f"{rid} cites {src}, which has a source error ({bad[src]}); it is not evidence until fixed",
+              path=repo.paths[rid], record=rid)
+        for rid, src in citers(repo, set(bad))
+    ]
 
 
 def _untriaged(repo: KbRepo) -> list[str]:
@@ -133,12 +145,12 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
         raise GitError(f"unknown base {ref!r}")
     config = load_config(root / CONFIG)
     head, before = KbRepo.load(root), KbRepo.at_ref(root, ref)
-    base_config = _base_config(root, ref)
+    config_at_base = base_config(root, ref)
     issues = run_gates(GateContext(root, config, head, before, ref), GATES)
     # source issues are never "caused" (they are reported under Sources), so the base needs no source gate
-    at_base = run_gates(GateContext(root, base_config or config, before), BASE_GATES)
+    at_base = run_gates(GateContext(root, config_at_base or config, before), BASE_GATES)
 
-    drafted = _drafted_paths(head, before)
+    drafted = drafted_paths(head, before)
     ids = {rid for rid, path in head.id_paths if path in drafted}
     source_issues = [i for i in issues if i.code.startswith("source.")]
     mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
@@ -157,19 +169,10 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     ]
     source_issues += _originals_changed(root, before, ref)
     tampered = [i for i in source_issues if i.code == "source.tampered"]
-    # a source with any error is not evidence; a secret in the original is masked in the store, so its
-    # stored text still stands
-    bad_sources = {i.record: i.code for i in reversed(source_issues)
-                   if i.severity == "error" and i.record and i.code != "source.secret_in_original"}
-    tainted = [
-        Issue(bad_sources[src], f"{rid} cites {src}, which has a source error ({bad_sources[src]}); it is not evidence until fixed",
-              path=head.paths[rid], record=rid)
-        for rid, src in _citers(head, set(bad_sources))
-    ]
-    rejected = direct + _config_issues(config, base_config) + tampered + tainted + caused
+    rejected = direct + _config_issues(config, config_at_base) + tampered + tainted(head, source_issues) + caused
     bad_paths = {i.path for i in rejected}
     bad = {i.record for i in rejected} | {rid for rid, path in head.id_paths if path in bad_paths}
-    proposed = sorted({m.id for m in config.modules} - {m.id for m in (base_config.modules if base_config else [])})
+    proposed = sorted({m.id for m in config.modules} - {m.id for m in (config_at_base.modules if config_at_base else [])})
     return IngestReport(
         accepted=sorted(ids - bad),
         rejected=rejected,
@@ -183,7 +186,7 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     )
 
 
-def _issue_lines(issues: list[Issue]) -> list[str]:
+def issue_lines(issues: list[Issue]) -> list[str]:
     return [f"- {inline_code(i.record or i.path or '')} · `{i.code}` · {inline_code(i.message)}" for i in issues]
 
 
@@ -192,7 +195,7 @@ def _untriaged_line(entry: str) -> str:
     return f"- {inline_code(ref)} · {inline_code(heading)}"
 
 
-def _section(title: str, lines: list[str], level: str = "##") -> list[str]:
+def section(title: str, lines: list[str], level: str = "##") -> list[str]:
     return [f"{level} {title} ({len(lines)})", "", *(lines or ["- none"]), ""]
 
 
@@ -200,12 +203,12 @@ def render_report(r: IngestReport) -> str:
     """Markdown; every piece of untrusted text (headings, messages, paths) is one-line inline code."""
     direct = [i for i in r.rejected if i not in r.caused]
     out = ["# Ingest report", ""]
-    out += _section("Accepted", [f"- {rid}" for rid in r.accepted])
-    out += [f"## Rejected ({len(r.rejected)})", "", *(_issue_lines(direct) or ["- none"]), ""]
+    out += section("Accepted", [f"- {rid}" for rid in r.accepted])
+    out += [f"## Rejected ({len(r.rejected)})", "", *(issue_lines(direct) or ["- none"]), ""]
     if r.caused:
-        out += _section("Caused by this change", _issue_lines(r.caused), "###")
-    out += _section("Flagged", _issue_lines(r.flagged))
-    out += _section("Sources", _issue_lines(r.sources))
-    out += _section("Untriaged segments", [_untriaged_line(s) for s in r.untriaged])
-    out += _section("Proposed modules", [f"- {m}" for m in r.proposed_modules])
+        out += section("Caused by this change", issue_lines(r.caused), "###")
+    out += section("Flagged", issue_lines(r.flagged))
+    out += section("Sources", issue_lines(r.sources))
+    out += section("Untriaged segments", [_untriaged_line(s) for s in r.untriaged])
+    out += section("Proposed modules", [f"- {m}" for m in r.proposed_modules])
     return "\n".join(out)

@@ -23,6 +23,7 @@ from kb.cache import write_cache
 from kb.ingest.redraft import (
     REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, RedraftError, build_redraft_brief, changed_segments, citing, select, unfound,
 )
+from kb.ingest.redraft_report import redraft_report, render_redraft_report
 from kb.ingest.report import ingest_report, render_report
 from kb.records.io import RecordError
 from kb.records.repo import KbRepo
@@ -192,12 +193,26 @@ def redraft(
     changed: Annotated[bool, typer.Option("--changed", help="Also select records citing changed text or with a quote not found.")] = False,
     report: Annotated[bool, typer.Option("--report", help="Gate what the agent redrafted and print a report.")] = False,
     strict: Annotated[bool, typer.Option("--strict", help="With --report: exit 1 when anything was rejected.")] = False,
-    base: Annotated[str | None, typer.Option("--base", help="The ref --changed compares against (default HEAD).")] = None,
+    base: Annotated[str | None, typer.Option(
+        "--base", help="The ref --changed compares against (default HEAD), or --report (default: the brief's commit).",
+    )] = None,
 ) -> None:
-    """Write a focused brief for your coding agent to redraft selected records."""
+    """Write a focused brief for your coding agent to redraft selected records; --report gates the redraft."""
     root = Path(ctx.obj["root"])
     if report:
-        typer.echo("--report is not implemented yet", err=True)
+        if ids or flagged or changed:
+            typer.echo("--report takes no ids, --flagged or --changed", err=True)
+            raise typer.Exit(2)
+        try:
+            result = redraft_report(root, base)
+        except (RedraftError, *TOOL_ERRORS) as e:
+            raise _fail(e) from e
+        typer.echo(render_redraft_report(result), nl=False)
+        if strict and result.rejected:
+            raise typer.Exit(1)
+        return
+    if strict:
+        typer.echo("--strict needs --report", err=True)
         raise typer.Exit(2)
     if not ids and not flagged and not changed:
         typer.echo("name record ids, or use --flagged or --changed", err=True)

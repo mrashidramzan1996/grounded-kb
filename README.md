@@ -35,6 +35,8 @@ grant `pull-requests: write` for the comment (the template does).
 | `kb source sync` | Re-read every stored source from its original (segment ids stay stable). |
 | `kb ingest [paths]` | Store the sources and write a drafting brief to `.kb/cache/ingest/brief.md` for your coding agent. Files no reader takes are skipped. |
 | `kb ingest --report [--strict]` | Gate what the agent drafted since `kb ingest` ran: accepted, rejected, flagged, sources, untriaged segments, proposed modules. |
+| `kb redraft [IDs] [--flagged] [--changed]` | Write a brief to `.kb/cache/redraft/brief.md` for redrafting only the named records, the flagged requirements, or the records citing text a `kb source sync` changed. |
+| `kb redraft --report [--strict]` | Gate the redraft: redrafted, rejected (out of scope, changed ids, `vague` removed without a measurable quote, edited ADRs/INVs), flagged, sources, still flagged, not redrafted. |
 | `kb module add MOD-x --owner <@handle\|TODO>` | Add a module without paths. |
 | `kb module paths MOD-x --accept` | Write the paths suggested from `r[impl ID]` markers (or `--set GLOB`). |
 | `kb check [--strict] [--changed] [--base REF]` | Run every gate: config, records, quotes, anchors, sources (re-derived from the originals), modules, triage. |
