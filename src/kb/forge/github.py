@@ -48,6 +48,9 @@ def _open(req, timeout):
 class GithubForge:
     name = "github"
 
+    def __init__(self) -> None:
+        self._pr: tuple[PullRequest | None] | None = None  # the event's pull request, read once
+
     def _request(self, method: str, url: str, payload: dict | None = None):
         token = _env("GITHUB_TOKEN")
         base = _api_base()
@@ -100,6 +103,13 @@ class GithubForge:
         return items
 
     def pull_request(self) -> PullRequest | None:
+        """The event's pull request, snapshotted on the first call: a test run that rewrites the event file
+        afterwards cannot change which PR the approvals are checked for."""
+        if self._pr is None:
+            self._pr = (self._read_event(),)
+        return self._pr[0]
+
+    def _read_event(self) -> PullRequest | None:
         path = _env("GITHUB_EVENT_PATH")
         _env("GITHUB_TOKEN")
         _env("GITHUB_REPOSITORY")

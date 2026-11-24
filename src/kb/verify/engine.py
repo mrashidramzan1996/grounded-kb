@@ -4,7 +4,7 @@ Nothing here is stored: every verdict is recomputed from the head tree, the chan
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -55,6 +55,7 @@ class EngineInput:
     changes: ChangeSet | None
     index: AnchorIndex
     outcomes: dict[str, Outcome]  # every ref in tests_needed(...) for the affected set
+    symbols: SymbolIndex | None = None  # parsed head files; `snapshot` fills it before the test run
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ class _TestResult:
 class _Engine:
     def __init__(self, inp: EngineInput) -> None:
         self.inp = inp
-        self.symbols = SymbolIndex(inp.root)
+        self.symbols = inp.symbols if inp.symbols is not None else SymbolIndex(inp.root)
         live = live_ids(inp.repo)
         self.claims = {c.id: (f, c) for f, c in inp.repo.claims() if f.id in live}
         self.records = {rid: r for rid, r in sorted(inp.repo.records.items()) if rid in live}
@@ -305,6 +306,14 @@ def tests_needed(inp: EngineInput, affected: Affected) -> dict[str | None, list[
 
 
 tests_needed.__test__ = False  # type: ignore[attr-defined]  # not a pytest test, despite the name
+
+
+def snapshot(inp: EngineInput, affected: Affected) -> EngineInput:
+    """`inp` with every head file `derive` reads for `affected` (code anchors, linked tests) parsed now, by a dry
+    derive: the project's tests, run next, cannot change what the verdicts see."""
+    inp = replace(inp, symbols=SymbolIndex(inp.root))
+    derive(inp, affected)
+    return inp
 
 
 def derive(inp: EngineInput, affected: Affected) -> list[Verdict]:

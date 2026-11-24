@@ -195,3 +195,29 @@ def test_redirect_never_forwards_token(env, monkeypatch):
         sink.shutdown()
     assert TOKEN not in str(e.value)
     assert seen == []
+
+
+def test_pull_request_review_event_payload(env, tmp_path, monkeypatch):
+    """The workflow also runs on pull_request_review (submitted, dismissed); that payload carries pull_request too."""
+    from kb.forge import forge_from_option
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({
+        "action": "submitted",
+        "review": {"state": "approved", "user": {"login": "bob"}, "commit_id": "b" * 40},
+        "pull_request": {"number": 5, "head": {"sha": "b" * 40}, "user": {"login": "alice"}, "base": {"ref": "main"}},
+    }))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    forge = forge_from_option("auto", tmp_path)
+    assert forge is not None and forge.name == "github"
+    assert forge.pull_request() == PR
+
+
+def test_pull_request_is_read_once(env, tmp_path):
+    """The event is snapshotted on the first read: a later rewrite of the file (by a test run) changes nothing."""
+    forge = GithubForge()
+    assert forge.pull_request() == PR
+    (tmp_path / "event.json").write_text(json.dumps(
+        {"pull_request": {"number": 99, "head": {"sha": "f" * 40}, "user": {"login": "mallory"}}}))
+    assert forge.pull_request() == PR
+    assert GithubForge().pull_request() == PullRequest(99, "f" * 40, "mallory")

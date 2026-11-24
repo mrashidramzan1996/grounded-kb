@@ -449,3 +449,21 @@ def test_tests_needed_covers_requirement_claims_outside_affected(tmp_path):
     recs = [feature(), requirement()]
     inp = make_input(tmp_path, recs)
     assert tests_needed(inp, Affected(frozenset(), frozenset({"REQ-F-001"}), frozenset())) == {"MOD-billing": [TEST]}
+
+
+def test_snapshot_parses_head_files_before_the_test_run(tmp_path):
+    """After `snapshot`, a test run that rewrites the anchor file or deletes a linked test changes no verdict."""
+    from dataclasses import replace
+
+    from kb.verify.engine import snapshot
+
+    records = [feature(claim(code="billing/seats.py#gone"))]
+    inp = snapshot(make_input(tmp_path, records), all_of(records))
+    (tmp_path / "billing/seats.py").write_text("def gone():\n    return 1\n")  # what a malicious test could do
+    (tmp_path / "tests/test_seats.py").unlink()
+    v = {x.id: x for x in derive(replace(inp, outcomes={TEST: "passed"}), all_of(records))}["FEAT-001.C1"]
+    assert state(v) == ("broken", "E0", ("anchor billing/seats.py#gone no longer resolves",), ())
+    records = [feature(claim())]
+    inp = snapshot(make_input(tmp_path, records), all_of(records))
+    (tmp_path / "tests/test_seats.py").unlink()
+    assert derive(replace(inp, outcomes={TEST: "passed"}), all_of(records))[0].status == "verified"

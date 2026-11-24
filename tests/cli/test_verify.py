@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from helpers import commit, fail_claim_test, forge_file, git, head, invoke, set_mode, verdicts
+from helpers import CLAIM_TEST, commit, fail_claim_test, forge_file, git, head, invoke, set_mode, verdicts
 
 from kb.ports.forge import COMMENT_MARKER
 from kb.verify.report import COMMENT_PATH, STATUS_PATH
@@ -207,3 +207,30 @@ def test_cache_files_written_for_every_format(verify_repo):
             (verify_repo / name).unlink(missing_ok=True)
         assert invoke(verify_repo, "verify", "--all", "--format", fmt).exit_code == 0
         assert (verify_repo / STATUS_PATH).is_file() and (verify_repo / COMMENT_PATH).is_file(), fmt
+
+
+def test_pr_snapshot_taken_before_tests(verify_repo, tmp_path):
+    """A linked test that rewrites the forge data (here: fakes an approval on a made-up head) cannot change the PR
+    whose approvals are checked: the PR is read before any test runs."""
+    git(verify_repo, "checkout", "-q", "-b", "feature")
+    seats = verify_repo / "services/billing/seats.py"
+    seats.write_text(seats.read_text() + "\n\ndef add_seat(account):\n    return 1\n")
+    path = tmp_path / "forge.json"
+    fake = {
+        "pr": {"number": 7, "head_sha": "f" * 40, "author": "alice"},
+        "reviews": [{"login": "bob", "state": "APPROVED", "commit_id": "f" * 40, "submitted_at": "2026-01-01T00:00:00Z"}],
+        "teams": {"@acme/billing": ["bob"]},
+        "comments": [],
+    }
+    test = verify_repo / CLAIM_TEST
+    test.write_text(test.read_text().replace(
+        "    ...\n", f"    import pathlib\n    pathlib.Path({str(path)!r}).write_text({json.dumps(fake)!r})\n", 1))
+    commit(verify_repo)
+    assert forge_file(tmp_path, verify_repo) == path
+    r = invoke(verify_repo, "verify", "--forge", f"local:{path}", "--format", "json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(path.read_text())["pr"]["head_sha"] == "f" * 40  # the test did run and rewrite it
+    data = json.loads(r.stdout)
+    assert verdicts(r.stdout)["FEAT-001.C1"]["status"] == "verified"
+    assert {"code": "missing_owner_approval", "record": None} in data["blocking"]
+    assert any(head(verify_repo)[:7] in i["message"] for i in data["issues"] if i["code"] == "missing_owner_approval")

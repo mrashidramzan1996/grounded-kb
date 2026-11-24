@@ -19,7 +19,7 @@ from kb.testrun import run_tests
 from kb.verify.affected import affected
 from kb.verify.approvals import owner_approval, required_owners
 from kb.verify.changes import compute_changes
-from kb.verify.engine import EngineInput, Verdict, derive, tests_needed
+from kb.verify.engine import EngineInput, Verdict, derive, snapshot, tests_needed
 from kb.verify.index import INDEX_PATH, build_index
 from kb.verify.report import VerifyReport, blocking_issues
 from kb.verify.stale_context import stale_context
@@ -72,14 +72,18 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     index = build_index(root, config)
     write_cache(root, INDEX_PATH, index.to_json())
     hit = affected(None if all_ else changes, config, repo, index)
-    inp = EngineInput(root, config, repo, base_repo, changes, index, {})
+    stale = (
+        stale_context(root, config, repo, base_branch, base_ref, list(changes.files))
+        if base_branch and base_ref and changes is not None else []
+    )
+    # The project's tests are untrusted code: everything read from the tree or the forge's event is read first.
+    pr = forge.pull_request() if forge else None
+    head = head_commit(root)
+    inp = snapshot(EngineInput(root, config, repo, base_repo, changes, index, {}), hit)
     inp = replace(inp, outcomes=run_tests(root, config, tests_needed(inp, hit)))
     verdicts = derive(inp, hit)
 
-    issues = check.issues + verdict_issues(verdicts, repo)
-    if base_branch and base_ref and changes is not None:
-        issues += stale_context(root, config, repo, base_branch, base_ref, list(changes.files))
-    pr = forge.pull_request() if forge else None
+    issues = check.issues + verdict_issues(verdicts, repo) + stale
     required = None
     if forge and pr:
         required = required_owners(root, config, repo, base_repo, changes, verdicts)
@@ -88,7 +92,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     issues = sorted(issues, key=lambda i: (*i.sort_key, i.message))
     return VerifyReport(
         base_ref=base_ref,
-        head=head_commit(root),
+        head=head,
         verdicts=verdicts,
         issues=issues,
         blocking=blocking_issues(issues, list(config.policy.fail_on)),

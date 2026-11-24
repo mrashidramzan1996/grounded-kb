@@ -102,6 +102,21 @@ def test_test_ids_are_separate_argv_items(project):
     assert not (project / "pwned").exists() and set(r.outcomes.values()) == {"failed"}
 
 
+def test_test_env_has_no_tokens(project, monkeypatch):
+    """The project's tests are untrusted code: they never see the forge or Actions credentials."""
+    import json
+    tokens = ("GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+              "ACTIONS_ID_TOKEN_REQUEST_URL")
+    for name in tokens:
+        monkeypatch.setenv(name, "secret-value")
+    monkeypatch.setenv("KB_KEEP_ME", "1")
+    (project / "record_env.py").write_text("import json, os\nopen('env.json', 'w').write(json.dumps(dict(os.environ)))\n")
+    CommandRunner(TestsCfg(run="python record_env.py {tests} --junitxml={junit}")).run(project, ["a.py::f"])
+    env = json.loads((project / "env.json").read_text())
+    assert not set(tokens) & set(env) and "secret-value" not in env.values()
+    assert env["KB_KEEP_ME"] == "1"
+
+
 def test_id_format(project):
     import json
     cfg = TestsCfg(run="python record_argv.py {tests} --junitxml={junit}", id_format="{path}#{name}")

@@ -13,6 +13,10 @@ from kb.ports.tests import Outcome, TestRun
 PYTEST_PRESET = "python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 {tests} --junitxml={junit}"
 _LOG_TAIL = 4000
 _WORSE: list[Outcome] = ["failed", "skipped", "missing", "flaky", "passed", "no_runner"]
+# Credentials the project's tests (untrusted code on a PR) must never see.
+SCRUBBED_TOKEN_ENV = frozenset({
+    "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL",
+})
 
 
 class TestRunError(Exception):
@@ -74,7 +78,7 @@ class CommandRunner:
 
     def _once(self, root: Path, refs: list[str]) -> tuple[dict[str, Outcome], str, bool]:
         """(outcomes, log tail, whether a junit report was produced)."""
-        env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_GIT_ENV}
+        env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_GIT_ENV and k not in SCRUBBED_TOKEN_ENV}
         env["PYTHONDONTWRITEBYTECODE"] = "1"  # no __pycache__/ left behind: a run must not dirty the tree
         with tempfile.TemporaryDirectory(prefix="kb-junit-") as tmp:
             junit = Path(tmp) / "junit.xml"
