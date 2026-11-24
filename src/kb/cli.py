@@ -19,6 +19,7 @@ from kb.init.scaffold import InitError, init_repo
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
+from kb.ingest.redraft import changed_segments, citing, unfound
 from kb.ingest.report import ingest_report, render_report
 from kb.records.io import RecordError
 from kb.records.repo import KbRepo
@@ -126,7 +127,16 @@ def source_add(ctx: typer.Context, paths: Annotated[list[Path], typer.Argument(h
 @source_app.command("sync")
 def source_sync(ctx: typer.Context) -> None:
     """Re-read every stored source from its original."""
+    root = Path(ctx.obj["root"])
+    before = KbRepo.load(root)
     _run(ctx, sync_sources)
+    after = KbRepo.load(root)
+    ids = sorted(set(citing(after, changed_segments(before, after))) | set(unfound(after)))
+    if ids:
+        names = ", ".join(
+            f"{i} ({', '.join(after.records[i].flags)})" if getattr(after.records[i], "flags", None) else i for i in ids
+        )
+        typer.echo(f"{len(ids)} records cite changed text: {names}. Run `kb redraft --changed` to redraft them.", err=True)
 
 
 @app.command()
