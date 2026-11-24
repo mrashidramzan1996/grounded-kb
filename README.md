@@ -14,11 +14,11 @@ Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Either from PyPI or f
 
 ```sh
 uv tool install grounded-kb                                                       # from PyPI
-uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.1.0'     # a pinned tag
+uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.2.0'     # a pinned tag
 kb version
 ```
 
-For CI, `kb init --install-spec 'grounded-kb==0.1.0'` (or the pinned git spec above) writes it into the workflow;
+For CI, `kb init --install-spec 'grounded-kb==0.2.0'` (or the pinned git spec above) writes it into the workflow;
 without `--install-spec` the CI job only warns.
 
 The generated CI job runs `kb verify --base origin/<target> --comment` on pull requests (one updated comment, plus

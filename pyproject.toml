@@ -1,6 +1,6 @@
 [project]
 name = "grounded-kb"
-version = "0.1.0"
+version = "0.2.0"
 description = "Git-native knowledge base where every product fact rests on a verbatim quote or a code anchor, checked for any coding agent"
 readme = "README.md"
 license = "MIT"
