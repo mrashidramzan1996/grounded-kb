@@ -111,7 +111,7 @@ git add -A && git commit -m "seat removal with a claim"
 Expect: `FEAT-001.C1` and `REQ-F-002` verified at E2 (they don't appear in the text output, which lists only what is not
 verified; the Markdown table shows them). The requirements with no code show as `not_built ... E0`. An invariant that
 lists no tests is `broken ... E0: invariant lists no tests`, and it blocks: Phase 2 requires every invariant to have a
-passing test. The last line reads `<n> broken, 0 stale, 0 unverified, 2 verified; <n> blocking (mode: warn-only)`, with
+passing test. The last line reads `<n> broken, 0 stale, 0 unverified, 2 verified, 0 built, <n> not_built; <n> blocking (mode: warn-only)`, with
 exit 0, because `warn-only` never fails.
 
 **Record what you see:**

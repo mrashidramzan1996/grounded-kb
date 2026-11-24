@@ -70,3 +70,10 @@ def test_module_tests_cfg_must_name_one_runner(tmp_path):
     (p := tmp_path / "kb.config.yaml").write_text("version: 1\nmodules: [{id: MOD-a, owner: t, tests: {}}]\n")
     with pytest.raises(ConfigError, match="preset"):
         load_config(p)
+
+
+@pytest.mark.parametrize("n", [0, -1])
+def test_max_items_per_pr_must_be_positive(tmp_path, n):
+    (p := tmp_path / "kb.config.yaml").write_text(f"version: 1\nreview: {{max_items_per_pr: {n}}}\n")
+    with pytest.raises(ConfigError, match="max_items_per_pr"):
+        load_config(p)

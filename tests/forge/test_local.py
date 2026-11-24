@@ -83,3 +83,21 @@ def test_options(tmp_path):
 def test_local_missing_file_is_forge_error(tmp_path):
     with pytest.raises(ForgeError):
         forge_from_option("local:nope.json", tmp_path).pull_request()
+
+
+@pytest.mark.parametrize("data, call", [
+    ({"reviews": [{"login": "bob"}]}, "reviews"),
+    ({"reviews": [3]}, "reviews"),
+    ({"reviews": {"a": 1}}, "reviews"),
+    ({"reviews": [{"login": "bob", "state": 1, "commit_id": "a", "submitted_at": "t"}]}, "reviews"),
+    ({"teams": ["@org/x"]}, "teams"),
+    ({"teams": {"@org/x": "bob"}}, "teams"),
+    ({"teams": {"@org/x": [1]}}, "teams"),
+    ({"pr": [1]}, "pr"),
+    ({"pr": {"number": "x", "head_sha": "a", "author": "b"}}, "pr"),
+])
+def test_local_forge_malformed_entries_raise_forge_error(tmp_path, data, call):
+    forge = LocalForge(write(tmp_path, data))
+    with pytest.raises(ForgeError):
+        {"reviews": lambda: forge.reviews(PR), "teams": lambda: forge.team_members("@org/x"),
+         "pr": forge.pull_request}[call]()

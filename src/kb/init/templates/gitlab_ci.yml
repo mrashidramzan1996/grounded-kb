@@ -11,6 +11,8 @@ kb-check-mr:
     - 'if [ -z "$KB_INSTALL_SPEC" ]; then echo "kb: set the install spec in .gitlab-ci.yml — see kb/README.md"; exit 0; fi'
     # Honours policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
     # Install your project's test dependencies here (kb verify runs the tests that claims link to).
+    # A merge-request pipeline may lack origin/<target>: fetch it so --base resolves.
+    - git fetch origin "+refs/heads/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --format markdown
   artifacts:
     when: always

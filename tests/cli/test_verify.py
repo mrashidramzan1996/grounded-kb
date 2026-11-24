@@ -28,7 +28,7 @@ def test_broken_claim_exit_1_in_enforce_0_in_warn_only(verify_repo):
     assert r.exit_code == 0, r.output
     assert r.stdout.splitlines()[0].startswith("broken FEAT-001.C1 E1: ")
     assert "error claim.broken" not in r.stdout  # the verdict line already says it
-    assert "2 broken, 0 stale, 0 unverified, 0 verified; 2 blocking (mode: warn-only)" in r.stderr
+    assert "2 broken, 0 stale, 0 unverified, 0 verified, 0 built, 0 not_built; 2 blocking (mode: warn-only)" in r.stderr
     assert invoke(verify_repo, "verify", "--strict").exit_code == 1
     set_mode(verify_repo, "enforce")
     r = invoke(verify_repo, "verify")
@@ -57,7 +57,7 @@ def test_json_stdout_only_messages_stderr(verify_repo):
     data = json.loads(r.stdout)
     assert set(data) == {"base", "head", "mode", "scope", "verdicts", "issues", "blocking", "summary"}
     assert data["scope"] == "all"
-    assert set(data["summary"]) == {"broken", "stale", "unverified", "verified", "errors", "warnings"}
+    assert set(data["summary"]) == {"broken", "stale", "unverified", "verified", "built", "not_built", "errors", "warnings"}
     assert set(data["verdicts"][0]) == {"id", "kind", "status", "level", "notes", "reasons", "tests"}
     assert r.stdout == (verify_repo / STATUS_PATH).read_text()
     assert r.stdout == json.dumps(data, sort_keys=True, indent=2) + "\n"
@@ -81,7 +81,7 @@ def test_markdown_starts_with_marker_and_caps_rows(verify_repo):
     md = r.stdout
     assert md.startswith(COMMENT_MARKER + "\n")
     assert md == (verify_repo / COMMENT_PATH).read_text()
-    assert "**kb verify**: 2 broken · 0 stale · 1 unverified · 0 verified (mode: warn-only)" in md
+    assert "**kb verify**: 2 broken · 0 stale · 1 unverified · 0 verified · 0 built · 2 not_built (mode: warn-only)" in md
     sections = [ln for ln in md.splitlines() if ln.startswith("### ")]
     assert sections == ["### Blocking", "### Claims", "### Approvals", "### Other issues"]
     claims = md.split("### Claims", 1)[1].split("### Approvals", 1)[0]

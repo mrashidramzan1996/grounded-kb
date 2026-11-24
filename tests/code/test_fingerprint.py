@@ -91,7 +91,9 @@ def test_fingerprint_of_resolves_anchor(tmp_path):
 def test_fingerprint_of_source_replaces_disk(tmp_path):
     (tmp_path / "a.py").write_bytes(b"def f():\n    return 1\n")
     old = b"def f():\n    return 2\n"
-    assert fingerprint_of(tmp_path, "a.py#f", source=old) == fingerprint_of(tmp_path, "a.py#f", source=old)
+    (other := tmp_path / "other").mkdir()
+    (other / "a.py").write_bytes(old)  # the same bytes on disk give the same fingerprint as source=
+    assert fingerprint_of(tmp_path, "a.py#f", source=old) == fingerprint_of(other, "a.py#f")
     assert fingerprint_of(tmp_path, "a.py#f", source=old) != fingerprint_of(tmp_path, "a.py#f")
     assert fingerprint_of(tmp_path, "gone.py#f", source=old) is not None
     assert fingerprint_of(tmp_path, "a.py#g", source=old) is None

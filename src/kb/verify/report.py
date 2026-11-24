@@ -25,6 +25,8 @@ VERDICT_CODES = frozenset({
 APPROVAL_CODES = frozenset({"missing_owner_approval", "owner_approval.deferred"})
 _OWN_CATEGORY = frozenset({"decision_guard", "missing_owner_approval", "stale_context"})
 Scope = Literal["all", "affected"]
+COMMENT_LIMIT = 60_000  # characters; GitHub refuses comment bodies over 65,536
+TRUNCATED = "… comment truncated; see the status.json artifact"
 _STATUS_ORDER = {"broken": 0, "stale": 1, "unverified": 2}
 
 
@@ -39,7 +41,7 @@ class VerifyReport:
     scope: Scope = "affected"  # "all": every live claim was checked (--all, or no base resolved)
     pr: PullRequest | None = None  # the forge's pull request, when there is one
     required: dict[str, list[str]] | None = None  # owners who must approve; None when not checked (no PR)
-    max_items: int = 40  # config.review.max_items_per_pr: rows in the comment's claims table
+    max_items: int = 40  # config.review.max_items_per_pr: rows in each of the comment's lists
 
 
 def category(issue: Issue) -> str | None:
@@ -65,6 +67,8 @@ def _counts(r: VerifyReport) -> dict[str, int]:
         "stale": statuses["stale"],
         "unverified": statuses["unverified"],
         "verified": statuses["verified"],
+        "built": statuses["built"],
+        "not_built": statuses["not_built"],
         "errors": errors,
         "warnings": len(r.issues) - errors,
     }
@@ -77,8 +81,8 @@ def _is_verdict_issue(r: VerifyReport, i: Issue) -> bool:
 def summary_line(r: VerifyReport) -> str:
     c = _counts(r)
     return (
-        f"{c['broken']} broken, {c['stale']} stale, {c['unverified']} unverified, {c['verified']} verified; "
-        f"{len(r.blocking)} blocking (mode: {r.mode})"
+        f"{c['broken']} broken, {c['stale']} stale, {c['unverified']} unverified, {c['verified']} verified, "
+        f"{c['built']} built, {c['not_built']} not_built; {len(r.blocking)} blocking (mode: {r.mode})"
     )
 
 
@@ -119,14 +123,36 @@ def render_json(r: VerifyReport) -> str:
     return json.dumps(data, sort_keys=True, indent=2) + "\n"
 
 
+_MD_ESCAPES = str.maketrans({c: "\\" + c for c in "\\|[]!"} | {"<": "&lt;"})
+
+
 def _md(text: str) -> str:
-    """One line of text, safe inside a Markdown table cell (and unable to fake the comment marker)."""
-    return " ".join(text.split()).replace("|", "\\|").replace("<", "&lt;")
+    """One line of text, safe inside a Markdown table cell: it cannot fake the comment marker or, from PR-controlled
+    text, make a link or an image."""
+    return " ".join(text.split()).translate(_MD_ESCAPES)
 
 
 def _issue_md(i: Issue) -> str:
     where = " ".join(f"`{_md(x)}`" for x in (i.path, i.record) if x)
     return f"- {i.severity} **{_md(i.code)}**" + (f" {where}" if where else "") + f": {_md(i.message)}"
+
+
+def _capped(lines: list[str], cap: int) -> list[str]:
+    return lines[:cap] + (["", f"… and {len(lines) - cap} more"] if len(lines) > cap else [])
+
+
+def _fit(lines: list[str]) -> str:
+    """The comment body, cut at a line boundary to stay within COMMENT_LIMIT characters."""
+    body = "\n".join(lines) + "\n"
+    if len(body) <= COMMENT_LIMIT:
+        return body
+    budget, kept, size = COMMENT_LIMIT - len(TRUNCATED) - 2, [], 0
+    for line in lines:
+        if size + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        size += len(line) + 1
+    return "\n".join(kept) + "\n\n" + TRUNCATED + "\n"
 
 
 def render_markdown(r: VerifyReport) -> str:
@@ -135,22 +161,23 @@ def render_markdown(r: VerifyReport) -> str:
         COMMENT_MARKER,
         (
             f"**kb verify**: {c['broken']} broken · {c['stale']} stale · {c['unverified']} unverified · "
-            f"{c['verified']} verified (mode: {r.mode})"
+            f"{c['verified']} verified · {c['built']} built · {c['not_built']} not_built (mode: {r.mode})"
         ),
         "",
         "### Blocking",
         "",
     ]
-    out += [_issue_md(i) for i in r.blocking] or ["None."]
+    out += _capped([_issue_md(i) for i in r.blocking], r.max_items) or ["None."]
 
     out += ["", "### Claims", ""]
     ordered = sorted(r.verdicts, key=lambda v: _STATUS_ORDER.get(v.status, len(_STATUS_ORDER)))  # stable
     if ordered:
         out += ["| ID | status | level | notes | reason |", "|---|---|---|---|---|"]
-        for v in ordered[: r.max_items]:
-            out.append(f"| {_md(v.id)} | {v.status} | {v.level} | {', '.join(v.notes)} | {_md('; '.join(v.reasons))} |")
-        if len(ordered) > r.max_items:
-            out += ["", f"… and {len(ordered) - r.max_items} more"]
+        out += _capped(
+            [f"| {_md(v.id)} | {v.status} | {v.level} | {', '.join(v.notes)} | {_md('; '.join(v.reasons))} |"
+             for v in ordered],
+            r.max_items,
+        )
     else:
         out.append("No affected claims.")
 
@@ -170,8 +197,8 @@ def render_markdown(r: VerifyReport) -> str:
         i for i in r.issues
         if i not in blocking and i.code not in APPROVAL_CODES and not _is_verdict_issue(r, i)
     ]
-    out += [_issue_md(i) for i in other] or ["None."]
-    return "\n".join(out) + "\n"
+    out += _capped([_issue_md(i) for i in other], r.max_items) or ["None."]
+    return _fit(out)
 
 
 def write_outputs(root: Path, r: VerifyReport) -> None:

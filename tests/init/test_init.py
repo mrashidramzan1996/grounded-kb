@@ -393,3 +393,16 @@ def test_github_workflow_checks_out_pr_head_and_reruns_on_reviews(tmp_path):
     # the upload runs last, so a push run keeps its --all results too
     assert str(job["steps"][-1].get("uses", "")).startswith("actions/upload-artifact@v4")
     assert job["steps"][-1]["if"] == "always()"
+
+
+def test_gitlab_mr_job_fetches_target_branch_before_verify(tmp_path):
+    """A merge-request pipeline may not have origin/<target> yet: fetch it, or kb verify --base cannot resolve it."""
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, ci="gitlab")
+    script = YAML(typ="safe").load((repo / ".gitlab-ci.yml").read_text())["kb-check-mr"]["script"]
+    t = "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    fetch = script.index(f'git fetch origin "+refs/heads/{t}:refs/remotes/origin/{t}"')
+    verify = next(i for i, s in enumerate(script) if "kb verify --base" in s)
+    assert fetch < verify

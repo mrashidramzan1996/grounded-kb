@@ -34,14 +34,24 @@ class LocalForge:
             raise ForgeError("forge file pr needs number, head_sha and author") from None
 
     def reviews(self, pr: PullRequest) -> list[Review]:
-        return [
-            Review(r["login"], r["state"], r["commit_id"], r["submitted_at"])
-            for r in self._load().get("reviews", [])
-        ]
+        entries = self._load().get("reviews", [])
+        fields = ("login", "state", "commit_id", "submitted_at")
+        if not isinstance(entries, list) or not all(
+            isinstance(r, dict) and all(isinstance(r.get(k), str) for k in fields) for r in entries
+        ):
+            raise ForgeError("forge file reviews must be a list of {login, state, commit_id, submitted_at} strings")
+        return [Review(*(r[k] for k in fields)) for r in entries]
 
     def team_members(self, handle: str) -> set[str] | None:
-        members = self._load().get("teams", {}).get(handle)
-        return None if members is None else set(members)
+        teams = self._load().get("teams", {})
+        if not isinstance(teams, dict):
+            raise ForgeError("forge file teams must map a team handle to a list of logins")
+        members = teams.get(handle)
+        if members is None:
+            return None
+        if not isinstance(members, list) or not all(isinstance(m, str) for m in members):
+            raise ForgeError(f"forge file teams[{handle!r}] must be a list of logins")
+        return set(members)
 
     def upsert_comment(self, pr: PullRequest, body: str) -> None:
         data = self._load()

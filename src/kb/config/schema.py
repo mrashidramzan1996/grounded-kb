@@ -101,7 +101,7 @@ class PolicyCfg(_Model):
 
 
 class ReviewCfg(_Model):
-    max_items_per_pr: int = 40
+    max_items_per_pr: int = Field(40, ge=1)
     escalate_after_days: int = 5
 
 
