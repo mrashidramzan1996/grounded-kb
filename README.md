@@ -21,6 +21,11 @@ kb version
 For CI, `kb init --install-spec 'grounded-kb==0.1.0'` (or the pinned git spec above) writes it into the workflow;
 without `--install-spec` the CI job only warns.
 
+The generated CI job runs `kb verify --base origin/<target> --comment` on pull requests (one updated comment, plus
+`.kb/cache/status.json` and `.kb/cache/verify.md` as an artifact) and `kb verify --all` on the default branch. Install your
+project's test dependencies in the workflow before the verify step, keep `fetch-depth: 0` so the merge-base exists, and
+grant `pull-requests: write` for the comment (the template does).
+
 ## Use (Phase 1)
 
 | Command | What it does |

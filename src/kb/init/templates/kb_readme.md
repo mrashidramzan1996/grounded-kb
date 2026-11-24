@@ -12,12 +12,18 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 
 ## CI
 
-`kb init` writes a CI job (`.github/workflows/kb.yml` or `.gitlab-ci.yml`) that runs `kb check` on every pull request
-and on the default branch. It installs nothing until you set its install spec, `KB_INSTALL_SPEC`; until then the job
+`kb init` writes a CI job (`.github/workflows/kb.yml` or `.gitlab-ci.yml`) that runs `kb verify` on every pull request
+and `kb verify --all` on the default branch. It installs nothing until you set its install spec, `KB_INSTALL_SPEC`; until then the job
 only prints a warning. Use a spec you control and pin it:
 
 - a tagged git URL, e.g. `git+https://github.com/<owner>/grounded-kb@<tag>`, or
 - the published package with an exact version (`grounded-kb==<version>`), once its owner publishes it.
+
+On GitHub the pull-request job posts (and updates) one comment and uploads `.kb/cache/status.json` and `.kb/cache/verify.md`
+as an artifact; the comment needs `permissions: pull-requests: write` (the template sets it). GitLab prints the Markdown to
+the job log and keeps both files as artifacts. Install your project's test dependencies before the verify step, because
+`kb verify` runs the linked tests with the project's own `python`. Keep `fetch-depth: 0` (`GIT_DEPTH: "0"` on GitLab):
+a shallow clone has no merge-base and `kb verify --base` exits 2.
 
 Never use an unpinned package name: anyone could publish under a name nobody has claimed. `kb init --install-spec <spec>`
 writes the spec for you.

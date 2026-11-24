@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write   # lets kb verify --comment post and update its PR comment
 
 jobs:
   check:
@@ -23,8 +24,19 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - if: env.KB_INSTALL_SPEC == ''
         run: 'echo "::warning::kb: set the install spec in .github/workflows/kb.yml — see kb/README.md"'
-      # Both check steps honour policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
+      # install your project's test dependencies here (kb verify runs the tests that claims link to, with the project's own python)
+      # Both verify steps honour policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
       - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'
-        run: uvx --from "$KB_INSTALL_SPEC" kb check --base "origin/$BASE_REF"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --comment --forge auto
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kb-verify
+          path: |
+            .kb/cache/status.json
+            .kb/cache/verify.md
+          if-no-files-found: ignore
       - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
-        run: uvx --from "$KB_INSTALL_SPEC" kb check
+        run: uvx --from "$KB_INSTALL_SPEC" kb verify --all

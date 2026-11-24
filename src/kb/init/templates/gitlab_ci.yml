@@ -10,7 +10,11 @@ kb-check-mr:
   script:
     - 'if [ -z "$KB_INSTALL_SPEC" ]; then echo "kb: set the install spec in .gitlab-ci.yml — see kb/README.md"; exit 0; fi'
     # Honours policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
-    - uvx --from "$KB_INSTALL_SPEC" kb check --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    # Install your project's test dependencies here (kb verify runs the tests that claims link to).
+    - uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --format markdown
+  artifacts:
+    when: always
+    paths: [.kb/cache/status.json, .kb/cache/verify.md]
 
 kb-check-default-branch:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
@@ -21,4 +25,5 @@ kb-check-default-branch:
     KB_INSTALL_SPEC: '{{install_spec}}'
   script:
     - 'if [ -z "$KB_INSTALL_SPEC" ]; then echo "kb: set the install spec in .gitlab-ci.yml — see kb/README.md"; exit 0; fi'
-    - uvx --from "$KB_INSTALL_SPEC" kb check
+    # Install your project's test dependencies here.
+    - uvx --from "$KB_INSTALL_SPEC" kb verify --all

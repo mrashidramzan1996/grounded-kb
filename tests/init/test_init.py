@@ -122,7 +122,8 @@ def test_github_ci_template(tmp_path):
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     assert "fetch-depth: 0" in text and "KB_INSTALL_SPEC: 'grounded-kb==9.9'" in text
-    assert 'uvx --from "$KB_INSTALL_SPEC" kb check --base "origin/$BASE_REF"' in text and "--strict" not in text
+    assert 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --comment --forge auto' in text
+    assert "--strict" not in text
     assert "BASE_REF: ${{ github.base_ref }}" in text  # M7: never expanded inside run:
 
 
@@ -149,7 +150,7 @@ def test_gitlab_ci_template(tmp_path):
     repo = make_git_repo(None, tmp_path)
     r = init_repo(repo, ci="gitlab")
     text = (repo / ".gitlab-ci.yml").read_text()
-    assert 'GIT_DEPTH: "0"' in text and 'kb check --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"' in text and "--strict" not in text
+    assert 'GIT_DEPTH: "0"' in text and 'kb verify --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"' in text and "--strict" not in text
     assert not (repo / ".github").exists() and ".gitlab-ci.yml" in r.files_written
 
 
@@ -251,7 +252,7 @@ def test_install_spec_is_single_quoted_in_both_templates(tmp_path):
         repo = make_git_repo(None, tmp_path / ci)
         init_repo(repo, ci=ci, install_spec="grounded-kb>=1")
         text = (repo / rel).read_text()
-        assert "KB_INSTALL_SPEC: 'grounded-kb>=1'" in text and 'uvx --from "$KB_INSTALL_SPEC" kb check' in text
+        assert "KB_INSTALL_SPEC: 'grounded-kb>=1'" in text and 'uvx --from "$KB_INSTALL_SPEC" kb verify' in text
         YAML(typ="safe").load(text)
 
 
@@ -275,8 +276,8 @@ def test_github_workflow_pr_and_push_steps(tmp_path):
     runs = {s["if"]: s["run"] for s in steps if "run" in s}
     assert len(runs) == 3
     pr, push = "env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'", "env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"
-    assert runs[pr].endswith('kb check --base "origin/$BASE_REF"') and "${{" not in runs[pr]
-    assert runs[push].endswith("kb check") and "--base" not in runs[push]
+    assert runs[pr].endswith('kb verify --base "origin/$BASE_REF" --comment --forge auto') and "${{" not in runs[pr]
+    assert runs[push].endswith("kb verify --all") and "--base" not in runs[push]
     assert runs["env.KB_INSTALL_SPEC == ''"].startswith("echo ")
     assert wf["jobs"]["check"]["env"] == {"KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.base_ref }}"}
     assert wf["jobs"]["check"]["steps"][0]["with"]["fetch-depth"] == 0
@@ -291,7 +292,7 @@ def test_gitlab_ci_mr_and_default_branch_jobs(tmp_path):
     ci = YAML(typ="safe").load((repo / ".gitlab-ci.yml").read_text())
     mr, default = ci["kb-check-mr"], ci["kb-check-default-branch"]
     assert any('--base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"' in s for s in mr["script"])
-    assert all("--base" not in s for s in default["script"]) and any("kb check" in s for s in default["script"])
+    assert all("--base" not in s for s in default["script"]) and any(s.endswith("kb verify --all") for s in default["script"])
     assert "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH" in str(default["rules"])
     assert mr["variables"]["GIT_DEPTH"] == "0" and default["variables"]["GIT_DEPTH"] == "0"
 
@@ -331,3 +332,35 @@ def test_config_is_written_last(tmp_path, monkeypatch):
     monkeypatch.setattr(scaffold, "_write_atomic", lambda r, rel, t: (order.append(rel), real(r, rel, t)))
     init_repo(repo)
     assert order[-1] == "kb.config.yaml"
+
+
+def test_github_template_runs_verify_with_comment_and_artifact(tmp_path):
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, install_spec="grounded-kb==9.9")
+    text = (repo / ".github/workflows/kb.yml").read_text()
+    wf = YAML(typ="safe").load(text)
+    assert wf["permissions"] == {"contents": "read", "pull-requests": "write"}
+    assert "# install your project's test dependencies here" in text
+    steps = wf["jobs"]["check"]["steps"]
+    verify = next(s for s in steps if "--comment" in s.get("run", ""))
+    assert verify["env"] == {"GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+    assert "${{ secrets.GITHUB_TOKEN }}" in text
+    upload = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact@v4"))
+    assert upload["if"] == "always()"
+    assert ".kb/cache/status.json" in upload["with"]["path"] and ".kb/cache/verify.md" in upload["with"]["path"]
+    assert any(s.get("uses") == "actions/checkout@v4" for s in steps)
+
+
+def test_gitlab_template_runs_verify_and_keeps_artifacts(tmp_path):
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, ci="gitlab")
+    ci = YAML(typ="safe").load((repo / ".gitlab-ci.yml").read_text())
+    mr = ci["kb-check-mr"]
+    assert any(s.endswith('kb verify --base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --format markdown') for s in mr["script"])
+    assert mr["artifacts"]["paths"] == [".kb/cache/status.json", ".kb/cache/verify.md"]
+    assert mr["artifacts"]["when"] == "always"
+    assert any("kb verify --all" in s for s in ci["kb-check-default-branch"]["script"])
