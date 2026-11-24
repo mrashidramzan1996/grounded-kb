@@ -125,3 +125,25 @@ def test_superseded_records_not_affected():
     assert "FEAT-003.C1" not in a.claims
     assert "FEAT-003.C1" not in run(None, extra).claims
     assert "INV-001" not in run(None, extra).invariants
+
+
+def test_unmatched_package_rechecks_modules_with_python_files():
+    a = run(cs(["uv.lock"], packages=["python_dateutil"]))
+    assert a.claims == {"FEAT-001.C1", "FEAT-002.C1"}
+    assert a.invariants == {"INV-001"}
+
+
+def test_invariant_test_importing_changed_file_is_affected():
+    repo, index = build()
+    index.cards["tests/test_inv.py"] = card("tests/test_inv.py", imports=["billing.seats"])
+    a = affected(cs(["billing/seats.py"]), CONFIG, repo, index)
+    assert "INV-001" in a.invariants
+
+
+def test_requirement_module_ignores_non_live_feature():
+    repo, index = build()
+    repo.records["FEAT-009"] = Feature(id="FEAT-009", title="t", module="MOD-billing", status="rejected")
+    repo.records["REQ-F-009"] = Requirement(id="REQ-F-009", statement="s", evidence=ev("SRC-a#seg-09"), features=["FEAT-009"])
+    repo.paths.update({"FEAT-009": "kb/FEAT-009.md", "REQ-F-009": "kb/REQ-F-009.md"})
+    a = affected(cs(["uv.lock"], packages=["stripe"]), CONFIG, repo, index)
+    assert "REQ-F-009" not in a.requirements

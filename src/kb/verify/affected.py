@@ -46,12 +46,15 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
 
     files = set(changes.files)
     importing = {p for changed in files for p in index.importers_of(changed)}
+    imported = set().union(*(imported_top_levels(list(c.imports)) for c in index.cards.values()))
     hot_modules = {
         m
         for card in index.cards.values()
         if imported_top_levels(list(card.imports)) & changes.packages
         for m in card.modules
     }
+    if changes.packages - imported:  # no import matches: re-check every module with Python files
+        hot_modules |= {m for p, c in index.cards.items() if p.endswith(".py") for m in c.modules}
     module_ids = {m.id for m in config.modules}
 
     def claim_hit(feat: Feature, claim: FeatureClaim) -> bool:
@@ -66,7 +69,9 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
 
     def requirement_hit(req: Requirement) -> bool:
         modules = set(req.modules) | {
-            f.module for fid in req.features if isinstance(f := repo.records.get(fid), Feature)
+            f.module
+            for fid in req.features
+            if fid in live and isinstance(f := repo.records.get(fid), Feature)
         }
         return bool(
             _marker_files(index, req.id) & files
@@ -79,13 +84,15 @@ def affected(changes: ChangeSet | None, config: KbConfig, repo: KbRepo, index: A
         pointed = {f for t in inv.tests for f in _file_of(t, "::")} | _marker_files(index, inv.id)
         return bool(
             pointed & files
+            or pointed & importing
             or {g for g in inv.governs if g in module_ids} & hot_modules
             or repo.paths.get(inv.id) in files
             or (inv.evidence and any(q.source in changes.segments for q in inv.evidence.quotes))
         )
 
     claims = {c.id: c.requirement for f, c in features if claim_hit(f, c)}
-    requirements = {r.id for r in reqs if requirement_hit(r)} | {rid for rid in claims.values() if rid in {r.id for r in reqs}}
+    req_ids = {r.id for r in reqs}
+    requirements = {r.id for r in reqs if requirement_hit(r)} | {rid for rid in claims.values() if rid in req_ids}
     return Affected(
         frozenset(claims),
         frozenset(requirements),
