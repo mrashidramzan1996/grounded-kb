@@ -54,4 +54,5 @@ norecursedirs = ["fixtures", ".*", "__pycache__"]
 dev = [
     "fpdf2>=2.9.0",
     "pytest>=9.2.0",
+    "ruff==0.17.6",
 ]

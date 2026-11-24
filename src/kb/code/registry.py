@@ -4,7 +4,7 @@ from kb.code.python_pack import PythonPack
 from kb.ports.code import CodeAdapter, Symbol
 from kb.safepath import UnsafePath, check_relpath, read_regular
 
-__all__ = ["NoAdapter", "SymbolIndex", "UnsafePath", "adapter_for", "resolve_anchor", "resolve_test"]
+__all__ = ["NoAdapter", "SymbolIndex", "UnsafePath", "adapter_for", "fingerprint_of", "resolve_anchor", "resolve_test"]
 
 _ADAPTERS: list[CodeAdapter] = [PythonPack()]
 
@@ -73,3 +73,31 @@ def resolve_test(root: Path, ref: str, index: SymbolIndex | None = None) -> Symb
         return None
     sym = _lookup(root, index, path, rest.replace("::", "."))
     return sym if sym is not None and sym.kind in ("function", "method", "test") else None
+
+
+def fingerprint_of(root: Path, anchor: str, source: bytes | None = None) -> str | None:
+    """Fingerprint of the anchor's symbol, or None if it does not resolve.
+
+    With `source`, those bytes are used instead of reading the file. Raises UnsafePath, NoAdapter.
+    """
+    path, sep, name = anchor.partition("#")
+    if not sep or not name:
+        return None
+    if source is None:
+        sym = resolve_anchor(root, anchor)
+        if sym is None:
+            return None
+        source = read_regular(root, path)
+        if source is None:
+            return None
+    else:
+        check_relpath(path)
+        adapter = adapter_for(path)
+        if adapter is None:
+            raise NoAdapter(path)
+        sym = next((s for s in adapter.symbols(path, source) if s.name == name), None)
+        if sym is None:
+            return None
+    adapter = adapter_for(path)
+    assert adapter is not None
+    return adapter.fingerprint(source, sym)
