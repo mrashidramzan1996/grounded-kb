@@ -95,3 +95,14 @@ def test_fingerprint_of_source_replaces_disk(tmp_path):
     assert fingerprint_of(tmp_path, "a.py#f", source=old) != fingerprint_of(tmp_path, "a.py#f")
     assert fingerprint_of(tmp_path, "gone.py#f", source=old) is not None
     assert fingerprint_of(tmp_path, "a.py#g", source=old) is None
+
+
+def test_parentheses_that_change_precedence_change_fingerprint():
+    assert fp(b"def f(a, b, c):\n    return (a + b) * c\n", "f") != fp(b"def f(a, b, c):\n    return a + (b * c)\n", "f")
+    assert fp(b"def f(a, b):\n    return not (a and b)\n", "f") != fp(b"def f(a, b):\n    return not a and b\n", "f")
+    assert fp(b"def f(a, b):\n    return (a + b).x\n", "f") != fp(b"def f(a, b):\n    return a + b.x\n", "f")
+
+
+def test_single_element_tuple_comma_kept():
+    assert fp(b"def f(a):\n    return (a,)\n", "f") != fp(b"def f(a):\n    return (a)\n", "f")
+    assert fp(b"def f(a):\n    return (a,)\n", "f") == fp(b"def f(a):\n    return (a, )\n", "f")

@@ -86,6 +86,21 @@ class PythonPack:
 _TEXT_LEAVES = frozenset({"identifier", "integer", "float"})
 _CLOSERS = frozenset({")", "]", "}"})
 _KEEP_PARENS = frozenset({"call", "argument_list", "generator_expression"})
+# parents whose meaning depends on the grouping of a parenthesized operand
+_PRECEDENCE_PARENTS = frozenset(
+    {"binary_operator", "boolean_operator", "not_operator", "comparison_operator", "unary_operator", "conditional_expression", "await"}
+)
+
+
+def _parens_matter(paren_expr) -> bool:
+    parent = paren_expr.parent
+    if parent is None or parent.type in _KEEP_PARENS or parent.type in _PRECEDENCE_PARENTS:
+        return True
+    if parent.type == "lambda":
+        return parent.child_by_field_name("body") == paren_expr
+    if parent.type in ("attribute", "subscript"):
+        return parent.children[0] == paren_expr
+    return False
 
 
 def _is_docstring(node) -> bool:
@@ -120,13 +135,14 @@ def _tokens(node, out: list[str]) -> None:
     if node.child_count == 0:
         if kind == ",":
             nxt = node.next_sibling
-            if nxt is not None and nxt.type in _CLOSERS:
+            parent = node.parent
+            one_tuple = parent is not None and parent.type == "tuple" and parent.named_child_count == 1
+            if nxt is not None and nxt.type in _CLOSERS and not one_tuple:
                 return
         elif kind in ("(", ")"):
             parent = node.parent
             if parent is not None and parent.type == "parenthesized_expression":
-                gp = parent.parent
-                if gp is None or gp.type not in _KEEP_PARENS:
+                if not _parens_matter(parent):
                     return
         out.append(f"{kind}:{_text(node)}" if kind in _TEXT_LEAVES or not node.is_named else kind)
         return
