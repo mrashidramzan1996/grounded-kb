@@ -378,3 +378,28 @@ def forge_file(tmp_path: Path, repo: Path, **extra) -> Path:
 
 def verdicts(stdout: str) -> dict[str, dict]:
     return {v["id"]: v for v in json.loads(stdout)["verdicts"]}
+
+
+# --- redraft test helpers --------------------------------------------------------------------
+
+QUOTE = "A seat costs 5 EUR."
+
+
+def req_yaml(rid: str, text: str = QUOTE, flags: tuple[str, ...] = (), seg: str = "seg-01") -> str:
+    flag_lines = "".join(f"flags:\n- {f}\n" for f in flags[:1]) if flags else ""
+    return (
+        f"id: {rid}\nstatement: {text!r}\nevidence:\n  quotes:\n  - source: SRC-n#{seg}\n    text: {text!r}\nmodules:\n- MOD-a\n{flag_lines}"
+    )
+
+
+def adr_md(rid: str, supersedes: str | None = None) -> str:
+    sup = f"supersedes: {supersedes}\n" if supersedes else ""
+    return (
+        f"---\nid: {rid}\ntitle: Seats\n{sup}governs: [MOD-a]\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n"
+        f"    text: {QUOTE!r}\n---\nBody.\n"
+    )
+
+
+def put(root, rel: str, text: str) -> None:
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text)

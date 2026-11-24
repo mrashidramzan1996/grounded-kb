@@ -19,7 +19,10 @@ from kb.init.scaffold import InitError, init_repo
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
-from kb.ingest.redraft import changed_segments, citing, unfound
+from kb.cache import write_cache
+from kb.ingest.redraft import (
+    REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, RedraftError, build_redraft_brief, changed_segments, citing, select, unfound,
+)
 from kb.ingest.report import ingest_report, render_report
 from kb.records.io import RecordError
 from kb.records.repo import KbRepo
@@ -179,6 +182,41 @@ def ingest(
     _warn_empty(KbRepo.load(root), sources)
     typer.echo(f"Brief: {BRIEF_PATH}")
     typer.echo(f"Ask your coding agent: *follow {BRIEF_PATH}*")
+
+
+@app.command()
+def redraft(
+    ctx: typer.Context,
+    ids: Annotated[list[str] | None, typer.Argument(help="Record ids (REQ-*, ADR-*, INV-*) to redraft.")] = None,
+    flagged: Annotated[bool, typer.Option("--flagged", help="Also select live requirements with flags.")] = False,
+    changed: Annotated[bool, typer.Option("--changed", help="Also select records citing changed text or with a quote not found.")] = False,
+    report: Annotated[bool, typer.Option("--report", help="Gate what the agent redrafted and print a report.")] = False,
+    strict: Annotated[bool, typer.Option("--strict", help="With --report: exit 1 when anything was rejected.")] = False,
+    base: Annotated[str | None, typer.Option("--base", help="The ref --changed compares against (default HEAD).")] = None,
+) -> None:
+    """Write a focused brief for your coding agent to redraft selected records."""
+    root = Path(ctx.obj["root"])
+    if report:
+        typer.echo("--report is not implemented yet", err=True)
+        raise typer.Exit(2)
+    if not ids and not flagged and not changed:
+        typer.echo("name record ids, or use --flagged or --changed", err=True)
+        raise typer.Exit(2)
+    try:
+        repo = KbRepo.load(root)
+        before = KbRepo.at_ref(root, base or "HEAD") if changed else None
+        selection = select(repo, sorted(set(ids or [])), flagged_=flagged, changed=changed, before=before)
+        if not selection:
+            typer.echo("nothing to redraft", err=True)
+            return
+        commit = head_commit(root)
+        write_cache(root, REDRAFT_BRIEF, build_redraft_brief(root, repo, selection, commit))
+        write_cache(root, REDRAFT_BASE, commit + "\n")
+        write_cache(root, REDRAFT_IDS, "".join(f"{rid}\n" for rid in selection))
+    except (RedraftError, *TOOL_ERRORS) as e:
+        raise _fail(e) from e
+    typer.echo(f"Brief: {REDRAFT_BRIEF}")
+    typer.echo(f"Ask your coding agent: *follow {REDRAFT_BRIEF}*")
 
 
 module_app = typer.Typer(help="Manage modules; paths come later, from evidence.", no_args_is_help=True)

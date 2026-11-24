@@ -185,7 +185,8 @@ def _fence(text: str) -> str:
     return "`" * max(3, longest_backticks(text) + 1)
 
 
-def _segments(repo: KbRepo, src_ids: list[str]) -> str:
+def _segments(repo: KbRepo, src_ids: list[str], only: set[str] | None = None) -> str:
+    """Fenced text of every segment of `src_ids`, or only those whose "SRC-x#seg-NN" ref is in `only`."""
     blocks = []
     for src_id in sorted(set(src_ids)):
         source = repo.sources.get(src_id)
@@ -197,6 +198,8 @@ def _segments(repo: KbRepo, src_ids: list[str]) -> str:
         if bad := [s.id for s in segments if not valid_segment_id(s.id)]:
             raise SourceError(f"{src_id}: invalid segment ids {bad}")
         for seg in sorted(segments, key=lambda s: _seg_number(s.id)):
+            if only is not None and f"{src_id}#{seg.id}" not in only:
+                continue
             # the heading is source text too, so it goes inside the fence, never in the ### line
             body = f"heading: {seg.heading}\n{text[seg.start : seg.end]}"
             fence = _fence(body)

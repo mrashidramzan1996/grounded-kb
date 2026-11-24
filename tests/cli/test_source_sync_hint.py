@@ -1,9 +1,4 @@
-from helpers import invoke
-
-
-def put(root, rel: str, text: str) -> None:
-    (root / rel).parent.mkdir(parents=True, exist_ok=True)
-    (root / rel).write_text(text)
+from helpers import invoke, put
 
 
 def add_reqs(root) -> None:
