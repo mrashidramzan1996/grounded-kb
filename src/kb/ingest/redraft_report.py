@@ -13,6 +13,7 @@ from kb.ingest.redraft import (
     REDRAFT_IDS,
     REDRAFT_NEW,
     RedraftError,
+    changed_segments,
     check_named,
     present,
     ref_key,
@@ -89,7 +90,8 @@ def _selection(root: Path) -> tuple[list[str], list[str]]:
 def _check_files(root: Path, head: KbRepo, before: KbRepo, selected: list[str], segments: list[str], commit: str,
                  base_given: bool) -> None:
     """.kb/cache is the agent's to write, so the selection is checked against the base and the brief: every id
-    is live at base and has a section in the brief, every segment is stored at head and shown in the brief, and
+    is live at base and has a section in the brief, every segment is stored at head, shown in the brief, and had no
+    triage entry at base or changed since base (from git, so the file cannot widen the scope to settled text), and
     (unless --base is given) the brief names the base used."""
     for rid in selected:
         try:
@@ -100,7 +102,10 @@ def _check_files(root: Path, head: KbRepo, before: KbRepo, selected: list[str], 
     headings = set(brief.splitlines())
     shown = {line[4:].partition(" · ")[0] for line in headings if line.startswith("### ")}
     m = _BRIEF_BASE.search(brief)
-    if any(f"## {rid}" not in headings for rid in selected) or any(r not in shown or not present(head, r) for r in segments):
+    changed = changed_segments(before, head)
+    if any(f"## {rid}" not in headings for rid in selected) or any(
+        r not in shown or not present(head, r) or (_triaged(before, r) and r not in changed) for r in segments
+    ):
         raise RedraftError(MISMATCH)
     if not base_given and (m is None or m.group(1) != commit):  # e.g. the recorded base is no longer an ancestor of HEAD
         raise RedraftError(f"{MISMATCH}; or pass --base <sha>")
@@ -125,16 +130,19 @@ def _drafting(head: KbRepo, before: KbRepo, segments: set[str]) -> list[str]:
     )
 
 
-def _fresh(before: KbRepo, segments: list[str], cited_base: set[str]) -> set[str]:
-    """The offered segments that are new text: no triage entry at base, and not cited there by the selection."""
-    def triaged(ref: str) -> bool:
-        src, _, seg = ref.partition("#")
-        return (tri := before.triage(src)) is not None and seg in tri.segments
-    return {r for r in segments if r not in cited_base and not triaged(r)}
+def _triaged(repo: KbRepo, ref: str) -> bool:
+    src, _, seg = ref.partition("#")
+    return (tri := repo.triage(src)) is not None and seg in tri.segments
+
+
+def _fresh(segments: list[str], cited_base: set[str]) -> set[str]:
+    """The offered segments that are text with no records: those the selection did not cite at base. (_check_files
+    has made sure each one had no triage entry at base or changed since base.)"""
+    return {r for r in segments if r not in cited_base}
 
 
 def _untriaged_issues(head: KbRepo, fresh: set[str]) -> list[Issue]:
-    """segment.untriaged for each new segment still without a triage entry: text nobody accounted for."""
+    """segment.untriaged for each offered segment without a triage entry at head: text nobody accounted for."""
     issues = []
     for ref in sorted(fresh, key=ref_key):
         src, _, seg_id = ref.partition("#")
@@ -157,14 +165,14 @@ def _cited(repo: KbRepo, ids: set[str]) -> set[str]:
 def _triage_scope(head: KbRepo, before: KbRepo, src: str, path: str, at_base: set[str], at_head: set[str],
                   fresh: set[str]) -> list[Issue]:
     """Triage entries changed since base, per segment id. An entry may change freely for a segment the selection
-    cited at base, and be written for a new segment offered (it had none); for one cited only at head, ids may
-    only be added (a "none: ..." entry may become a list). Any other change is out of scope."""
+    cited at base, and for an offered segment with no records (new, or changed and uncited); for one cited only
+    at head, ids may only be added (a "none: ..." entry may become a list). Any other change is out of scope."""
     now, then = head.triage(src), before.triage(src)
     a, b = (now.segments if now else {}), (then.segments if then else {})
     issues = []
     for seg in sorted(set(a) | set(b)):
         old, new, ref = b.get(seg), a.get(seg), f"{src}#{seg}"
-        if old == new or ref in at_base or (ref in fresh and old is None):
+        if old == new or ref in at_base or ref in fresh:
             continue
         if ref in at_head and isinstance(new, list) and (not isinstance(old, list) or set(old) <= set(new)):
             continue
@@ -251,7 +259,7 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
     chosen = set(selected)
     superseding = _superseding(head, before, chosen)
     drafting = _drafting(head, before, set(segments))
-    fresh = _fresh(before, segments, _cited(before, chosen))
+    fresh = _fresh(segments, _cited(before, chosen))
     sources = [i for i in g.issues if i.code.startswith("source.")] + deleted_sources(head, before, ref)
     flags = _flag_issues(head, before)
     rejected = (

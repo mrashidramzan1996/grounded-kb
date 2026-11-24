@@ -1,6 +1,7 @@
 ## The rules for new text
 
-The segments under "New text to draft from" have no records yet.
+The segments under "New text to draft from" have no records yet: they are new, or their text changed and no
+record cites them.
 
 1. Draft only from these segments: every quote of a new record cites one of them.
 2. Draft one fact per requirement: one `kb/requirements/REQ-*.yaml` file per testable statement
@@ -13,7 +14,7 @@ The segments under "New text to draft from" have no records yet.
 6. Never invent numbers, targets or details. When a line is vague (for example "must be fast"), draft it
    as written and flag it `flags: [vague]` instead of making up a target.
 7. Write a triage entry for every segment below, in `kb/sources/SRC-…/triage.yaml`: the IDs drafted from
-   it, or `"none: <reason>"`.
+   it, or `"none: <reason>"`. Update the entry a changed segment already has.
 8. Set `drafted_by: "agent:<your name> via kb redraft brief $version"` on every record you draft.
 
 ## Existing requirements

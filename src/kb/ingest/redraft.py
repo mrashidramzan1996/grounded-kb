@@ -15,7 +15,7 @@ from kb.textfmt import inline_code
 REDRAFT_BRIEF = ".kb/cache/redraft/brief.md"
 REDRAFT_BASE = ".kb/cache/redraft/base"  # HEAD when the brief was written
 REDRAFT_IDS = ".kb/cache/redraft/ids"  # selected ids, one per line, sorted
-REDRAFT_NEW = ".kb/cache/redraft/new"  # segments new records may cite: the new ones offered plus the changed ones shown
+REDRAFT_NEW = ".kb/cache/redraft/new"  # segments new records may cite: those offered to draft from plus the changed cited ones
 
 _Cited = Requirement | Decision | Invariant
 
@@ -125,9 +125,12 @@ def present(repo: KbRepo, ref: str) -> bool:
     return src in repo.sources and any(s.id == seg_id for s in repo.segments(src))
 
 
-def changed_shown(before: KbRepo, repo: KbRepo) -> set[str]:
-    """Changed refs still stored in `repo` and cited by a live record there: the changed text a --changed brief shows."""
-    return {ref for ref in changed_segments(before, repo) if present(repo, ref) and citing(repo, {ref})}
+def changed_text(before: KbRepo, repo: KbRepo) -> tuple[set[str], set[str]]:
+    """(cited, uncited): the changed refs still stored in `repo`, by whether a live record there cites them. A --changed
+    brief shows the cited ones with the records to redraft, and offers the uncited ones as text to draft from."""
+    stored = {ref for ref in changed_segments(before, repo) if present(repo, ref)}
+    cited = {ref for ref in stored if citing(repo, {ref})}
+    return cited, stored - cited
 
 
 def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
@@ -152,8 +155,14 @@ def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
 
 
 def _existing_requirements(repo: KbRepo) -> str:
-    """Each live requirement as `- <id>: <statement>`, the statement as inline code so it cannot add markup."""
-    lines = [f"- {rid}: {inline_code(rec.statement)}" for rid, rec in _live_cited(repo) if isinstance(rec, Requirement)]
+    """Each live requirement as `- <id>: <statement>`, the statement as inline code so it cannot add markup; an
+    instruction-like statement gets the INJECTION_FLAG line above it, like a segment."""
+    lines = []
+    for rid, rec in _live_cited(repo):
+        if isinstance(rec, Requirement):
+            if has_injection(rec.statement):
+                lines.append(INJECTION_FLAG)
+            lines.append(f"- {rid}: {inline_code(rec.statement)}")
     return "\n".join(lines) or "- none"
 
 
@@ -162,7 +171,7 @@ def _template(name: str) -> Template:
 
 
 def build_redraft_brief(root: Path, repo: KbRepo, selection: dict[str, list[str]], base: str, new: list[str] | None = None) -> str:
-    """The brief for the selected records (part 1) and the new segments `new` to draft from (part 2); deterministic
+    """The brief for the selected records (part 1) and the segments `new` to draft from (part 2); deterministic
     for the same repo state, selection and segments."""
     parts = []
     if selection:
