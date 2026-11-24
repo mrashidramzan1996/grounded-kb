@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from kb.config.schema import KbConfig
-from kb.forge.local import LocalForge  # noqa: F401
 from kb.ports.forge import PullRequest, Review
 from kb.records.repo import KbRepo
 from kb.verify.approvals import owner_approval, required_owners
@@ -152,3 +151,19 @@ def test_team_key_resolves_and_unresolvable_skipped(tmp_path):
     )
     req = required_owners(tmp_path, config, repo_of({}), None, changes("src/a/x", "src/b/y"), [])
     assert req == {"@org/billing": ["changes src/a/x"]}
+
+
+def test_unreadable_team_with_no_approvals_still_fails():
+    issues = owner_approval(FakeForge(), PR, cfg(), {"@org/b": ["x"]})
+    assert [(i.code, i.severity) for i in issues] == [("missing_owner_approval", "error")]
+    # a bot's or the author's approval is not a counting approval
+    junk = FakeForge([review("alice"), review("x[bot]")])
+    assert [i.code for i in owner_approval(junk, PR, cfg(), {"@org/b": ["x"]})] == ["missing_owner_approval"]
+
+
+def test_codeowners_github_lookup_order(tmp_path):
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github/CODEOWNERS").write_text("src/** @gh\n")
+    (tmp_path / "CODEOWNERS").write_text("src/** @root\n")
+    req = required_owners(tmp_path, cfg(), repo_of({}), None, changes("src/a/x.py"), [])
+    assert list(req) == ["@gh"]

@@ -7,6 +7,7 @@ from pathlib import Path
 from kb.config.codeowners import owners_for, parse_codeowners
 from kb.config.schema import KbConfig
 from kb.config.validate import modules_for, resolve_owner
+from kb.init.scaffold import CODEOWNERS_LOCATIONS
 from kb.issues import Issue
 from kb.ports.forge import Forge, PullRequest, Review
 from kb.records.repo import KbRepo
@@ -14,7 +15,8 @@ from kb.safepath import UnsafePath, read_regular
 from kb.verify.changes import ChangeSet
 from kb.verify.engine import Verdict
 
-_CODEOWNERS = ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
+# GitHub uses the first CODEOWNERS found in this order: .github/, then the root, then docs/.
+_CODEOWNERS = tuple(p for p in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS") if p in CODEOWNERS_LOCATIONS)
 _SHOWN_PATHS = 3
 
 
@@ -137,8 +139,10 @@ def owner_approval(forge: Forge, pr: PullRequest, config: KbConfig, required: di
         if "/" in handle:
             members = forge.team_members(handle)
             if members is None:
-                unreadable.append(handle)
-                continue
+                if approved:  # some approval counts, but its team cannot be checked: defer to branch protection
+                    unreadable.append(handle)
+                    continue
+                members = set()
             satisfied = bool({m.lower() for m in members} & approved)
         else:
             satisfied = handle.lstrip("@").lower() in approved

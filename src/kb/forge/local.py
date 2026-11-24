@@ -28,7 +28,10 @@ class LocalForge:
         pr = self._load().get("pr")
         if pr is None:
             return None
-        return PullRequest(int(pr["number"]), str(pr["head_sha"]), str(pr["author"]))
+        try:
+            return PullRequest(int(pr["number"]), str(pr["head_sha"]), str(pr["author"]))
+        except (KeyError, TypeError, ValueError):
+            raise ForgeError("forge file pr needs number, head_sha and author") from None
 
     def reviews(self, pr: PullRequest) -> list[Review]:
         return [
