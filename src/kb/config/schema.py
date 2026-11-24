@@ -1,3 +1,4 @@
+import shlex
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -31,8 +32,15 @@ class TestsCfg(_Model):
     def _one_runner(self) -> "TestsCfg":
         if (self.preset is None) == (self.run is None):
             raise ValueError("tests needs exactly one of preset or run")
-        if self.run is not None and not ("{tests}" in self.run and "{junit}" in self.run):
-            raise ValueError("tests.run must contain both {tests} and {junit}")
+        if self.run is not None:
+            try:
+                tokens = shlex.split(self.run)
+            except ValueError as e:
+                raise ValueError(f"tests.run is not a valid command: {e}") from e
+            if "{tests}" not in tokens:
+                raise ValueError("tests.run needs {tests} as a separate argument (not part of another word, e.g. --ids={tests})")
+            if "{junit}" not in self.run:
+                raise ValueError("tests.run must contain {junit}")
         return self
 
 

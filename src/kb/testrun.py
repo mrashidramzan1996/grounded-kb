@@ -85,8 +85,8 @@ class CommandRunner:
                     argv.append(tok.replace("{junit}", str(junit)))
             try:
                 p = subprocess.run(argv, cwd=root, timeout=self.cfg.timeout_seconds, capture_output=True, env=env, check=False)
-            except FileNotFoundError as e:
-                raise TestRunError(f"test command not found: {argv[0]}") from e
+            except OSError as e:
+                raise TestRunError(f"cannot run test command {argv[0]!r}: {e}") from e
             except subprocess.TimeoutExpired:
                 return {r: "failed" for r in refs}, f"test command timed out after {self.cfg.timeout_seconds}s", False
             log = (p.stdout + p.stderr).decode(errors="replace")[-_LOG_TAIL:]
@@ -95,6 +95,8 @@ class CommandRunner:
             return parse_junit(junit.read_bytes(), refs), log, True
 
     def run(self, root: Path, refs: list[str]) -> TestRun:
+        if not refs:
+            return TestRun(outcomes={}, log_tail="")
         outcomes, log, reported = self._once(root, refs)
         if reported and len(refs) > 1 and set(outcomes.values()) == {"missing"}:
             # pytest aborts the whole run on one unknown node id and reports nothing: retry each id alone
@@ -124,6 +126,8 @@ def run_tests(root: Path, config: KbConfig, refs_by_module: dict[str | None, lis
 
     for module_id, refs in refs_by_module.items():
         refs = sorted(set(refs))
+        if not refs:
+            continue
         runner = runner_for(config, module_id)
         if runner is None:
             for r in refs:

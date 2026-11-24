@@ -137,9 +137,30 @@ def test_run_tests_no_runner_and_merge(project):
     c = _cfg()
     out = run_tests(project, c, {"MOD-a": [A + "test_pass", A + "test_fail"], "MOD-b": [A + "test_pass"],
                                  None: ["x.py::y"]})
-    assert out == {A + "test_pass": "passed", A + "test_fail": "failed", "x.py::y": "no_runner"} or \
-        out[A + "test_pass"] == "no_runner"
-    assert out["x.py::y"] == "no_runner" and out[A + "test_fail"] == "failed"
+    assert out == {A + "test_pass": "passed", A + "test_fail": "failed", "x.py::y": "no_runner"}
+
+
+def test_worse_outcome_wins_across_two_runner_modules(project):
+    (project / "fail_stub.py").write_text(
+        "import sys\n"
+        "out = [a for a in sys.argv if a.startswith('--junitxml=')][0].split('=', 1)[1]\n"
+        "open(out, 'w').write('<testsuite><testcase classname=\"tests.test_a\" name=\"test_pass\"><failure/></testcase></testsuite>')\n")
+    c = KbConfig(version=1, modules=[
+        {"id": "MOD-a", "owner": "t", "tests": {"preset": "pytest"}},
+        {"id": "MOD-b", "owner": "t", "tests": {"run": "python fail_stub.py {tests} --junitxml={junit}"}}])
+    assert run_tests(project, c, {"MOD-a": [A + "test_pass"], "MOD-b": [A + "test_pass"]}, reruns=0) == {A + "test_pass": "failed"}
+
+
+def test_empty_refs_runs_nothing(project):
+    assert _runner().run(project, []).outcomes == {}
+    assert run_tests(project, _cfg(), {"MOD-a": []}) == {}
+    assert not (project / ".flag").exists()
+
+
+def test_non_executable_command_raises_test_run_error(project):
+    (project / "noexec.sh").write_text("#!/bin/sh\n")
+    with pytest.raises(TestRunError):
+        CommandRunner(TestsCfg(run="./noexec.sh {tests} {junit}")).run(project, [A + "test_pass"])
 
 
 def test_tests_cfg_needs_exactly_one_of_preset_or_run():
@@ -152,6 +173,11 @@ def test_run_template_needs_tests_and_junit_tokens():
     for run in ("pytest {tests}", "pytest --junitxml={junit}"):
         with pytest.raises(ValueError):
             TestsCfg(run=run)
+
+
+def test_run_template_tests_token_must_stand_alone():
+    with pytest.raises(ValueError, match="separate argument"):
+        TestsCfg(run="pytest --ids={tests} --junitxml={junit}")
 
 
 def test_unknown_tests_key_rejected(tmp_path):
