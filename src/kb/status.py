@@ -1,15 +1,18 @@
-"""Requirement status from code evidence: not_built -> built -> tested. ("verified" needs a test run: Phase 2.)"""
+"""Requirement status from code evidence: not_built -> built -> tested; "verified" comes from the last `kb verify`."""
 
+import json
 from pathlib import Path
 from typing import Literal
 
 from kb.code.registry import NoAdapter, SymbolIndex, UnsafePath, resolve_anchor, resolve_test
 from kb.config.schema import KbConfig
-from kb.gitfiles import repo_files
+from kb.gitfiles import GitError, head_commit, is_dirty, repo_files
 from kb.markers import evidence_files, scan_markers
 from kb.records.lifecycle import live_ids
 from kb.records.models import Feature, Requirement
 from kb.records.repo import KbRepo
+from kb.safepath import read_regular
+from kb.verify.report import STATUS_PATH
 
 Status = Literal["not_built", "built", "tested"]
 
@@ -65,16 +68,43 @@ def requirement_modules(config: KbConfig, repo: KbRepo) -> dict[str, list[str]]:
     return out
 
 
-def summarize(config: KbConfig, repo: KbRepo, status: dict[str, Status]) -> dict:
-    """{"requirements", "modules", "total"} for the CLI; "(no module)" appears only when it has requirements."""
+def verified_ids(root: Path) -> set[str] | None:
+    """Requirements the last `kb verify` found verified, when it ran on HEAD and the tree is still clean;
+    None when there is no such run (no status.json, another commit, local changes, or unreadable)."""
+    root = Path(root)
+    try:
+        data = read_regular(root, STATUS_PATH)
+        if data is None:
+            return None
+        doc = json.loads(data)
+        if not isinstance(doc, dict) or doc.get("head") != head_commit(root) or is_dirty(root, "."):
+            return None
+        verdicts = doc.get("verdicts")
+        if not isinstance(verdicts, list):
+            return None
+        return {
+            v["id"] for v in verdicts
+            if isinstance(v, dict) and v.get("kind") == "requirement" and v.get("status") == "verified"
+            and isinstance(v.get("id"), str)
+        }
+    except (UnsafePath, ValueError, GitError):
+        return None
+
+
+def summarize(config: KbConfig, repo: KbRepo, status: dict[str, Status], verified: set[str] | None = None) -> dict:
+    """{"requirements", "modules", "total"} for the CLI; "(no module)" appears only when it has requirements.
+    With `verified` (from verified_ids), each count also has "verified"."""
     owners = requirement_modules(config, repo)
 
     def count(ids: list[str]) -> dict[str, int]:
-        return {
+        out = {
             "built": sum(status[i] != "not_built" for i in ids),
             "tested": sum(status[i] == "tested" for i in ids),
             "total": len(ids),
         }
+        if verified is not None:
+            out["verified"] = sum(i in verified for i in ids)
+        return out
 
     modules = {m.id: count([i for i in status if m.id in owners[i]]) for m in config.modules}
     orphans = [i for i in status if not owners[i]]

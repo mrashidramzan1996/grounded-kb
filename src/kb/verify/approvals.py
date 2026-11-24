@@ -63,9 +63,11 @@ def required_owners(
     config: KbConfig,
     repo: KbRepo,
     base_repo: KbRepo | None,
-    changes: ChangeSet,
+    changes: ChangeSet | None,
     verdicts: Sequence[Verdict],
 ) -> dict[str, list[str]]:
+    """{owner handle: reasons}. `changes` None (no base): no changed files; records count as changed against
+    `base_repo` (every record when that is None too)."""
     reasons: dict[str, set[str]] = {}
 
     def need(handle: str, reason: str) -> None:
@@ -73,7 +75,7 @@ def required_owners(
 
     rules = _codeowners_rules(root)
     by_owner: dict[str, list[str]] = {}
-    for path in sorted(changes.files):
+    for path in sorted(changes.files if changes else ()):
         for h in _file_owners(path, rules, config):
             by_owner.setdefault(h, []).append(path)
     for h, paths in by_owner.items():

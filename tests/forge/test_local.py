@@ -58,6 +58,20 @@ def test_auto_is_github_on_pull_request_event(tmp_path, monkeypatch):
     assert forge_from_option("auto", tmp_path) is None
 
 
+@pytest.mark.parametrize("event", [None, "missing", "{not json", "[1]"])
+def test_auto_in_actions_with_corrupt_event_raises(tmp_path, monkeypatch, event):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    if event is None:
+        monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    else:
+        path = tmp_path / "event.json"
+        if event != "missing":
+            path.write_text(event)
+        monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
+    with pytest.raises(ForgeError):
+        forge_from_option("auto", tmp_path)
+
+
 def test_options(tmp_path):
     assert forge_from_option("none", tmp_path) is None
     write(tmp_path, {"pr": None})

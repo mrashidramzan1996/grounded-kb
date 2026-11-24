@@ -26,16 +26,21 @@ def forge_from_option(value: str, root: Path) -> Forge | None:
 
 
 def _auto() -> Forge | None:
+    """GitHub on a pull_request event; None outside Actions or on another event (a push).
+
+    Inside Actions an event that cannot be read fails closed: skipping the forge would skip owner approval."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return None
     path = os.environ.get("GITHUB_EVENT_PATH")
     if not path:
-        return None
+        raise ForgeError("GITHUB_ACTIONS is set but GITHUB_EVENT_PATH is not; cannot tell whether this is a pull request")
     try:
         event = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(event, dict) or "pull_request" not in event:
+    except (OSError, ValueError) as e:
+        raise ForgeError(f"cannot read the event file: {type(e).__name__}") from None
+    if not isinstance(event, dict):
+        raise ForgeError("the event file must hold a JSON object")
+    if "pull_request" not in event:
         return None
     from kb.forge.github import GithubForge
 

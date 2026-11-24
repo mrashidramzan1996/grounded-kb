@@ -212,3 +212,20 @@ def acme_repo_drafted(acme_repo_ingested, fixtures):
     git(acme_repo_ingested, "add", "-A")
     git(acme_repo_ingested, "commit", "-m", "drafts")
     return acme_repo_ingested
+
+
+@pytest.fixture
+def verify_repo(fixtures, tmp_path, monkeypatch):
+    """kb_valid as a git repo on main, with a pytest preset on MOD-billing and `.kb/` gitignored (as `kb init`
+    does), and the subprocess pytest resolving to this interpreter."""
+    import sys
+
+    from helpers import make_git_repo
+
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}:{__import__('os').environ['PATH']}")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    config = (fixtures / "kb_valid/kb.config.yaml").read_text()
+    config = config.replace("  risk: high\n", "  risk: high\n  tests:\n    preset: pytest\n", 1)
+    return make_git_repo(
+        fixtures / "kb_valid", tmp_path, extra={"kb.config.yaml": config, ".gitignore": ".kb/\n__pycache__/\n"}
+    )

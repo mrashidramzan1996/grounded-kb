@@ -25,8 +25,12 @@ from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
 from kb.sources.readers import SourceError
 from kb.sources.store import add_sources, sync_sources
-from kb.status import requirement_status, summarize
+from kb.status import requirement_status, summarize, verified_ids
 from kb.trace import TraceError, trace_chain
+from kb.forge import ForgeError, forge_from_option
+from kb.testrun import TestRunError
+from kb.verify.report import render_json, render_markdown, render_text, summary_line, write_outputs
+from kb.verify.run import run_verify
 from kb.yamlio import YamlError
 
 app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
@@ -34,7 +38,7 @@ app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
 # What a command reports as a usage, config or tool error (exit 2, the message on stderr, no traceback).
 TOOL_ERRORS = (
     ConfigError, SourceError, GitError, UnsafePath, RecordError, YamlError, OSError,
-    ContextError, TraceError, BaselineError, WriteRefused,
+    ContextError, TraceError, BaselineError, WriteRefused, TestRunError, ForgeError,
 )
 
 
@@ -242,9 +246,12 @@ def status(
     try:
         config = load_config(root / "kb.config.yaml")
         repo = KbRepo.load(root)
-        summary = summarize(config, repo, requirement_status(root, config, repo))
+        verified = verified_ids(root)
+        summary = summarize(config, repo, requirement_status(root, config, repo), verified)
     except TOOL_ERRORS as e:
         raise _fail(e) from e
+    if verified is None:
+        typer.echo("run `kb verify` for verified counts", err=True)
     failed = sorted({i.path for i in repo.errors if i.path})
     if repo.errors:
         typer.echo(f"{len(failed)} KB files failed to load (run `kb check`): {', '.join(failed[:3])}", err=True)
@@ -252,7 +259,8 @@ def status(
         typer.echo(json.dumps(summary, indent=2, sort_keys=True))
     else:
         for name, c in [*summary["modules"].items(), ("total", summary["total"])]:
-            typer.echo(f"{name}: {c['built']}/{c['total']} built, {c['tested']}/{c['total']} tested")
+            line = f"{name}: {c['built']}/{c['total']} built, {c['tested']}/{c['total']} tested"
+            typer.echo(line + (f", {c['verified']}/{c['total']} verified" if "verified" in c else ""))
     if repo.errors:
         raise typer.Exit(1)
 
@@ -314,6 +322,51 @@ def check(
             typer.echo(f"{i.severity} {i.code} {i.path or '-'} {i.record or '-'}: {message}")
     typer.echo(f"{errors} errors, {warnings} warnings (mode: {report.mode})", err=True)
     if errors and (strict or report.mode == "enforce"):
+        raise typer.Exit(1)
+
+
+_RENDER = {"text": render_text, "json": render_json, "markdown": render_markdown}
+
+
+@app.command()
+def verify(
+    ctx: typer.Context,
+    base: Annotated[str | None, typer.Option("--base", help="Base branch (default: the default branch).")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Check every claim, not only those the change affects.")] = False,
+    format: Annotated[str, typer.Option("--format", help="text, json or markdown.")] = "text",
+    forge: Annotated[str, typer.Option("--forge", help="auto, none, github or local:PATH.")] = "auto",
+    comment: Annotated[bool, typer.Option("--comment", help="Post the Markdown report on the pull request.")] = False,
+    strict: Annotated[bool, typer.Option("--strict", help="Exit 1 on anything blocking, whatever the policy mode.")] = False,
+) -> None:
+    """Run the linked tests and derive claim, requirement and invariant states; check stale context and owner approval.
+    Writes .kb/cache/status.json and .kb/cache/verify.md."""
+    if format not in _RENDER:
+        typer.echo(f"unknown format {format!r}: use text, json or markdown", err=True)
+        raise typer.Exit(2)
+    root = Path(ctx.obj["root"])
+    if not (root / "kb.config.yaml").exists():
+        typer.echo(f"{root / 'kb.config.yaml'} not found; run `kb init` to create it", err=True)
+        raise typer.Exit(2)
+    try:
+        port = forge_from_option(forge, root)
+    except (ValueError, *TOOL_ERRORS) as e:  # ValueError: an unknown --forge value
+        raise _fail(e) from e
+    try:
+        report = run_verify(root, base=base, all_=all_, forge=port)
+        write_outputs(root, report)
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    typer.echo(_RENDER[format](report), nl=False)
+    if comment:
+        if port is None or report.pr is None:
+            typer.echo("no pull request; comment skipped", err=True)
+        else:
+            try:
+                port.upsert_comment(report.pr, render_markdown(report))
+            except TOOL_ERRORS as e:
+                raise _fail(e) from e
+    typer.echo(summary_line(report), err=True)
+    if report.blocking and (strict or report.mode == "enforce"):
         raise typer.Exit(1)
 
 
