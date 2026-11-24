@@ -120,7 +120,7 @@ def test_sync_hint_names_new_segments_and_suggests_changed_new(kb):
     ]
     put(kb, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", "A seat costs 7 EUR."))
     commit(kb)
-    more ="".join(f"\n# Part {n}\n\nText {n}.\n" for n in range(4, 16))
+    more = "".join(f"\n# Part {n}\n\nText {n}.\n" for n in range(4, 16))
     r = sync(kb, ADDED.replace("5 EUR", "7 EUR") + more)
     refs = ", ".join(f"SRC-n#seg-{n:02d}" for n in range(4, 14))
     assert r.stderr.splitlines() == [
@@ -162,7 +162,10 @@ def test_new_adr_superseding_an_unselected_record_out_of_scope(kb):
     adr = adr_md("ADR-0002", supersedes="ADR-0001").replace("seg-01", "seg-03").replace(QUOTE, REFUND)
     put(kb, "kb/decisions/ADR-0002.md", adr)
     r = redraft_report(kb, None)
-    assert ("ADR-0002", "redraft.out_of_scope") in rejected(r) and r.drafted == []
+    assert [(i.record, i.message) for i in r.rejected if i.code == "redraft.out_of_scope"] == [
+        ("ADR-0002", "ADR-0002 supersedes ADR-0001, which is not in this redraft")
+    ]
+    assert r.drafted == []
 
 
 def test_new_segment_left_untriaged_flagged(kb):
@@ -290,3 +293,37 @@ def test_existing_requirements_list_flags_injection(kb):
     assert [line for line in part.splitlines() if line] == [
         f"- REQ-F-001: `{QUOTE}`", INJECTION_FLAG, f"- REQ-F-002: `{hostile}`", f"- REQ-NF-001: `{VAGUE}`",
     ]
+
+
+def test_widened_changed_cited_segment_cannot_free_triage(kb):
+    sync(kb, ADDED.replace("5 EUR", "7 EUR"))  # seg-01 changed; the unselected REQ-F-001 still cites it
+    redraft(kb, "--new")
+    offered, brief = (kb / REDRAFT_NEW).read_text(), (kb / REDRAFT_BRIEF).read_text()
+    put(kb, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", REFUND, seg="seg-03"))
+    put(kb, TRIAGE, "segments:\n  seg-01: 'none: gone'\n  seg-02: [REQ-NF-001]\n  seg-03: [REQ-F-002]\n")
+    # the agent widens the cache files to cover seg-01
+    (kb / REDRAFT_NEW).write_text("SRC-n#seg-01\nSRC-n#seg-03\n")
+    (kb / REDRAFT_BRIEF).write_text(brief.replace("## Finish", "### SRC-n#seg-01 · page 1\n\n## Finish"))
+    out = invoke(kb, "redraft", "--report", "--strict")
+    assert out.exit_code == 2 and "the redraft files don't match; run `kb redraft` again" in out.stderr
+    # with the files as written, the triage change is out of scope
+    (kb / REDRAFT_NEW).write_text(offered)
+    (kb / REDRAFT_BRIEF).write_text(brief)
+    r = redraft_report(kb, None)  # (REQ-F-001's quote is gone too: quote.not_found, caused by the sync)
+    assert ("redraft.out_of_scope", "SRC-n#seg-01: triage changed for a segment outside this redraft") in [
+        (i.code, i.message) for i in r.rejected
+    ]
+
+
+def test_shared_segment_cannot_drop_unselected_mapping(kb):
+    put(kb, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002"))  # also quotes seg-01
+    put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n  seg-02: [REQ-NF-001]\n")
+    commit(kb)
+    redraft(kb, "REQ-F-001")
+    put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n  seg-02: [REQ-NF-001]\n")
+    r = redraft_report(kb, None)
+    assert [(i.code, i.message) for i in r.rejected] == [
+        ("redraft.out_of_scope", "SRC-n#seg-01: triage changed for a segment outside this redraft")
+    ]
+    put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-002]\n  seg-02: [REQ-NF-001]\n")  # dropping the selected id is fine
+    assert redraft_report(kb, None).rejected == []

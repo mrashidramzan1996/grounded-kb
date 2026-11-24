@@ -15,6 +15,7 @@ from kb.ingest.redraft import (
     RedraftError,
     changed_segments,
     check_named,
+    citing,
     present,
     ref_key,
 )
@@ -90,9 +91,10 @@ def _selection(root: Path) -> tuple[list[str], list[str]]:
 def _check_files(root: Path, head: KbRepo, before: KbRepo, selected: list[str], segments: list[str], commit: str,
                  base_given: bool) -> None:
     """.kb/cache is the agent's to write, so the selection is checked against the base and the brief: every id
-    is live at base and has a section in the brief, every segment is stored at head, shown in the brief, and had no
-    triage entry at base or changed since base (from git, so the file cannot widen the scope to settled text), and
-    (unless --base is given) the brief names the base used."""
+    is live at base and has a section in the brief; every segment is stored at head, shown in the brief, and either
+    had no triage entry at base or changed since base with every live record citing it at base selected (from git,
+    so the file cannot widen the scope to settled text or to text an unselected record cites); and (unless --base
+    is given) the brief names the base used."""
     for rid in selected:
         try:
             check_named(before, rid)
@@ -102,9 +104,13 @@ def _check_files(root: Path, head: KbRepo, before: KbRepo, selected: list[str], 
     headings = set(brief.splitlines())
     shown = {line[4:].partition(" · ")[0] for line in headings if line.startswith("### ")}
     m = _BRIEF_BASE.search(brief)
-    changed = changed_segments(before, head)
+    changed, chosen = changed_segments(before, head), set(selected)
+
+    def offerable(r: str) -> bool:
+        return not _triaged(before, r) or (r in changed and set(citing(before, {r})) <= chosen)
+
     if any(f"## {rid}" not in headings for rid in selected) or any(
-        r not in shown or not present(head, r) or (_triaged(before, r) and r not in changed) for r in segments
+        r not in shown or not present(head, r) or not offerable(r) for r in segments
     ):
         raise RedraftError(MISMATCH)
     if not base_given and (m is None or m.group(1) != commit):  # e.g. the recorded base is no longer an ancestor of HEAD
@@ -135,10 +141,9 @@ def _triaged(repo: KbRepo, ref: str) -> bool:
     return (tri := repo.triage(src)) is not None and seg in tri.segments
 
 
-def _fresh(segments: list[str], cited_base: set[str]) -> set[str]:
-    """The offered segments that are text with no records: those the selection did not cite at base. (_check_files
-    has made sure each one had no triage entry at base or changed since base.)"""
-    return {r for r in segments if r not in cited_base}
+def _fresh(before: KbRepo, segments: list[str]) -> set[str]:
+    """The offered segments that are text with no records: those no live record cited at base."""
+    return {r for r in segments if not citing(before, {r})}
 
 
 def _untriaged_issues(head: KbRepo, fresh: set[str]) -> list[Issue]:
@@ -163,21 +168,29 @@ def _cited(repo: KbRepo, ids: set[str]) -> set[str]:
 
 
 def _triage_scope(head: KbRepo, before: KbRepo, src: str, path: str, at_base: set[str], at_head: set[str],
-                  fresh: set[str]) -> list[Issue]:
-    """Triage entries changed since base, per segment id. An entry may change freely for a segment the selection
-    cited at base, and for an offered segment with no records (new, or changed and uncited); for one cited only
-    at head, ids may only be added (a "none: ..." entry may become a list). Any other change is out of scope."""
+                  fresh: set[str], selected: set[str]) -> list[Issue]:
+    """Triage entries changed since base, per segment id. An entry may change freely for an offered segment with no
+    records (new, or changed and uncited). For a segment the selection cited at base, the only ids it may lose are
+    selected ones (a superseded id is a selected one). For one cited only at head, ids may only be added (a
+    "none: ..." entry may become a list). Any other change is out of scope."""
     now, then = head.triage(src), before.triage(src)
     a, b = (now.segments if now else {}), (then.segments if then else {})
     issues = []
     for seg in sorted(set(a) | set(b)):
         old, new, ref = b.get(seg), a.get(seg), f"{src}#{seg}"
-        if old == new or ref in at_base or ref in fresh:
+        if old == new or ref in fresh:
+            continue
+        if ref in at_base and _ids(old) - _ids(new) <= selected:
             continue
         if ref in at_head and isinstance(new, list) and (not isinstance(old, list) or set(old) <= set(new)):
             continue
         issues.append(Issue("redraft.out_of_scope", f"{ref}: triage changed for a segment outside this redraft", path=path))
     return issues
+
+
+def _ids(entry: list[str] | str | None) -> set[str]:
+    """The ids a triage entry maps its segment to ("none: ..." and no entry map to none)."""
+    return set(entry) if isinstance(entry, list) else set()
 
 
 def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[str], selected: set[str],
@@ -191,13 +204,18 @@ def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[
     for path in sorted(drafted):
         rid = at_head.get(path) or at_base.get(path)
         if rid is None and (m := _TRIAGE.fullmatch(path)):
-            issues.extend(_triage_scope(head, before, m.group(1), path, cited_base, cited_head, fresh))
+            issues.extend(_triage_scope(head, before, m.group(1), path, cited_base, cited_head, fresh, selected))
         elif rid is None:
             issues.append(Issue("redraft.out_of_scope", f"{path} is not in this redraft; redraft only the listed records", path=path))
         elif at_base.get(path) not in selected and rid not in allowed:
-            new = rid not in before.records and isinstance(head.records.get(rid), (Requirement, Decision, Invariant))
-            why = ("quotes text outside this redraft; new records may cite only the new or changed segments" if new
-                   else "is not in this redraft; redraft only the listed records")
+            rec = head.records.get(rid)
+            new = rid not in before.records and isinstance(rec, (Requirement, Decision, Invariant))
+            if new and (old := getattr(rec, "supersedes", None)):
+                why = f"supersedes {old}, which is not in this redraft"
+            elif new:
+                why = "quotes text outside this redraft; new records may cite only the new or changed segments"
+            else:
+                why = "is not in this redraft; redraft only the listed records"
             issues.append(Issue("redraft.out_of_scope", f"{rid} {why}", path=path, record=rid))
     for rid in sorted(selected):
         path = before.paths.get(rid)
@@ -259,7 +277,7 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
     chosen = set(selected)
     superseding = _superseding(head, before, chosen)
     drafting = _drafting(head, before, set(segments))
-    fresh = _fresh(segments, _cited(before, chosen))
+    fresh = _fresh(before, segments)
     sources = [i for i in g.issues if i.code.startswith("source.")] + deleted_sources(head, before, ref)
     flags = _flag_issues(head, before)
     rejected = (
