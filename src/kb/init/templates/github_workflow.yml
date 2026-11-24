@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# one run per PR (or branch) at a time: a review run and a push to the PR never post the comment out of order
+concurrency:
+  group: "kb-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -29,6 +34,8 @@ jobs:
           # On a pull request, the PR head, not GitHub's test-merge commit: the stale-context check needs the
           # branch's real fork point. Empty on a push, which keeps the default ref.
           ref: ${{ github.event.pull_request.head.sha }}
+          # kb does no authenticated git operation: leave no token in .git/config for the linked tests to read
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v5
       - if: env.KB_INSTALL_SPEC == ''
         run: 'echo "::warning::kb: set the install spec in .github/workflows/kb.yml — see kb/README.md"'

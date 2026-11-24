@@ -382,8 +382,12 @@ def test_github_workflow_checks_out_pr_head_and_reruns_on_reviews(tmp_path):
     assert on["pull_request_review"] == {"types": ["submitted", "dismissed"]}
     job = wf["jobs"]["check"]
     checkout = next(s for s in job["steps"] if s.get("uses") == "actions/checkout@v4")
-    # empty on push, so a push keeps the default ref
-    assert checkout["with"] == {"fetch-depth": 0, "ref": "${{ github.event.pull_request.head.sha }}"}
+    # empty on push, so a push keeps the default ref; no token left in .git/config for linked tests to read
+    assert checkout["with"] == {
+        "fetch-depth": 0, "ref": "${{ github.event.pull_request.head.sha }}", "persist-credentials": False}
+    # a review run and a synchronize run of one PR never race to post older results
+    assert wf["concurrency"] == {
+        "group": "kb-${{ github.event.pull_request.number || github.ref }}", "cancel-in-progress": True}
     assert job["env"]["BASE_REF"] == "${{ github.event.pull_request.base.ref }}"  # set for both PR events
     verify = next(s for s in job["steps"] if "--comment" in s.get("run", ""))
     assert verify["if"] == (
