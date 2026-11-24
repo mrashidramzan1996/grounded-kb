@@ -16,7 +16,7 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 2. Run `kb redraft --changed` and ask your coding agent to follow `.kb/cache/redraft/brief.md`. Only those records are redrafted; ids are kept, and an ADR or INV changes only through a new record that supersedes it.
 3. Run `kb redraft --report`, then `kb check`, and commit the document, the sync and the redraft together.
 
-After the baseline, this is a pull request: the intent approvers sign off on stale requirements.
+After the baseline, this is a pull request: the intent approvers sign off on stale requirements. `kb redraft --report` is a local check; `kb check` and `kb verify` in CI and the pull-request review are what decide.
 
 ## CI
 

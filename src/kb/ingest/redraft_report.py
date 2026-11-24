@@ -5,21 +5,37 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from kb.config.load import load_config
-from kb.gates.base import GateContext, run_gates
-from kb.gitfiles import GitError, require_commit, rev_parse
+from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
-from kb.ingest.redraft import REDRAFT_BASE, REDRAFT_IDS, RedraftError
-from kb.gates.sources import recover_hint, stored_ids
-from kb.ingest.report import CONFIG, GATES, base_config, drafted_paths, issue_lines, section, tainted
+from kb.ingest.redraft import (
+    REDRAFT_BASE,
+    REDRAFT_BRIEF,
+    REDRAFT_IDS,
+    RedraftError,
+    check_named,
+)
+from kb.ingest.report import (
+    CONFIG,
+    base_config,
+    deleted_sources,
+    gate_drafts,
+    issue_lines,
+    section,
+    tainted,
+)
 from kb.issues import Issue
 from kb.records.ids import ADR_ID, INV_ID, REQ_ID
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
+from kb.textfmt import inline_code
 
 _SELECTABLE = re.compile(rf"{REQ_ID}|{ADR_ID}|{INV_ID}")
 _DIGIT = re.compile(r"\d")
+_TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
+_BRIEF_BASE = re.compile(r"this brief was written at commit ([0-9a-f]+)\.")
 NO_REDRAFT = f"no redraft selection in {REDRAFT_IDS}; run `kb redraft` first"
+MISMATCH = "the redraft files don't match; run `kb redraft` again"
 
 
 @dataclass
@@ -28,26 +44,46 @@ class RedraftReport:
     selected: list[str]
     redrafted: list[str]  # selected ids whose file changed and that have no rejection
     superseding: list[str]  # new ADR/INV ids whose `supersedes` names a selected id, with no rejection
-    rejected: list[Issue]
+    rejected: list[Issue]  # every error that fails --strict, including `caused`
     flagged: list[Issue]  # warnings on redrafted/superseding records, plus "flag.cleared" notices
     unchanged: list[str]  # selected ids not touched (and not superseded by an accepted record)
     still_flagged: list[str]  # selected requirements that still carry flags
     sources: list[Issue] = field(default_factory=list)  # every source issue; its errors are also in `rejected`
+    caused: list[Issue] = field(default_factory=list)  # new errors on records and files the redraft did not touch
+    documents_changed: list[str] = field(default_factory=list)  # originals whose sha256 differs from base
+
+
+def _read(root: Path, rel: str) -> bytes | None:
+    try:
+        return read_regular(root, rel)
+    except UnsafePath:
+        return None
 
 
 def _selection(root: Path) -> list[str]:
     """The ids `kb redraft` wrote; RedraftError when the file is missing or is not a list of record ids."""
     try:
-        data = read_regular(root, REDRAFT_IDS, max_bytes=1_000_000)
-    except UnsafePath:
-        data = None
-    try:
-        ids = (data or b"").decode("ascii").split()
+        ids = (_read(root, REDRAFT_IDS) or b"").decode("ascii").split()
     except UnicodeDecodeError:
         ids = []
     if not ids or not all(_SELECTABLE.fullmatch(i) for i in ids):
         raise RedraftError(NO_REDRAFT)
     return sorted(set(ids))
+
+
+def _check_files(root: Path, before: KbRepo, selected: list[str], commit: str, base_given: bool) -> None:
+    """.kb/cache is the agent's to write, so the selection is checked against the base and the brief: every id
+    is live at base, has a section in the brief, and (unless --base is given) the brief names the base used."""
+    for rid in selected:
+        try:
+            check_named(before, rid)
+        except RedraftError as e:
+            raise RedraftError(f"{e} at the base {commit}; run `kb redraft` again") from None
+    brief = (_read(root, REDRAFT_BRIEF) or b"").decode("utf-8", errors="replace")
+    headings = set(brief.splitlines())
+    m = _BRIEF_BASE.search(brief)
+    if any(f"## {rid}" not in headings for rid in selected) or (not base_given and (m is None or m.group(1) != commit)):
+        raise RedraftError(MISMATCH)
 
 
 def _superseding(head: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
@@ -59,17 +95,40 @@ def _superseding(head: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
     )
 
 
+def _cited(repos: list[KbRepo], ids: set[str]) -> set[str]:
+    """'SRC-x#seg-NN' refs quoted by `ids` in any of `repos`."""
+    return {
+        q.source for repo in repos for rid in ids
+        if (rec := repo.records.get(rid)) is not None and getattr(rec, "evidence", None) for q in rec.evidence.quotes
+    }
+
+
+def _triage_changes(head: KbRepo, before: KbRepo, src: str) -> list[str]:
+    """Segment ids whose triage entry was added, changed or removed since base."""
+    now, then = head.triage(src), before.triage(src)
+    a, b = (now.segments if now else {}), (then.segments if then else {})
+    return sorted(seg for seg in set(a) | set(b) if a.get(seg) != b.get(seg))
+
+
 def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[str], selected: set[str]) -> list[Issue]:
-    """redraft.out_of_scope for drafted record files that are not the selection's; redraft.id_changed for
-    selected records whose file is gone or now holds another id."""
+    """redraft.out_of_scope for drafted files that are not the selection's (a triage file only for entries of
+    segments the selection does not cite); redraft.id_changed for selected records whose file is gone or now
+    holds another id."""
     at_head, at_base = {p: r for r, p in head.id_paths}, {p: r for r, p in before.id_paths}
+    cited = _cited([head, before], allowed)
     issues = []
     for path in sorted(drafted):
         rid = at_head.get(path) or at_base.get(path)
-        if rid is None or at_base.get(path) in selected or rid in allowed:
-            continue
-        issues.append(Issue("redraft.out_of_scope", f"{rid} is not in this redraft; redraft only the listed records",
-                            path=path, record=rid))
+        if rid is None and (m := _TRIAGE.fullmatch(path)):
+            issues.extend(
+                Issue("redraft.out_of_scope", f"{m.group(1)}#{seg}: triage changed for a segment outside this redraft", path=path)
+                for seg in _triage_changes(head, before, m.group(1)) if f"{m.group(1)}#{seg}" not in cited
+            )
+        elif rid is None:
+            issues.append(Issue("redraft.out_of_scope", f"{path} is not in this redraft; redraft only the listed records", path=path))
+        elif at_base.get(path) not in selected and rid not in allowed:
+            issues.append(Issue("redraft.out_of_scope", f"{rid} is not in this redraft; redraft only the listed records",
+                                path=path, record=rid))
     for rid in sorted(selected):
         path = before.paths.get(rid)
         if path is not None and at_head.get(path) != rid:
@@ -98,19 +157,23 @@ def _flag_issues(head: KbRepo, before: KbRepo) -> list[Issue]:
     return issues
 
 
-def _source_issues(head: KbRepo, before: KbRepo, issues: list[Issue], ref: str) -> list[Issue]:
-    """The source gate's issues, plus source.tampered for a stored source deleted since base. A store edited
-    by hand fails the source gate (it is re-derived from the original); a `kb source sync` does not."""
-    deleted = [
-        Issue("source.tampered", f"kb/sources/{s} was deleted; {recover_hint(ref)}", path=f"kb/sources/{s}", record=s)
-        for s in sorted(stored_ids(before) - stored_ids(head))
-    ]
-    return [i for i in issues if i.code.startswith("source.")] + deleted
+def _config_issues(root: Path, ref: str) -> list[Issue]:
+    if file_at(root, ref, CONFIG) == _read(root, CONFIG):
+        return []
+    return [Issue("ingest.config_changed", f"{CONFIG} changed; a redraft does not change the config", path=CONFIG)]
+
+
+def _documents_changed(head: KbRepo, before: KbRepo) -> list[str]:
+    return sorted(
+        head.sources[s].original for s in set(head.sources) & set(before.sources)
+        if head.sources[s].original_sha256 != before.sources[s].original_sha256
+    )
 
 
 def redraft_report(root: Path, base: str | None) -> RedraftReport:
     """Gate the redraft of the ids in REDRAFT_IDS against `base` (default: the commit in REDRAFT_BASE when it is
-    still an ancestor of HEAD, else HEAD). Only issues on drafted paths are reported; store files are not drafted."""
+    still an ancestor of HEAD, else HEAD), and the errors it causes elsewhere. Store files are not drafted; a
+    hand-edited store fails the source gate, which rejects the source and the records citing it."""
     root = Path(root)
     require_commit(root)
     selected = _selection(root)
@@ -120,31 +183,26 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
         raise GitError(f"unknown base {ref!r}")
     config = load_config(root / CONFIG)
     head, before = KbRepo.load(root), KbRepo.at_ref(root, ref)
-    issues = run_gates(GateContext(root, config, head, before, ref), GATES)
+    _check_files(root, before, selected, commit, base is not None)
+    g = gate_drafts(root, config, base_config(root, ref), head, before, ref)
 
-    drafted = drafted_paths(head, before)
     chosen = set(selected)
     superseding = _superseding(head, before, chosen)
-    ids = {rid for rid, path in head.id_paths if path in drafted}
-    mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
-    sources = _source_issues(head, before, issues, ref)
+    sources = [i for i in g.issues if i.code.startswith("source.")] + deleted_sources(head, before, ref)
     flags = _flag_issues(head, before)
-    old_config = base_config(root, ref)
-    config_issues = [] if old_config is not None and old_config.model_dump() == config.model_dump() else [
-        Issue("ingest.config_changed", f"{CONFIG} changed; a redraft does not change the config", path=CONFIG)
-    ]
     rejected = (
-        [i for i in mine if i.severity == "error"]
-        + _scope_issues(head, before, drafted, chosen | set(superseding), chosen)
+        [i for i in g.mine if i.severity == "error"]
+        + _scope_issues(head, before, g.drafted, chosen | set(superseding), chosen)
         + [i for i in flags if i.severity == "error"]
-        + config_issues
+        + _config_issues(root, ref)
         + [i for i in sources if i.severity == "error" and i.code != "source.secret_in_original"]
         + tainted(head, sources)
+        + g.caused
     )
 
     bad_paths = {i.path for i in rejected}
     bad = {i.record for i in rejected} | {rid for rid, path in [*head.id_paths, *before.id_paths] if path in bad_paths}
-    touched = {rid for rid in selected if before.paths.get(rid) in drafted or head.paths.get(rid) in drafted}
+    touched = {rid for rid in selected if before.paths.get(rid) in g.drafted or head.paths.get(rid) in g.drafted}
     redrafted = sorted(touched - bad)
     accepted_superseding = [rid for rid in superseding if rid not in bad]
     replaced = {head.records[rid].supersedes for rid in accepted_superseding}  # type: ignore[union-attr]
@@ -155,7 +213,7 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
         redrafted=redrafted,
         superseding=accepted_superseding,
         rejected=rejected,
-        flagged=[i for i in mine if i.severity == "warning" and i.record in good]
+        flagged=[i for i in g.mine if i.severity == "warning" and i.record in good]
         + [i for i in flags if i.code == "flag.cleared"],
         unchanged=[rid for rid in selected if rid not in touched and rid not in replaced],
         still_flagged=[
@@ -163,17 +221,24 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
             if isinstance(rec := head.records.get(rid), Requirement) and rec.flags and rec.status != "rejected"
         ],
         sources=sources,
+        caused=g.caused,
+        documents_changed=_documents_changed(head, before),
     )
 
 
 def render_redraft_report(r: RedraftReport) -> str:
     """Markdown; every message and path is one-line inline code."""
-    out = ["# Redraft report", ""]
+    direct = [i for i in r.rejected if i not in r.caused]
+    out = ["# Redraft report", "", f"Base: {r.base}", f"Selection: {', '.join(r.selected)}", ""]
     out += section("Redrafted", [f"- {rid}" for rid in r.redrafted]
                    + [f"- {rid} (supersedes a selected record)" for rid in r.superseding])
-    out += section("Rejected", issue_lines(r.rejected))
+    out += [f"## Rejected ({len(r.rejected)})", "", *(issue_lines(direct) or ["- none"]), ""]
+    if r.caused:
+        out += section("Caused by this change", issue_lines(r.caused), "###")
     out += section("Flagged", issue_lines(r.flagged))
     out += section("Sources", issue_lines(r.sources))
+    if r.documents_changed:
+        out += ["Documents changed since base: " + ", ".join(inline_code(p) for p in r.documents_changed), ""]
     out += section("Still flagged", [f"- {rid}" for rid in r.still_flagged])
     out += section("Not redrafted", [f"- {rid}" for rid in r.unchanged])
     return "\n".join(out)

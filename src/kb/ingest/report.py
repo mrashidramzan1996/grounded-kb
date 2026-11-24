@@ -133,6 +133,42 @@ def _untriaged(repo: KbRepo) -> list[str]:
     return out
 
 
+@dataclass
+class DraftGates:
+    """The gates run on what changed since base: shared by `kb ingest --report` and `kb redraft --report`."""
+    issues: list[Issue]  # every gate issue at head
+    drafted: set[str]  # kb/ paths changed since base (store files excluded)
+    ids: set[str]  # record ids at drafted paths
+    mine: list[Issue]  # non-source issues on drafted records and paths
+    caused: list[Issue]  # new non-source errors elsewhere
+
+
+def gate_drafts(root: Path, config: KbConfig, config_at_base: KbConfig | None, head: KbRepo, before: KbRepo,
+                ref: str) -> DraftGates:
+    issues = run_gates(GateContext(root, config, head, before, ref), GATES)
+    # source issues are never "caused" (they are reported under Sources), so the base needs no source gate
+    at_base = run_gates(GateContext(root, config_at_base or config, before), BASE_GATES)
+    drafted = drafted_paths(head, before)
+    ids = {rid for rid, path in head.id_paths if path in drafted}
+    mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
+    # whoever wrote it, a decision or invariant drafted in this range must quote its document (C2)
+    mine = [i for i in mine if i.code != "evidence.missing"] + [
+        missing_evidence(rid, rec, "error", head.paths[rid])
+        for rid, rec in sorted(head.records.items())
+        if rid in ids and isinstance(rec, (Decision, Invariant)) and rec.evidence is None
+    ]
+    caused = new_since([i for i in issues if i.severity == "error" and i not in mine and not i.code.startswith("source.")], at_base)
+    return DraftGates(issues, drafted, ids, mine, caused)
+
+
+def deleted_sources(head: KbRepo, before: KbRepo, ref: str) -> list[Issue]:
+    """source.tampered for each source stored at base and gone at head: neither `kb ingest` nor a redraft deletes one."""
+    return [
+        Issue("source.tampered", f"kb/sources/{s} was deleted; {recover_hint(ref)}", path=f"kb/sources/{s}", record=s)
+        for s in sorted(stored_ids(before) - stored_ids(head))
+    ]
+
+
 def ingest_report(root: Path, base: str | None) -> IngestReport:
     """Gate the records added, changed or deleted since `base`, and the errors the change causes elsewhere.
     Default base: the commit the last `kb ingest` ran on (when it is an ancestor of HEAD), else HEAD.
@@ -146,27 +182,12 @@ def ingest_report(root: Path, base: str | None) -> IngestReport:
     config = load_config(root / CONFIG)
     head, before = KbRepo.load(root), KbRepo.at_ref(root, ref)
     config_at_base = base_config(root, ref)
-    issues = run_gates(GateContext(root, config, head, before, ref), GATES)
-    # source issues are never "caused" (they are reported under Sources), so the base needs no source gate
-    at_base = run_gates(GateContext(root, config_at_base or config, before), BASE_GATES)
-
-    drafted = drafted_paths(head, before)
-    ids = {rid for rid, path in head.id_paths if path in drafted}
-    source_issues = [i for i in issues if i.code.startswith("source.")]
-    mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
-    # whoever wrote it, a decision or invariant drafted in this range must quote its document (C2)
-    mine = [i for i in mine if i.code != "evidence.missing"] + [
-        missing_evidence(rid, rec, "error", head.paths[rid])
-        for rid, rec in sorted(head.records.items())
-        if rid in ids and isinstance(rec, (Decision, Invariant)) and rec.evidence is None
-    ]
+    g = gate_drafts(root, config, config_at_base, head, before, ref)
+    drafted, ids, mine, caused = g.drafted, g.ids, g.mine, g.caused
+    source_issues = [i for i in g.issues if i.code.startswith("source.")]
     direct = [i for i in mine if i.severity == "error"]
-    caused = new_since([i for i in issues if i.severity == "error" and i not in mine and not i.code.startswith("source.")], at_base)
 
-    source_issues += [  # `kb ingest` never deletes a source
-        Issue("source.tampered", f"kb/sources/{s} was deleted; {recover_hint(ref)}", path=f"kb/sources/{s}", record=s)
-        for s in sorted(stored_ids(before) - stored_ids(head))
-    ]
+    source_issues += deleted_sources(head, before, ref)
     source_issues += _originals_changed(root, before, ref)
     tampered = [i for i in source_issues if i.code == "source.tampered"]
     rejected = direct + _config_issues(config, config_at_base) + tampered + tainted(head, source_issues) + caused

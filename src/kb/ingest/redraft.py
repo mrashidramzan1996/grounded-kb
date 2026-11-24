@@ -59,7 +59,8 @@ def unfound(repo: KbRepo) -> list[str]:
     return [rid for rid, rec in _live_cited(repo) if rec.evidence and not all(_quote_found(repo, q.source, q.text) for q in rec.evidence.quotes)]
 
 
-def _check_named(repo: KbRepo, rid: str) -> None:
+def check_named(repo: KbRepo, rid: str) -> None:
+    """RedraftError unless `rid` is a live requirement, decision or invariant of `repo`."""
     rec = repo.records.get(rid)
     if rec is None:
         raise RedraftError(f"{rid} is unknown")
@@ -80,7 +81,7 @@ def select(repo: KbRepo, ids: list[str], *, flagged_: bool, changed: bool, befor
         reasons.setdefault(rid, set()).add(why)
 
     for rid in ids:
-        _check_named(repo, rid)
+        check_named(repo, rid)
         add(rid, "named")
     cited = dict(_live_cited(repo))
     if flagged_:
