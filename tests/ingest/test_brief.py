@@ -236,3 +236,27 @@ def test_brief_teaches_exclusions(acme_repo):
     assert "`kb/exclusions/EXCL-*.yaml`" in rules and "out of scope" in rules
     example = _section(brief, "## Examples").split("#### kb/exclusions/EXCL-002.yaml", 1)[1].split("####", 1)[0]
     assert "evidence:" in example and "modality" not in example
+
+
+ENTITY_RULES = (
+    "Record each named actor, system, data object, external party, document, event or business concept as a TERM with "
+    "`kind`, a definition and a quote that contains its name.",
+    "Record how entities relate as `relations` on the source term, each with a quote that mentions both.",
+    "Link requirements to entities with `actor` and `entities`.",
+)
+
+
+def test_brief_explains_entities(acme_repo):
+    from importlib.resources import files
+
+    invoke(acme_repo, "ingest", "docs/")
+    brief = brief_of(acme_repo)
+    rules = " ".join(_section(brief, "## The rules").split())
+    assert all(rule in rules for rule in ENTITY_RULES)
+    new = " ".join(files("kb.ingest").joinpath("templates", "redraft_new.md").read_text(encoding="utf-8").split())
+    assert all(rule in new for rule in ENTITY_RULES)
+    examples = _section(brief, "## Examples")
+    term = examples.split("#### kb/glossary/TERM-seat.yaml", 1)[1].split("####", 1)[0]
+    assert "kind: data" in term and "evidence:" in term and "relations:" in term and "type: part_of" in term
+    req = examples.split("#### kb/requirements/REQ-F-034.yaml", 1)[1].split("####", 1)[0]
+    assert "entities:" in req and "- TERM-seat" in req

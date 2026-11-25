@@ -12,6 +12,7 @@ from kb.gates.anchors import anchor_gate
 from kb.gates.base import GateContext, run_gates
 from kb.gates.coverage import coverage_gate
 from kb.gates.decisions import decision_guard
+from kb.gates.entities import entity_gate
 from kb.gates.ids import id_gate
 from kb.gates.quotes import missing_evidence, quote_gate
 from kb.gates.sources import (
@@ -26,13 +27,16 @@ from kb.gates.triage import triage_gate
 from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.issues import Issue, issue_key, new_since
-from kb.records.models import QUOTED_TYPES, Decision, Invariant
+from kb.records.models import QUOTED_TYPES, Decision, Invariant, Term
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
 
-GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate, coverage_gate, triage_gate]
+GATES = [id_gate, decision_guard, quote_gate, entity_gate, anchor_gate, source_gate, coverage_gate, triage_gate]
 BASE_GATES = [g for g in GATES if g is not source_gate]
 TRIAGE_ERRORS = ("triage.none_uncoded", "triage.not_quoted")
+# warnings in `kb check` that are errors on a record drafted in the range
+DRAFTED_ERRORS = ("requirement.fields_missing", "requirement.modality_mismatch", "entity.name_not_in_quote",
+                  "relation.entities_not_in_quote")
 TRIAGE_FILE = re.compile(r"kb/sources/SRC-[^/]+/triage\.yaml")
 ORIGINAL_CHANGED = (
     "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
@@ -121,12 +125,14 @@ def _originals_changed(root: Path, before: KbRepo, ref: str) -> list[Issue]:
 
 
 def citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
-    """(record id, source) for records whose evidence cites one of `src_ids`."""
+    """(record id, source) for records whose evidence (or, for a term, a relation quote) cites one of `src_ids`."""
     out = []
     for rid, rec in sorted(repo.records.items()):
-        if isinstance(rec, QUOTED_TYPES) and rec.evidence:
-            cited = sorted({q.source.partition("#")[0] for q in rec.evidence.quotes} & src_ids)
-            out.extend((rid, src) for src in cited)
+        if not isinstance(rec, (*QUOTED_TYPES, Term)):
+            continue
+        quotes = [*(rec.evidence.quotes if rec.evidence else []), *(r.quote for r in getattr(rec, "relations", []))]
+        cited = sorted({q.source.partition("#")[0] for q in quotes} & src_ids)
+        out.extend((rid, src) for src in cited)
     return out
 
 
@@ -199,10 +205,11 @@ def gate_drafts(root: Path, config: KbConfig, config_at_base: KbConfig | None, h
         if i.code in ("statement.number_not_in_quote", "quote.too_short") and getattr(head.records.get(i.record), "drafted_by", None) else i
         for i in mine
     ]
-    # a requirement drafted in this range must carry its classification, and the modality must match its quote
+    # a requirement drafted in this range must carry its classification, and the modality must match its quote; a term
+    # drafted in this range must be named in its quotes, and each relation quote must name both terms
     mine = [
         Issue(i.code, i.message, "error", i.path, i.record)
-        if i.code in ("requirement.fields_missing", "requirement.modality_mismatch") and i.record in ids else i
+        if i.code in DRAFTED_ERRORS and i.record in ids else i
         for i in mine
     ]
     caused = new_since([i for i in issues if i.severity == "error" and i not in mine and not i.code.startswith("source.")], at_base)

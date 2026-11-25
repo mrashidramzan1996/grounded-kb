@@ -8,7 +8,7 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 
 - `kb source add <doc>` / `kb source sync` store and re-read product documents under `kb/sources/`.
 - `kb ingest` prepares a drafting brief; drafted records are reviewed in a pull request.
-- `kb check` runs every gate; `kb context` and `kb trace` read the KB.
+- `kb check` runs every gate; `kb context` and `kb trace` read the KB; `kb graph [--format json|mermaid]` exports the records and their links.
 
 ## Agent-driven mode
 
@@ -72,7 +72,7 @@ then passes is reported as flaky.
 | `kb/features/FEAT-*.md` | Features: YAML front matter plus a Markdown body. |
 | `kb/decisions/ADR-*.md` | Architecture decisions. |
 | `kb/invariants/INV-*.md` | Invariants. |
-| `kb/glossary/TERM-*.yaml` | Glossary terms. |
+| `kb/glossary/TERM-*.yaml` | Glossary terms: the entities of the domain model and how they relate. |
 
 The file name is the record id. Records hold only human-owned fields; verification state, approvals and whether a record is superseded are derived by `kb`, never stored.
 
@@ -92,9 +92,10 @@ features: [FEAT-001]   # optional
 modules: [MOD-billing] # optional
 flags: []              # optional: vague | conflicting | untestable
 modality: must         # must | must_not | should | may, as the quote says it
-actor: the billing system   # who the rule binds, plain text, at most 60 characters
+actor: the billing system   # who the rule binds: a TERM id (TERM-billing-system) or plain text, at most 60 characters
 category: performance  # REQ-NF only: performance | security | privacy | availability | reliability | usability | compliance | compatibility | maintainability | portability
 origin: stated         # stated | implied (implied needs a confirming quote from SRC-clarifications)
+entities: [TERM-seat]  # optional: the glossary terms the requirement names
 ```
 
 `kb check` warns `requirement.fields_missing` (modality, actor or category absent), `requirement.modality_mismatch` (the quote's rule word differs from `modality`), and `requirement.implied_unconfirmed`. For a requirement drafted in the current ingest or redraft range, the first two are errors.
@@ -126,7 +127,27 @@ Quotes must be verbatim and aligned to word and number boundaries: `seat` does n
 
 Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/exclusions/`, `kb/features/`, `kb/glossary/` and every `kb/sources/SRC-<name>/triage.yaml`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
 
-Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`.
+Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`; with `kind`, `evidence` and `relations` it is a grounded entity of the domain model.
+
+```yaml
+id: TERM-seat
+name: seat
+aliases: [seats]       # other forms of the name, plurals included: there is no stemming
+definition: One licensed user slot on a billing account.
+kind: data             # actor | system | data | external | document | event | concept
+evidence:
+  quotes:
+    - source: SRC-pricing-spec-v3#seg-03
+      text: A removed seat stays active until the end of the billing cycle.   # verbatim, names the term
+relations:             # at most 10
+  - type: part_of      # owns | uses | contains | produces | depends_on | part_of | is_a | triggers
+    target: TERM-account
+    quote:
+      source: SRC-pricing-spec-v3#seg-02
+      text: Each account pays for every seat it holds.   # verbatim, names both terms
+```
+
+A term's quotes are checked like a requirement's. The name or an alias must appear in one of them (case-insensitive, on word boundaries); otherwise `kb check` warns `entity.name_not_in_quote`. A relation quote that is not found in its segment is the error `relation.quote_not_found`; one that does not name both terms is the warning `relation.entities_not_in_quote`. For a term drafted in the current ingest or redraft range, both warnings are errors. A term with a `kind` and no evidence is the warning `entity.unquoted`. A relation `target`, a requirement's `entities` and a TERM-id `actor` must name existing terms (`ref.missing`). `kb context` shows the terms its requirements name under "Domain model", with the relations among them. Term quotes never count as covering a rule-like sentence.
 
 Every record may also carry `status` (`live` or `rejected`), `owner`, `visibility` and `drafted_by`.
 
@@ -142,7 +163,7 @@ segments:
 ```
 
 - The reason codes are `heading`, `background`, `contact`, `boilerplate`, `example`, `duplicate`, `out-of-scope` and `other`, written `none: <code>[: free text]`. A `none:` reason without a code is the warning `triage.none_uncoded`. `out-of-scope` is the warning `triage.use_exclusion`: record the exclusion as an `EXCL` record (`kb/exclusions/EXCL-NNN.yaml`) instead.
-- A list must name at least one live record with a quote found in that segment: a requirement, decision or invariant, or a feature whose linked requirement (or a claim's) has one. A quote that is not found, too short, or on a rejected or superseded record does not count. Otherwise `kb check` warns `triage.not_quoted`. Glossary terms and components in a list are not checked yet.
+- A list must name at least one live record with a quote found in that segment: a requirement, decision or invariant, or a feature whose linked requirement (or a claim's) has one. A quote that is not found, too short, or on a rejected or superseded record does not count. Otherwise `kb check` warns `triage.not_quoted`. A glossary term with evidence counts like a requirement; a term without evidence, and a component, is not checked.
 - `kb check` reports both as warnings, so an older knowledge base keeps passing. The ingest and redraft reports make them errors when the issue is new since the base. That covers an entry written or changed in the range, and also an unchanged entry whose record stopped quoting the segment, which the ingest report lists under "Caused by this change". An entry committed before the range with the same problem stays a warning. One exception: in a redraft, a list that stops being quoted only because a selected record now quotes another segment stays a warning. For a `triage.yaml` that existed at the base, Flagged shows only the warnings that are new since the base; a triage file written in the range shows all of them.
 - A change to a `triage.yaml` needs the intent approvers (`triage of SRC-<name> changed`): a `none:` entry says that a part of a document holds no product intent.
 

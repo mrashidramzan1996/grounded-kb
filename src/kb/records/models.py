@@ -1,5 +1,5 @@
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -52,10 +52,11 @@ class Requirement(_Record):
     modules: list[str] = []
     flags: list[Literal["vague", "conflicting", "untestable"]] = []
     modality: Literal["must", "must_not", "should", "may"] | None = None
-    actor: str | None = None  # who the rule binds: plain text, at most 60 characters
+    actor: str | None = None  # who the rule binds: a TERM id (which must exist) or plain text, at most 60 characters
     category: Literal["performance", "security", "privacy", "availability", "reliability", "usability",
                       "compliance", "compatibility", "maintainability", "portability"] | None = None
     origin: Literal["stated", "implied"] = "stated"
+    entities: list[Annotated[str, Field(pattern=rf"^{TERM_ID}$")]] = []  # the glossary terms (entities) it names
 
     @field_validator("actor")
     @classmethod
@@ -134,11 +135,27 @@ class Component(_Record):
     body: str = ""
 
 
+class Relation(_Model):
+    """How a term (the source) relates to another term, quoted from a passage that names both."""
+
+    type: Literal["owns", "uses", "contains", "produces", "depends_on", "part_of", "is_a", "triggers"]
+    target: str = Field(pattern=rf"^{TERM_ID}$")
+    quote: Quote
+
+
+MAX_RELATIONS = 10
+
+
 class Term(_Record):
+    """A glossary term; with `kind` and `evidence` it is a grounded entity of the domain model."""
+
     id: str = Field(pattern=rf"^{TERM_ID}$")
     name: str
     aliases: list[str] = []
     definition: str
+    kind: Literal["actor", "system", "data", "external", "document", "event", "concept"] | None = None
+    evidence: Evidence | None = None
+    relations: list[Relation] = Field(default=[], max_length=MAX_RELATIONS)
 
 
 class GuardCounts(_Model):

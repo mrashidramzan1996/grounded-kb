@@ -16,7 +16,18 @@ from kb.config.schema import KbConfig
 from kb.gitfiles import head_commit, is_ancestor, repo_files, rev_parse
 from kb.records.ids import valid_segment_id
 from kb.records.io import render_record
-from kb.records.models import Component, Decision, Exclusion, Feature, Invariant, Requirement, Source, Term
+from kb.records.models import (
+    Component,
+    Decision,
+    Exclusion,
+    Feature,
+    Invariant,
+    Quote,
+    Relation,
+    Requirement,
+    Source,
+    Term,
+)
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.sources.guard import has_injection
@@ -151,7 +162,7 @@ def _example_records() -> list[tuple[str, bytes]]:
         ("kb/requirements/REQ-F-034.yaml", Requirement(
             id="REQ-F-034", drafted_by=by, statement="No refund is given when a seat is removed.",
             evidence=quote("seg-08", "Refunds are never given for a removed seat."), modules=["MOD-billing"],
-            modality="must_not", actor="the billing system",
+            modality="must_not", actor="the billing system", entities=["TERM-seat"],
         )),
         ("kb/requirements/REQ-NF-012.yaml", Requirement(
             id="REQ-NF-012", drafted_by=by, statement="Sessions must be stored encrypted.",
@@ -180,12 +191,16 @@ def _example_records() -> list[tuple[str, bytes]]:
             body="Turns an invoice into the PDF sent to the billing contact.\n",
         )),
         ("kb/glossary/TERM-seat.yaml", Term(
-            id="TERM-seat", drafted_by=by, name="seat", definition="A paid place for one user on a subscription.",
+            id="TERM-seat", drafted_by=by, name="seat", aliases=["seats"], definition="A paid place for one user on a subscription.",
+            kind="data", evidence=quote("seg-02", "Each seat is a paid place for one user on a subscription."),
+            relations=[Relation(type="part_of", target="TERM-subscription", quote=Quote(
+                source=f"{src}#seg-02", text="Each seat is a paid place for one user on a subscription."))],
         )),
     ]
     # origin defaults to stated, which render_record omits; the examples spell it out
     out = [(path, render_record(rec, keep=("origin",) if isinstance(rec, Requirement) else ())) for path, rec in records]
-    triage = {"segments": {"seg-01": "none: heading: document title", "seg-08": ["REQ-F-034"], "seg-09": ["EXCL-002"]}}
+    triage = {"segments": {"seg-01": "none: heading: document title", "seg-02": ["TERM-seat"], "seg-08": ["REQ-F-034"],
+                            "seg-09": ["EXCL-002"]}}
     out.append((f"kb/sources/{src}/triage.yaml", dump_yaml(triage).encode()))
     return out
 

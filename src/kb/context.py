@@ -23,6 +23,7 @@ from kb.records.models import (
     FeatureClaim,
     Invariant,
     Requirement,
+    Term,
 )
 from kb.records.repo import KbRepo
 from kb.rules import AGENT_RULES
@@ -52,6 +53,7 @@ class ContextPack:
     requirements: list[Requirement]
     status: dict[str, str]
     exclusions: list[Exclusion] = field(default_factory=list)  # live scope exclusions, selected like requirements
+    entities: list[Term] = field(default_factory=list)  # live terms the requirements name through `actor` or `entities`
     module_cfgs: dict[str, ModuleCfg] = field(default_factory=dict)
     claim_features: dict[str, str] = field(default_factory=dict)  # claim id -> feature id
     flagged: frozenset[str] = frozenset()  # ids whose text or cited segments look like instructions
@@ -104,7 +106,7 @@ def _anchor_file(ref: str | None, sep: str) -> str | None:
     return ref.partition(sep)[0] if ref else None
 
 
-def _flagged(repo: KbRepo, rec: Requirement | Exclusion | Decision | Invariant, texts: list[str]) -> bool:
+def _flagged(repo: KbRepo, rec: Requirement | Exclusion | Decision | Invariant | Term, texts: list[str]) -> bool:
     """Instruction-like text in the record, in its quotes, or in a guard-flagged segment it cites."""
     if any(has_injection(t) for t in texts):
         return True
@@ -201,12 +203,16 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
         return [r for r in ix.live_of(kind) if set(r.governs) & gov or r.id in rules]
 
     decisions, invariants = governed(Decision), governed(Invariant)
+    named = {e for r in picked for e in [*([r.actor] if r.actor else []), *r.entities]}
+    entities = [t for t in ix.live_of(Term) if t.id in named]
     picked_claims = [ix.claims[c][1] for c in sorted(claims)]
     flagged = {r.id for r in picked if _flagged(repo, r, [r.statement])}
     flagged |= {x.id for x in out_of_scope if _flagged(repo, x, [x.statement])}
     flagged |= {d.id for d in decisions if _flagged(repo, d, [d.title, d.body])}
     flagged |= {i.id for i in invariants if _flagged(repo, i, [i.statement, i.body])}
     flagged |= {c.id for c in picked_claims if has_injection(c.claim)}
+    flagged |= {t.id for t in entities
+                if _flagged(repo, t, [t.name, t.definition, *t.aliases, *(r.quote.text for r in t.relations)])}
     mods = sorted(m for m in gov if m in ix.modules)
     return ContextPack(
         modules=mods,
@@ -216,6 +222,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
         requirements=picked,
         status={r.id: ix.status[r.id] for r in picked},
         exclusions=out_of_scope,
+        entities=entities,
         module_cfgs={m: ix.modules[m] for m in mods},
         claim_features={c.id: ix.claims[c.id][0].id for c in picked_claims},
         flagged=frozenset(flagged),
@@ -269,6 +276,12 @@ def _clip(text: str, limit: int | None) -> str:
     return text if limit is None or len(text) <= limit else text[:limit] + "…"
 
 
+def _domain(pack: ContextPack) -> list[tuple[Term, list]]:
+    """Each entity of the pack with its relations to other entities of the pack."""
+    ids = {t.id for t in pack.entities}
+    return [(t, [r for r in t.relations if r.target in ids]) for t in pack.entities]
+
+
 def _md(pack: ContextPack, body_limit: int | None = None) -> str:
     out = [HEADER, *_warning(pack.load_errors)]
     if pack.modules:
@@ -307,6 +320,12 @@ def _md(pack: ContextPack, body_limit: int | None = None) -> str:
             links = f"modules {_refs(x.modules)}" + (f", features {_refs(x.features)}" if x.features else "")
             out.append(f"[{x.id}] exclusion, {links}: {inline_code(x.statement)}{_mark(pack, x.id)}")
             out += _quote_lines(x.id, x)
+    if pack.entities:
+        out.append("## Domain model")
+        for t, rels in _domain(pack):
+            kind = f", kind {t.kind}" if t.kind else ""
+            out.append(f"[{t.id}] entity{kind}, name {inline_code(t.name)}: {inline_code(t.definition)}{_mark(pack, t.id)}")
+            out += [f"[{t.id}] {t.id} —{r.type}→ {r.target}, quote {_ref(r.quote.source)}: {inline_code(r.quote.text)}" for r in rels]
     if pack.claims:
         out.append("## Claims")
         for c in pack.claims:
@@ -352,6 +371,12 @@ def _json(pack: ContextPack) -> str:
             {"id": x.id, "statement": x.statement, "modules": x.modules, "features": x.features, "quotes": _quotes(x),
              "instruction_like": x.id in pack.flagged}
             for x in pack.exclusions
+        ],
+        "entities": [
+            {"id": t.id, "name": t.name, "aliases": t.aliases, "kind": t.kind, "definition": t.definition,
+             "relations": [{"type": r.type, "target": r.target, "source": r.quote.source, "quote": r.quote.text} for r in rels],
+             "instruction_like": t.id in pack.flagged}
+            for t, rels in _domain(pack)
         ],
         "claims": [
             {"id": c.id, "feature": pack.claim_features[c.id], "claim": c.claim, "requirement": c.requirement,

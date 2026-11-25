@@ -14,9 +14,11 @@ from kb.records.models import (
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
 
-# Task 6: a term is grounded through the requirements that name it in `entities`; until then TERM and COMP ids in a
-# triage list neither satisfy nor fail triage.not_quoted
-_SKIPPED = (Term, Component)
+
+def _skipped(rec) -> bool:
+    """A COMP id, or a TERM id without evidence, in a triage list neither satisfies nor fails triage.not_quoted; a term
+    with evidence is checked like a requirement (its found quotes in the segment)."""
+    return isinstance(rec, Component) or (isinstance(rec, Term) and rec.evidence is None)
 
 
 def quotes_ref(repo: KbRepo, rid: str, ref: str, live: set[str] | None = None) -> bool:
@@ -39,14 +41,14 @@ def quotes_ref(repo: KbRepo, rid: str, ref: str, live: set[str] | None = None) -
 
 def unquoted_entries(repo: KbRepo) -> list[tuple[str, str, list[str]]]:
     """(source id, segment key, named ids) for each triage list none of whose checkable records quotes its segment.
-    Missing ids are id_gate's (ref.missing); TERM and COMP ids are skipped (_SKIPPED)."""
+    Missing ids are id_gate's (ref.missing); COMP ids and TERM ids without evidence are skipped (_skipped)."""
     live, out = live_ids(repo), []
     for src_id in sorted(repo.sources):
         tri = repo.triage(src_id)
         for seg_id, value in sorted(tri.segments.items()) if tri else ():
             if isinstance(value, str):
                 continue
-            known = [rid for rid in value if rid in repo.records and not isinstance(repo.records[rid], _SKIPPED)]
+            known = [rid for rid in value if rid in repo.records and not _skipped(repo.records[rid])]
             if known and not any(quotes_ref(repo, rid, f"{src_id}#{seg_id}", live) for rid in known):
                 out.append((src_id, seg_id, known))
     return out

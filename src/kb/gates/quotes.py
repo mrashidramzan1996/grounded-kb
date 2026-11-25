@@ -125,6 +125,32 @@ def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], pat
     return issues
 
 
+def evidence_issues(repo: KbRepo, rid: str, ev: Evidence, found: list[Quote], live: bool, path: str) -> list[Issue]:
+    """quote.too_many, quote.too_short and quote.not_found for one record's evidence; `found` is quote_results'."""
+    issues: list[Issue] = []
+    if len(ev.quotes) > MAX_QUOTES_PER_CLAIM:
+        issues.append(Issue("quote.too_many", f"{rid} has {len(ev.quotes)} quotes; at most {MAX_QUOTES_PER_CLAIM} are allowed", path=path, record=rid))
+    unfound: list[Issue] = []
+    for q in ev.quotes:
+        src, _, seg_id = q.source.partition("#")
+        seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
+        if too_short(q.text):
+            issues.append(Issue("quote.too_short", f"{rid}: quote shorter than {MIN_QUOTE_CHARS} characters: {inline_code(q.text)}", "warning", path, rid))
+            continue
+        if src not in repo.sources or seg is None:
+            continue  # id_gate reports the missing source or segment
+        if q in found:
+            continue
+        if live:
+            unfound.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
+        else:  # a superseded or rejected record stays as it was, even when its document moved on
+            issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
+                                "warning", path, rid))
+    if unfound and ev.mode == "any" and found:  # one grounded quote is enough; the others are only noted
+        unfound = [Issue(i.code, i.message, "warning", i.path, i.record) for i in unfound]
+    return issues + unfound
+
+
 def quote_gate(ctx: GateContext) -> list[Issue]:
     repo, issues = ctx.repo, []
     live = live_ids(repo)
@@ -142,30 +168,10 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
                 severity = "error" if rec.drafted_by else "warning"
                 issues.append(missing_evidence(rid, rec, severity, path))
             continue
-        if len(ev.quotes) > MAX_QUOTES_PER_CLAIM:
-            issues.append(Issue("quote.too_many", f"{rid} has {len(ev.quotes)} quotes; at most {MAX_QUOTES_PER_CLAIM} are allowed", path=path, record=rid))
         found, _ = quote_results(repo, ev)
         if isinstance(rec, Requirement):
             issues.extend(requirement_field_issues(rid, rec, found, path))
-        unfound: list[Issue] = []
-        for q in ev.quotes:
-            src, _, seg_id = q.source.partition("#")
-            seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
-            if too_short(q.text):
-                issues.append(Issue("quote.too_short", f"{rid}: quote shorter than {MIN_QUOTE_CHARS} characters: {inline_code(q.text)}", "warning", path, rid))
-                continue
-            if src not in repo.sources or seg is None:
-                continue  # id_gate reports the missing source or segment
-            if q in found:
-                continue
-            if rid in live:
-                unfound.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
-            else:  # a superseded or rejected record stays as it was, even when its document moved on
-                issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
-                                    "warning", path, rid))
-        if unfound and ev.mode == "any" and found:  # one grounded quote is enough; the others are only noted
-            unfound = [Issue(i.code, i.message, "warning", i.path, i.record) for i in unfound]
-        issues.extend(unfound)
+        issues.extend(evidence_issues(repo, rid, ev, found, rid in live, path))
         grounded = set().union(*(numbers(q.text) for q in found))  # only quotes that exist ground a number
         missing = sorted(numbers(_claimed_text(rec)) - grounded)
         if missing:

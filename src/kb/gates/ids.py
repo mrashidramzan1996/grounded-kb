@@ -1,11 +1,23 @@
+import re
 from collections import Counter
 from collections.abc import Iterator
 
 from kb.config.validate import resolve_owner
 from kb.gates.base import GateContext
 from kb.issues import Issue
+from kb.records.ids import TERM_ID
 from kb.records.lifecycle import supersede_edges
-from kb.records.models import QUOTED_TYPES, Component, Decision, Evidence, Exclusion, Feature, Invariant, Requirement
+from kb.records.models import (
+    QUOTED_TYPES,
+    Component,
+    Decision,
+    Evidence,
+    Exclusion,
+    Feature,
+    Invariant,
+    Requirement,
+    Term,
+)
 from kb.records.repo import KbRepo
 
 
@@ -35,6 +47,12 @@ def _ref_problems(rec, ctx: GateContext) -> Iterator[str]:
             yield from record(f)
         for m in rec.modules:
             yield from module(m)
+    if isinstance(rec, Requirement):
+        # an actor written as a TERM id must name a term; any other actor is plain text
+        if rec.actor is not None and re.fullmatch(TERM_ID, rec.actor):
+            yield from record(rec.actor)
+        for e in rec.entities:
+            yield from record(e)
     if isinstance(rec, (Feature, Component)):
         yield from module(rec.module)
     if isinstance(rec, Feature):
@@ -48,6 +66,11 @@ def _ref_problems(rec, ctx: GateContext) -> Iterator[str]:
             yield from module(g) if g.startswith("MOD-") else record(g)
     if isinstance(rec, QUOTED_TYPES):
         yield from _evidence_refs(rec.evidence, repo)
+    if isinstance(rec, Term):
+        yield from _evidence_refs(rec.evidence, repo)
+        for rel in rec.relations:
+            yield from record(rel.target)
+        yield from _evidence_refs(Evidence(quotes=[r.quote for r in rec.relations]) if rec.relations else None, repo)
 
 
 def _owner_ok(owner: str, ctx: GateContext) -> bool:

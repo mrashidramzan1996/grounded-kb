@@ -8,6 +8,10 @@ record cites them.
    (`REQ-F-…` functional, `REQ-NF-…` non-functional), linked to a module or feature. Draft a passage that
    records a choice as an ADR, a must-keep rule as an INV, and a statement that puts something out of scope as an
    exclusion (`kb/exclusions/EXCL-*.yaml`: `statement`, `evidence.quotes`, `modules:` or `features:`), each with quotes.
+2b. Record each named actor, system, data object, external party, document, event or business concept as a TERM with
+   `kind`, a definition and a quote that contains its name. Write it to `kb/glossary/TERM-<name>.yaml` and list plural
+   and other forms as `aliases`. Record how entities relate as `relations` on the source term, each with a quote that mentions
+   both. Link requirements to entities with `actor` and `entities`. Never duplicate an existing term: add to it instead.
 3. Quote word for word from the segment: its `text` must appear in that segment exactly as written.
 3b. Give every requirement `modality`, `actor` (who it binds), `category` for REQ-NF, and `origin`:
    - `modality` is `must` (must, shall, required, is to), `must_not` (must not, shall not, never, no X is, prohibited,

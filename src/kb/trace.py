@@ -1,6 +1,7 @@
 """`kb trace`: record -> quote -> segment (heading, page) -> original file, with every quote re-checked.
 
-`SRC-…#seg-NN` lists every requirement, exclusion, decision and invariant whose quotes cite that segment.
+`SRC-…#seg-NN` lists every requirement, exclusion, decision, invariant and term whose quotes (a term's evidence and
+relation quotes) cite that segment.
 """
 
 from pathlib import Path
@@ -78,20 +79,31 @@ def _quote_line(repo: KbRepo, rid: str, q: Quote) -> tuple[str, bool]:
     return f"[{rid}] quote {inline_code(q.text)} found in {q.source} at chars {seg.start + at[0]}-{seg.start + at[1]}", True
 
 
+def _quote_chain(repo: KbRepo, rid: str, q: Quote) -> tuple[list[str], bool]:
+    line, found = _quote_line(repo, rid, q)
+    seg = _segment(repo, q.source)
+    return [line, *(_segment_lines(repo, q.source, seg) if seg is not None else [])], found
+
+
 def _record_chain(repo: KbRepo, rid: str) -> tuple[list[str], bool]:
     rec = repo.records[rid]
     kind, text = _summary(rec)
     lines = [f"[{rid}] {kind} ({_state(repo, superseded_by(repo), rid)}): {inline_code(text)}"]
     evidence = getattr(rec, "evidence", None)
-    if evidence is None:
+    relations = rec.relations if isinstance(rec, Term) else []
+    ok = True
+    if evidence is None and not relations:
         return lines + [f"[{rid}] no quotes"], True
-    found_quotes, _ = quote_results(repo, evidence)
-    ok = bool(found_quotes) if evidence.mode == "any" else len(found_quotes) == len(evidence.quotes)
-    for q in evidence.quotes:
-        line, _found = _quote_line(repo, rid, q)
-        lines.append(line)
-        if (seg := _segment(repo, q.source)) is not None:
-            lines += _segment_lines(repo, q.source, seg)
+    if evidence is not None:
+        found_quotes, _ = quote_results(repo, evidence)
+        ok = bool(found_quotes) if evidence.mode == "any" else len(found_quotes) == len(evidence.quotes)
+        for q in evidence.quotes:
+            lines += _quote_chain(repo, rid, q)[0]
+    for r in relations:
+        lines.append(f"[{rid}] relation {r.type} {r.target}")
+        more, found = _quote_chain(repo, rid, r.quote)
+        lines += more
+        ok &= found
     return lines, ok
 
 
@@ -101,9 +113,10 @@ def _segment_chain(repo: KbRepo, ref: str) -> tuple[list[str], bool]:
         raise TraceError(f"unknown segment {ref}")
     lines, ok, gone = _segment_lines(repo, ref, seg), True, superseded_by(repo)
     for rid, rec in sorted(repo.records.items()):
-        if not isinstance(rec, QUOTED_TYPES) or rec.evidence is None:
+        if not isinstance(rec, (*QUOTED_TYPES, Term)):
             continue
-        for q in rec.evidence.quotes:
+        quotes = [*(rec.evidence.quotes if rec.evidence else []), *(r.quote for r in getattr(rec, "relations", []))]
+        for q in quotes:
             if q.source == ref:
                 line, found = _quote_line(repo, rid, q)
                 ok &= found

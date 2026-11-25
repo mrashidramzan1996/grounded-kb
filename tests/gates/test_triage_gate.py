@@ -81,12 +81,26 @@ def test_only_a_found_quote_of_a_live_record_counts(valid_ctx_with):
     assert triage_gate(valid_ctx_with(extra)) == []  # a found quote of seg-02 is still there
 
 
-def test_term_and_component_ids_are_skipped(valid_ctx_with):
-    # Task 6 gives requirements `entities`; until then a TERM or COMP id neither satisfies nor fails the check
+def test_term_without_evidence_and_component_ids_are_skipped(valid_ctx_with):
+    # TERM-seat has no evidence: like a COMP id, it neither satisfies nor fails the check
     only = triage_gate(valid_ctx_with(with_triage(VALID_TRIAGE.replace("  - REQ-F-003\n", "  - TERM-seat\n"))))
     assert only == []
     mixed = triage_gate(valid_ctx_with(with_triage(VALID_TRIAGE.replace("  - REQ-F-003\n", "  - TERM-seat\n  - FEAT-001\n"))))
     assert [i.message for i in mixed] == ["SRC-pricing-spec-v3#seg-02: triage names `FEAT-001` but none of them quotes this segment"]
+
+
+def test_term_with_evidence_is_checked(valid_ctx_with):
+    """A term with evidence satisfies triage.not_quoted through a found quote in the segment, and fails it otherwise."""
+    def seat(seg: str, text: str):
+        return _set("kb/glossary/TERM-seat.yaml", b"definition:", f"kind: data\nevidence:\n  quotes:\n  - source: "
+                    f"SRC-pricing-spec-v3#{seg}\n    text: {text}\ndefinition:".encode())
+
+    only = with_triage(VALID_TRIAGE.replace("  - REQ-F-003\n", "  - TERM-seat\n"))
+    quoted = seat("seg-02", "Adding a seat mid-cycle is charged pro-rata")
+    assert triage_gate(valid_ctx_with(only, quoted)) == []
+    elsewhere = seat("seg-04", "All amounts are stored and calculated in integer cents.")
+    assert [i.message for i in triage_gate(valid_ctx_with(only, elsewhere))] == [
+        "SRC-pricing-spec-v3#seg-02: triage names `TERM-seat` but none of them quotes this segment"]
 
 
 def test_none_reason_codes(valid_ctx_with):

@@ -105,3 +105,24 @@ def test_trace_summary_rejects_unknown_record_types():
 
     with pytest.raises(TraceError, match="no trace summary for record type object"):
         _summary(object())
+
+
+def test_trace_term_shows_evidence_and_relation_quotes(tmp_path):
+    from helpers import make_git_repo, ok
+
+    doc = "# Billing\n\nAn account is a customer of Acme. Each account owns its invoices.\n"
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": 'version: 1\nsources:\n  - paths: ["docs/**"]\n', "docs/n.md": doc})
+    ok(root, "ingest")
+    term = ("id: TERM-account\nname: account\ndefinition: A customer.\nkind: actor\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n"
+            "    text: An account is a customer of Acme.\nrelations:\n- type: owns\n  target: TERM-invoice\n  quote:\n"
+            "    source: SRC-n#seg-01\n    text: {text}\n")
+    write(root, "kb/glossary/TERM-account.yaml", term.format(text="Each account owns its invoices."))
+    lines, good = trace_chain(root, "TERM-account")
+    assert good and lines[0] == "[TERM-account] term (live): `account`"
+    at = lines.index("[TERM-account] relation owns TERM-invoice")
+    assert lines[at + 1].startswith("[TERM-account] quote `Each account owns its invoices.` found in SRC-n#seg-01")
+    seg = "\n".join(trace(root, "SRC-n#seg-01"))
+    assert seg.count("[TERM-account] term (live) quote") == 2
+    write(root, "kb/glossary/TERM-account.yaml", term.format(text="Each account owns every invoice."))
+    r = invoke(root, "trace", "TERM-account")
+    assert r.exit_code == 1 and "QUOTE NOT FOUND in SRC-n#seg-01: `Each account owns every invoice.`" in r.stdout

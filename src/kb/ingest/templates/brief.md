@@ -26,6 +26,14 @@ shape of the examples. The gates then check what you wrote: when you are done, r
    exclusion, `kb/exclusions/EXCL-*.yaml`, with `statement`, `evidence.quotes` and the `modules:` or `features:` it
    limits. An exclusion has no `modality`, `actor`, `category` or `origin`. Never triage such a segment
    `none: out-of-scope`; name the EXCL id instead.
+4c. Record each named actor, system, data object, external party, document, event or business concept as a TERM with
+   `kind`, a definition and a quote that contains its name. Write it to `kb/glossary/TERM-<name>.yaml` with `kind` one
+   of actor, system, data, external, document, event, concept. The name or an alias must appear in a quote; list
+   plural and other forms as `aliases`.
+   - Record how entities relate as `relations` on the source term, each with a quote that mentions both. `type` is owns,
+     uses, contains, produces, depends_on, part_of, is_a or triggers, `target` is the other TERM id; at most 10 per term.
+   - Link requirements to entities with `actor` and `entities`. `actor` is the TERM id of whom the rule binds (plain
+     text when no term fits); `entities` lists the TERM ids the requirement names.
 5. Link each requirement to a module or feature (`modules:` or `features:`).
 6. Propose the modules the documents describe with
    `kb module add MOD-<name> --owner <@team|TODO> [--risk …]`, with no paths. Never guess paths;

@@ -37,6 +37,7 @@ from kb.status import requirement_status, summarize, verified_ids
 from kb.todo import build_todo, render_todo_json, render_todo_text, summary_line as todo_summary
 from kb.trace import TraceError, trace_chain
 from kb.forge import ForgeError, forge_from_option
+from kb.graph import build_graph, render_mermaid
 from kb.testrun import TestRunError
 from kb.verify.report import render_json, render_markdown, render_text, summary_line, write_outputs
 from kb.verify.run import run_verify
@@ -598,6 +599,23 @@ def trace(ctx: typer.Context, id: Annotated[str, typer.Argument(help="A record i
         typer.echo(line)
     if not ok:
         raise typer.Exit(1)
+
+
+@app.command()
+def graph(
+    ctx: typer.Context,
+    format: Annotated[str, typer.Option("--format", help="json or mermaid.")] = "json",
+) -> None:
+    """Print the live records, modules and their links (entity relations, belongs_to, governs, …) as JSON or Mermaid."""
+    if format not in ("json", "mermaid"):
+        typer.echo(f"unknown format {format!r}: use json or mermaid", err=True)
+        raise typer.Exit(2)
+    root = Path(ctx.obj["root"])
+    try:
+        g = build_graph(KbRepo.load(root), load_config(root / "kb.config.yaml"))
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    typer.echo(json.dumps(g, indent=2, sort_keys=True, ensure_ascii=False) + "\n" if format == "json" else render_mermaid(g), nl=False)
 
 
 @app.command()

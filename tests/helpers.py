@@ -449,3 +449,27 @@ def todo_drafted(tmp_path: Path, config: str = TODO_CONFIG) -> Path:
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
     commit(root, "drafts")
     return root
+
+
+# --- in-memory repos over one stored Markdown document (entities, graph) -----------------------
+
+def stored_repo(doc: str, files: dict[str, str], src: str = "SRC-spec"):
+    """A KbRepo holding `doc` stored as `src` (segmented as `kb source add` would) plus `files` ({kb path: text})."""
+    from kb.records.repo import KbRepo
+    from kb.sources.segment import assign_segment_ids, segment
+
+    segs, nxt = assign_segment_ids([], segment(nt(doc)), 1)
+    source_yaml = (
+        f"id: {src}\noriginal: docs/{src.removeprefix('SRC-')}.md\noriginal_sha256: \"{'a' * 64}\"\nnormaliser: text@1\n"
+        "trust: spec\nvisibility: internal\nguard:\n  emails: 0\n  secrets: 0\n  injections: 0\n  injection_segments: []\n"
+        f"next_seg: {nxt}\n"
+    )
+    stored = {
+        f"kb/sources/{src}/source.yaml": source_yaml,
+        f"kb/sources/{src}/text.md": doc,
+        f"kb/sources/{src}/segments.jsonl": "".join(
+            json.dumps({"id": s.id, "heading": s.heading, "page": s.page, "start": s.start, "end": s.end, "hash": s.hash}) + "\n"
+            for s in segs
+        ),
+    }
+    return KbRepo.from_files({p: t.encode() for p, t in (stored | files).items()})

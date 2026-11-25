@@ -7,6 +7,7 @@ from kb.gates.anchors import anchor_gate
 from kb.gates.base import GateContext, run_gates
 from kb.gates.coverage import coverage_gate
 from kb.gates.decisions import decision_guard
+from kb.gates.entities import entity_gate
 from kb.gates.ids import id_gate
 from kb.gates.quotes import quote_gate
 from kb.gates.sources import source_gate
@@ -18,7 +19,7 @@ from kb.modules import module_paths_gate, suggest_paths
 from kb.records.repo import KbRepo
 
 # id_gate must always run: KbRepo does not enforce that a file name matches its record id.
-DEFAULT_GATES = [id_gate, quote_gate, anchor_gate, source_gate, module_paths_gate, coverage_gate, triage_gate]
+DEFAULT_GATES = [id_gate, quote_gate, entity_gate, anchor_gate, source_gate, module_paths_gate, coverage_gate, triage_gate]
 
 
 @dataclass
