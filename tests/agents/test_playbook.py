@@ -30,6 +30,11 @@ WORKFLOW_LINES = [
     "questions; never guess it from git config or invent one.",
     "Never answer an ask or choose an option yourself, even when a document seems to settle it; only the user answers.",
 ]
+# an agent committed drafts that `kb ingest --report` rejected (agent evaluation, 0.3.0)
+NEVER_COMMIT_REJECTED = (
+    "Never commit while `kb ingest --report` or `kb redraft --report` shows a rejection. If a rejection looks wrong "
+    "to you, stop and tell the user; do not work around it."
+)
 
 
 def _agents_md(tmp_path):
@@ -180,3 +185,8 @@ def test_agents_install_refuses_a_symlinked_agents_md(acme_repo, tmp_path):
     assert r.exit_code == 2 and "AGENTS.md" in r.stderr
     assert elsewhere.read_text() == "theirs\n"
     assert not (acme_repo / ".codex/hooks.json").exists()  # refused before anything is written
+
+
+def test_playbook_says_never_commit_a_rejection():
+    commit_step = next(n for n, line in enumerate(PLAYBOOK) if WORKFLOW_LINES[2] in line)
+    assert PLAYBOOK[commit_step + 1] == f"{commit_step + 2}. {NEVER_COMMIT_REJECTED}"

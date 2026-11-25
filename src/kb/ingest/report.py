@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from kb.config.load import ConfigError, load_config
 from kb.config.schema import KbConfig
+from kb.config.validate import resolve_owner
 from kb.gates.anchors import anchor_gate
 from kb.gates.base import GateContext, run_gates
 from kb.gates.decisions import decision_guard
@@ -58,8 +59,15 @@ def base_config(root: Path, ref: str) -> KbConfig | None:
         raise ConfigError([f"{CONFIG} at {ref}: {e}"]) from e
 
 
+def _handle(value: str, config: KbConfig) -> bool:
+    """A filled-in owner or approver: an @handle or a key of `teams` (kb.config.validate.resolve_owner)."""
+    return value != "TODO" and resolve_owner(value, config) is not None
+
+
 def _config_issues(head: KbConfig, base: KbConfig | None) -> list[Issue]:
-    """Ingest may only add modules, without paths: everything else in the config must be as it was at base."""
+    """Ingest may only add modules, without paths, and replace a TODO approver list (`["TODO"]`) or a TODO module
+    owner with handles (the person's answers, committed on their own first): everything else in the config must
+    be as it was at base."""
     known = {m.id for m in base.modules} if base else set()
     issues = [
         Issue("ingest.module_paths", f"{m.id}: modules are proposed without paths; paths come from `kb module paths {m.id} --accept`",
@@ -68,10 +76,22 @@ def _config_issues(head: KbConfig, base: KbConfig | None) -> list[Issue]:
     ]
     if base is None:
         return issues
+    was = base.model_dump()
     now = head.model_dump()
     now["modules"] = [m for m in now["modules"] if m["id"] in known]
-    if now != base.model_dump():
-        issues.append(Issue("ingest.config_changed", f"{CONFIG} changed other than by adding modules; ingest may only add modules", path=CONFIG))
+    # a filled-in TODO compares as the TODO it replaced
+    approvers = now["policy"]["approvers"]
+    for kind, entries in approvers.items():
+        if was["policy"]["approvers"][kind] == ["TODO"] and entries and all(_handle(e, head) for e in entries):
+            approvers[kind] = ["TODO"]
+    owner_at_base = {m.id: m.owner for m in base.modules}
+    for m in now["modules"]:
+        if owner_at_base[m["id"]] == "TODO" and _handle(m["owner"], head):
+            m["owner"] = "TODO"
+    if now != was:
+        issues.append(Issue("ingest.config_changed", f"{CONFIG} changed other than by adding modules or filling in "
+                            "TODO owners and approvers; ingest may only add modules and replace a TODO with a handle",
+                            path=CONFIG))
     return issues
 
 

@@ -186,6 +186,7 @@ SPEC3 = SPEC + "\n# Search\n\nSearch must be quick.\n"
 # the playbook sentences the agent acts on; it does nothing (and commits nowhere) the playbook does not say
 STEPS = {
     "commit after report": "After `kb ingest --report` or `kb redraft --report` passes, commit the changes",
+    "never commit a rejection": "Never commit while `kb ingest --report` or `kb redraft --report` shows a rejection.",
     "owners first": "Answer owner and approver questions first: write the handles into kb.config.yaml and commit that "
                     "file on its own before running any `kb redraft`.",
     "one redraft": "When the user answered several questions, record every answer with `kb clarify` first, then run "
@@ -201,7 +202,7 @@ MAX_ROUNDS = 8
 
 class LiteralAgent:
     """Runs only what the playbook (src/kb/rules.py PLAYBOOK) names, and commits only where it says to:
-    step 3 (after a passing report), step 7 (kb.config.yaml on its own) and the freeze option's `then`. Drafting
+    step 3 (after a passing report), step 8 (kb.config.yaml on its own) and the freeze option's `then`. Drafting
     and redrafting stand in for the agent following the brief; the person's answers are fixed strings."""
 
     def __init__(self, repo: Path):
@@ -209,7 +210,7 @@ class LiteralAgent:
         missing = [name for name, sentence in STEPS.items() if sentence not in playbook]
         assert not missing, f"the playbook does not say: {missing}"
         self.repo = repo
-        self.asked: set[str] = set()  # step 5: never ask the same thing twice in a session
+        self.asked: set[str] = set()  # step 6: never ask the same thing twice in a session
         self.commits: list[str] = []
         self.pull_requests: list[str] = []
 
@@ -258,14 +259,14 @@ class LiteralAgent:
         write(self.repo, "kb/sources/SRC-spec/triage.yaml",
               "segments:\n  seg-01:\n  - REQ-F-001\n  seg-02:\n  - REQ-NF-001\n  seg-03:\n  - REQ-NF-002\n")
 
-    # -- steps 4 to 10: the asks ------------------------------------------------------------------------------
+    # -- steps 5 to 11: the asks ------------------------------------------------------------------------------
 
     def ask(self, asks: list[dict], reply: dict[str, tuple[str, str]]) -> None:
         """Ask every item in one message; `reply` is the person's answer: {ask id: (option key, the fact)}."""
         assert sorted(reply) == sorted(a["id"] for a in asks), "the person answers every question asked"
         self.asked |= set(reply)
         by_id = {a["id"]: a for a in asks}
-        # step 7: owner and approver answers first, committed on their own
+        # step 8: owner and approver answers first, committed on their own
         owners = [i for i in reply if by_id[i]["kind"] == "owner"]
         for ask_id in owners:
             key, handle = reply[ask_id]
@@ -273,7 +274,7 @@ class LiteralAgent:
             answer_owner(self.repo, {"ask": asks}, ask_id.removeprefix("owner:"), handle)
         if owners:
             self.commit("kb.config.yaml: owners and approvers", "kb.config.yaml")
-        # step 8 to 10: record every fact with kb clarify, then one redraft for all of them
+        # steps 9 to 11: record every fact with kb clarify, then one redraft for all of them
         refs = {}
         for ask_id in sorted(set(reply) - set(owners)):
             key, fact = reply[ask_id]
@@ -330,9 +331,9 @@ def test_agent_follows_playbook_literally(tmp_path):
     while True:
         rounds += 1
         assert rounds <= MAX_ROUNDS, f"the agent loops: {agent.commits}"
-        t = todo(repo)  # steps 1 and 11
+        t = todo(repo)  # steps 1 and 12
         pending = [a for a in t["ask"] if a["id"] not in agent.asked]
-        if not t["do"] and not pending:  # step 11: no do items and no ask not yet put to the user
+        if not t["do"] and not pending:  # step 12: no do items and no ask not yet put to the user
             break
         for item in t["do"]:
             agent.do(item)
@@ -360,3 +361,28 @@ def test_agent_follows_playbook_literally(tmp_path):
     t = todo(repo)
     assert (t["do"], t["ask"]) == ([], [])
     assert t["state"]["clean"] is True and t["state"]["baseline"] == "v1"
+
+
+def test_approvers_committed_before_the_drafts(tmp_path):
+    """What a real agent did: ran `kb ingest`, asked the approver questions straight away, committed kb.config.yaml
+    on its own (step 8), then drafted. The ingest base predates the approvers; filling a TODO is no config change."""
+    repo = make_git_repo(None, tmp_path, extra={"docs/spec.md": SPEC})
+    run_do(repo, todo(repo))
+    commit(repo, "kb init")
+    t = todo(repo)
+    assert do_ids(t) == ["ingest:all"]
+    run_do(repo, t)  # kb ingest: the brief records this commit as the base
+    answer_owner(repo, t, "policy.approvers.decisions", "@acme/architects")
+    answer_owner(repo, t, "policy.approvers.intent", "@acme/product")
+    git(repo, "add", "kb.config.yaml")
+    git(repo, "commit", "-qm", "kb.config.yaml: approvers")
+    kb(repo, "module", "add", "MOD-checkout", "--owner", "TODO", "--title", "Checkout")
+    write(repo, "kb/requirements/REQ-F-001.yaml",
+          req("REQ-F-001", "Customers pay by card.", [("SRC-spec#seg-01", "Customers pay by card.")]))
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          req("REQ-NF-001", "The checkout page must be fast.", [("SRC-spec#seg-02", "The checkout page must be fast.")],
+              flags="flags:\n- vague\n"))
+    write(repo, "kb/sources/SRC-spec/triage.yaml", "segments:\n  seg-01:\n  - REQ-F-001\n  seg-02:\n  - REQ-NF-001\n")
+    out = kb(repo, "ingest", "--report", "--strict")
+    assert "## Rejected (0)" in out.stdout and "ingest.config_changed" not in out.stdout
+    assert "## Proposed modules (1)" in out.stdout

@@ -144,6 +144,75 @@ def test_config_change_outside_modules_is_rejected(acme_repo_ingested, fixtures)
     assert r.rejected == [] and r.proposed_modules == ["MOD-tax"]
 
 
+# --- owner and approver answers committed before the drafts (playbook step 8) ---------------------------------
+
+TODO_OWNERS = (
+    "version: 1\n"
+    "teams:\n  product: {git_team: '@acme/product'}\n"
+    "sources:\n  - paths: ['docs/**']\n"
+    "modules:\n  - {id: MOD-a, owner: TODO}\n  - {id: MOD-b, owner: '@acme/b'}\n"
+    "policy:\n  approvers:\n    intent: [TODO]\n    decisions: [TODO]\n"
+)
+
+
+def _todo_owners(md_repo_ingested):
+    """md_repo_ingested whose committed config still has TODO approvers and a TODO module owner."""
+    root = md_repo_ingested
+    (root / "kb.config.yaml").write_text(TODO_OWNERS)
+    git(root, "commit", "-qam", "config with TODOs")
+    return root
+
+
+def _config_codes(root, config: str) -> list[str]:
+    (root / "kb.config.yaml").write_text(config)
+    return [i.code for i in ingest_report(root, "HEAD").rejected if i.path == "kb.config.yaml"]
+
+
+def test_filling_todo_approvers_and_owners_is_allowed(md_repo_ingested):
+    root = _todo_owners(md_repo_ingested)
+    filled = (TODO_OWNERS.replace("intent: [TODO]", "intent: ['@acme/product', '@jane']")
+              .replace("decisions: [TODO]", "decisions: [product]")
+              .replace("{id: MOD-a, owner: TODO}", "{id: MOD-a, owner: '@acme/a'}"))
+    assert _config_codes(root, filled) == []
+    added = filled.replace("  - {id: MOD-b, owner: '@acme/b'}\n",
+                           "  - {id: MOD-b, owner: '@acme/b'}\n  - {id: MOD-new, owner: '@acme/new'}\n")
+    assert _config_codes(root, added) == []  # a module added in the range may have any owner
+    r = ingest_report(root, "HEAD")
+    assert r.rejected == [] and r.proposed_modules == ["MOD-new"]
+    # the CLI agrees: the approvers committed on their own do not fail the report
+    assert "ingest.config_changed" not in invoke(root, "ingest", "--report", "--base", "HEAD").stdout
+
+
+def test_changing_a_set_approver_is_still_rejected(md_repo_ingested):
+    root = _todo_owners(md_repo_ingested)
+    set_once = TODO_OWNERS.replace("intent: [TODO]", "intent: ['@acme/product']")
+    (root / "kb.config.yaml").write_text(set_once)
+    git(root, "commit", "-qam", "approver set")
+    assert _config_codes(root, set_once.replace("intent: ['@acme/product']", "intent: ['@acme/other']")) == ["ingest.config_changed"]
+    assert _config_codes(root, set_once.replace("intent: ['@acme/product']",
+                                            "intent: ['@acme/product', '@acme/more']")) == [
+        "ingest.config_changed"]
+    # a set module owner cannot change either
+    assert _config_codes(root, set_once.replace("owner: '@acme/b'", "owner: '@acme/c'")) == ["ingest.config_changed"]
+
+
+def test_other_config_change_still_rejected(md_repo_ingested):
+    root = _todo_owners(md_repo_ingested)
+    rejected = ["ingest.config_changed"]
+    # a TODO filled with something that is neither a handle nor a team key
+    assert _config_codes(root, TODO_OWNERS.replace("intent: [TODO]", "intent: [nobody]")) == rejected
+    assert _config_codes(root, TODO_OWNERS.replace("{id: MOD-a, owner: TODO}", "{id: MOD-a, owner: nobody}")) == rejected
+    # an emptied approver list, or a TODO left next to a handle, is not a filled-in TODO
+    assert _config_codes(root, TODO_OWNERS.replace("intent: [TODO]", "intent: []")) == rejected
+    assert _config_codes(root, TODO_OWNERS.replace("intent: [TODO]", "intent: [TODO, '@x']")) == rejected
+    # filling a TODO together with any other change
+    filled = TODO_OWNERS.replace("intent: [TODO]", "intent: ['@acme/product']")
+    assert _config_codes(root, filled.replace("product: {git_team: '@acme/product'}",
+                                              "product: {git_team: '@acme/p2'}")) == rejected
+    assert _config_codes(root, filled + "  mode: enforce\n") == rejected
+    assert _config_codes(root, filled.replace("{id: MOD-a, owner: TODO}", "{id: MOD-a, owner: TODO, risk: high}")) == rejected
+
+
 # --- finding 2: errors a draft causes on unchanged records -------------------------------------
 
 def test_conflict_caused_on_unchanged_target_is_rejected(acme_repo_ingested, fixtures):
