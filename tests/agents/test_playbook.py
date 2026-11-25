@@ -190,3 +190,21 @@ def test_agents_install_refuses_a_symlinked_agents_md(acme_repo, tmp_path):
 def test_playbook_says_never_commit_a_rejection():
     commit_step = next(n for n, line in enumerate(PLAYBOOK) if WORKFLOW_LINES[2] in line)
     assert PLAYBOOK[commit_step + 1] == f"{commit_step + 2}. {NEVER_COMMIT_REJECTED}"
+
+
+# agent evaluation, 0.3.0: an agent wrote a generator script into /tmp to write the records, and after the baseline
+# an agent committed new work straight onto main
+NO_SCRIPTS = "Write each record file with your file-editing tool; do not write or run scripts that generate records."
+BRANCH_STEP = (
+    "Before the baseline exists, work on the current branch. After it, make changes on a branch and open a pull "
+    "request; never merge it yourself. `kb todo` puts a `branch` item first when you must start that branch: run its "
+    "command before any other `do` item."
+)
+
+
+def test_playbook_says_write_records_with_file_tools():
+    assert PLAYBOOK[1].startswith("2. Do every `do` item") and PLAYBOOK[1].endswith(f" {NO_SCRIPTS}")
+
+
+def test_playbook_says_when_to_start_the_branch():
+    assert PLAYBOOK[-1] == f"{len(PLAYBOOK)}. {BRANCH_STEP}"

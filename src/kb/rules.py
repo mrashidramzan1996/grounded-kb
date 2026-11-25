@@ -12,7 +12,7 @@ AGENT_RULES: list[str] = [
 # How an agent works through `kb todo` (A-18). The one source for the AGENTS.md block and the kb skill.
 PLAYBOOK: list[str] = [
     "1. When the user asks you to set up or update the knowledge base, or when the session brief says there is kb work, run `kb todo --format json`.",
-    "2. Do every `do` item, using its `command` when it has one. For a brief (`.kb/cache/ingest/brief.md` or `.kb/cache/redraft/brief.md`), follow it, then run `kb ingest --report` or `kb redraft --report` and fix what they reject.",
+    "2. Do every `do` item, using its `command` when it has one. For a brief (`.kb/cache/ingest/brief.md` or `.kb/cache/redraft/brief.md`), follow it, then run `kb ingest --report` or `kb redraft --report` and fix what they reject. Write each record file with your file-editing tool; do not write or run scripts that generate records.",
     "3. After `kb ingest --report` or `kb redraft --report` passes, commit the changes (before the baseline: on the current branch; after it: on your pull-request branch).",
     "4. Never commit while `kb ingest --report` or `kb redraft --report` shows a rejection. If a rejection looks wrong to you, stop and tell the user; do not work around it.",
     "5. Collect every `ask` item. Ask the user all of them in one message, numbered, showing the evidence and the lettered options. Accept short answers like \"1a, 2b\".",
@@ -23,7 +23,7 @@ PLAYBOOK: list[str] = [
     "10. `--by` is the handle of the person who answered. If you do not know it, ask for it together with the questions; never guess it from git config or invent one.",
     "11. When the user answered several questions, record every answer with `kb clarify` first, then run one `kb redraft <ID> <ID> … --new` for all of them.",
     "12. Run `kb todo` again. Repeat until there are no `do` items and no ask you have not yet put to the user in this session, then run `kb check --strict`.",
-    "13. Before the baseline exists, work on the current branch. After it, make changes on a branch and open a pull request; never merge it yourself.",
+    "13. Before the baseline exists, work on the current branch. After it, make changes on a branch and open a pull request; never merge it yourself. `kb todo` puts a `branch` item first when you must start that branch: run its command before any other `do` item.",
 ]
 
 

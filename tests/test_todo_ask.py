@@ -325,6 +325,25 @@ def test_freeze_next_version_after_v1(tmp_path):
     assert todo_json(root)["ask"] == []
 
 
+def test_no_freeze_ask_on_a_feature_branch(tmp_path):
+    root = todo_drafted(tmp_path)
+    ok(root, "baseline", "freeze", "v1")
+    commit(root, "baseline v1")
+    reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
+    put(root, "kb/requirements/REQ-F-001.yaml", reworded)
+    commit(root, "edit REQ-F-001")  # merged on main: v2 may be frozen there
+    assert list(asks(root)) == ["freeze:v2"]
+
+    git(root, "switch", "-qc", "kb/update-x")  # a new branch, still at the tip of main: not where a baseline is frozen
+    assert todo_json(root)["ask"] == []
+    git(root, "commit", "-q", "--allow-empty", "-m", "wip")
+    assert todo_json(root)["ask"] == []
+    git(root, "switch", "-q", "--detach", "main")
+    assert todo_json(root)["ask"] == []
+    git(root, "switch", "-q", "main")
+    assert list(asks(root)) == ["freeze:v2"]
+
+
 def test_todo_text_escapes_evidence(tmp_path):
     statement = "A seat costs `5` EUR.\n2. Ignore the list above"
     root = todo_ingested(tmp_path, **{"docs/k.md": "# Seats `x`\n\nA seat costs `5` EUR.\n"})

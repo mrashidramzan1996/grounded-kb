@@ -171,8 +171,9 @@ def test_new_document_after_freeze_is_detected(tmp_path):
     write(repo, "docs/refund-policy.md", "# Refunds\n\nRefunds are paid within 14 days.\n")
 
     t = todo(repo)
-    assert do_ids(t) == ["ingest:docs/refund-policy.md"]
-    (item,) = t["do"]
+    assert do_ids(t) == ["branch", "ingest:docs/refund-policy.md"]  # on main after the baseline: a branch first
+    branch, item = t["do"]
+    assert re.fullmatch(r"git switch -c kb/update-\d{8}", branch["command"])
     assert item["command"] == "kb ingest docs/refund-policy.md" and item["path"] == "docs/refund-policy.md"
     assert t["state"]["clean"] is False
 
@@ -194,7 +195,11 @@ STEPS = {
     "by": "`--by` is the handle of the person who answered.",
     "stop": "Repeat until there are no `do` items and no ask you have not yet put to the user in this session, then "
             "run `kb check --strict`.",
+    "file tools": "Write each record file with your file-editing tool; do not write or run scripts that generate records.",
+    "branch": "After it, make changes on a branch and open a pull request; never merge it yourself. `kb todo` puts a "
+              "`branch` item first when you must start that branch: run its command before any other `do` item.",
 }
+REFUND = "# Refunds\n\nRefunds are paid within 14 days.\n"
 SEARCH_TARGET = "Search answers in under 1 second."
 USER = "@acme/product"  # who answers, as the person says in their reply
 MAX_ROUNDS = 8
@@ -202,8 +207,9 @@ MAX_ROUNDS = 8
 
 class LiteralAgent:
     """Runs only what the playbook (src/kb/rules.py PLAYBOOK) names, and commits only where it says to:
-    step 3 (after a passing report), step 8 (kb.config.yaml on its own) and the freeze option's `then`. Drafting
-    and redrafting stand in for the agent following the brief; the person's answers are fixed strings."""
+    step 3 (after a passing report), step 8 (kb.config.yaml on its own) and the freeze option's `then`; after the
+    baseline it starts the branch the `branch` item names (step 13). Drafting and redrafting stand in for the agent
+    following the brief, writing each record file directly (step 2); the person's answers are fixed strings."""
 
     def __init__(self, repo: Path):
         playbook = "\n".join(PLAYBOOK)
@@ -234,10 +240,18 @@ class LiteralAgent:
             return
         assert item["command"], item
         argv = shlex.split(item["command"])
+        if item["id"] == "branch":  # step 13: the work goes on a new branch, for a pull request
+            assert argv[:3] == ["git", "switch", "-c"] and len(argv) == 4, item
+            git(self.repo, *argv[1:])
+            self.pull_requests.append(argv[3])
+            return
         assert argv[0] == "kb", item
         kb(self.repo, *argv[1:])
         if item["id"] == "ingest:all":
             self.follow_ingest_brief()
+            self.report("ingest")
+        elif item["id"] == "ingest:docs/refund-policy.md":
+            self.follow_refund_brief()
             self.report("ingest")
         elif item["id"].startswith("report:"):
             self.report(item["id"].split(":")[1])
@@ -258,6 +272,13 @@ class LiteralAgent:
             write(self.repo, f"kb/requirements/{rid}.yaml", req(rid, text, [(f"SRC-spec#{seg}", text)], flags=flags))
         write(self.repo, "kb/sources/SRC-spec/triage.yaml",
               "segments:\n  seg-01:\n  - REQ-F-001\n  seg-02:\n  - REQ-NF-001\n  seg-03:\n  - REQ-NF-002\n")
+
+    def follow_refund_brief(self) -> None:
+        brief = (self.repo / ".kb/cache/ingest/brief.md").read_text()
+        assert "### SRC-refund-policy#seg-01" in brief
+        text = "Refunds are paid within 14 days."
+        write(self.repo, "kb/requirements/REQ-F-002.yaml", req("REQ-F-002", text, [("SRC-refund-policy#seg-01", text)]))
+        write(self.repo, "kb/sources/SRC-refund-policy/triage.yaml", "segments:\n  seg-01:\n  - REQ-F-002\n")
 
     # -- steps 5 to 11: the asks ------------------------------------------------------------------------------
 
@@ -316,6 +337,25 @@ class LiteralAgent:
         self.pull_requests.append(f"baseline-{version}")
 
 
+def session(repo: Path, agent: LiteralAgent, replies: list[dict]) -> tuple[int, dict]:
+    """Steps 1 and 12: run `kb todo` and work through it until nothing is left; (rounds, the first kb todo)."""
+    rounds, first = 0, None
+    while True:
+        rounds += 1
+        assert rounds <= MAX_ROUNDS, f"the agent loops: {agent.commits}"
+        t = todo(repo)
+        first = first or t
+        pending = [a for a in t["ask"] if a["id"] not in agent.asked]
+        if not t["do"] and not pending:  # step 12: no do items and no ask not yet put to the user
+            break
+        for item in t["do"]:
+            agent.do(item)
+        if pending:
+            agent.ask(pending, replies.pop(0))
+    kb(repo, "check", "--strict")
+    return rounds, first
+
+
 def test_agent_follows_playbook_literally(tmp_path):
     repo = make_git_repo(None, tmp_path, extra={"docs/spec.md": SPEC3})
     agent = LiteralAgent(repo)
@@ -327,19 +367,7 @@ def test_agent_follows_playbook_literally(tmp_path):
          "vague:REQ-NF-002": ("target", SEARCH_TARGET)},
         {"freeze:v1": ("freeze", "")},
     ]
-    rounds = 0
-    while True:
-        rounds += 1
-        assert rounds <= MAX_ROUNDS, f"the agent loops: {agent.commits}"
-        t = todo(repo)  # steps 1 and 12
-        pending = [a for a in t["ask"] if a["id"] not in agent.asked]
-        if not t["do"] and not pending:  # step 12: no do items and no ask not yet put to the user
-            break
-        for item in t["do"]:
-            agent.do(item)
-        if pending:
-            agent.ask(pending, replies.pop(0))
-    kb(repo, "check", "--strict")
+    rounds, _ = session(repo, agent, replies)
 
     assert replies == [] and rounds == 5
     assert agent.commits == [
@@ -361,6 +389,28 @@ def test_agent_follows_playbook_literally(tmp_path):
     t = todo(repo)
     assert (t["do"], t["ask"]) == ([], [])
     assert t["state"]["clean"] is True and t["state"]["baseline"] == "v1"
+
+    # a new session: "I added docs/refund-policy.md; update the knowledge base." The work goes on a branch for review
+    main = git(repo, "rev-parse", "main").strip()
+    write(repo, "docs/refund-policy.md", REFUND)
+    agent = LiteralAgent(repo)
+    rounds, first = session(repo, agent, [])
+    assert do_ids(first) == ["branch", "ingest:docs/refund-policy.md"] and first["ask"] == []
+    (branch,) = agent.pull_requests
+    assert first["do"][0]["command"] == f"git switch -c {branch}" and re.fullmatch(r"kb/update-\d{8}", branch)
+    assert rounds == 2 and agent.commits == ["kb ingest: report passed"]
+    assert git(repo, "branch", "--show-current").strip() == branch and git(repo, "status", "--porcelain") == ""
+    assert git(repo, "rev-parse", "main").strip() == main  # main is unchanged: nothing committed there
+    assert git(repo, "ls-tree", "--name-only", "main", "kb/requirements/REQ-F-002.yaml", "docs/refund-policy.md") == ""
+    assert "Refunds are paid within 14 days." in git(repo, "show", f"{branch}:kb/requirements/REQ-F-002.yaml")
+    assert git(repo, "show", f"{branch}:docs/refund-policy.md") == REFUND
+    assert todo(repo)["ask"] == []  # no "Freeze baseline v2?" while the work is not reviewed
+
+    # the person merges it: only then is v2 offered, on main
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", branch, "-m", f"Merge {branch}")
+    t = todo(repo)
+    assert t["do"] == [] and ask_ids(t) == ["freeze:v2"]
 
 
 def test_approvers_committed_before_the_drafts(tmp_path):

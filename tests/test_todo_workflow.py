@@ -2,6 +2,7 @@
 `kb ingest` cannot read, and items one fix already covers."""
 
 import json
+import re
 
 from helpers import TODO_CONFIG, TODO_DOC, TODO_TRIAGE, commit, git, ok, put, req_yaml
 from helpers import todo_drafted as drafted
@@ -227,3 +228,68 @@ def test_unreadable_reason_never_contains_exception_text(tmp_path, monkeypatch):
     }
     out = ok(root, "todo", "--format", "json").stdout + ok(root, "todo").stdout
     assert "INJECTED" not in out and "Ignore" not in out
+
+
+# --- after the baseline: a pull-request branch first (agent evaluation, 0.3.0) ----------------------------------
+
+BRANCH_MESSAGE = (
+    "a baseline exists: do this work on a new branch, not on `main`; open a pull request and never merge it yourself"
+)
+
+
+def frozen(tmp_path):
+    """drafted() with baseline v1 frozen and merged on main: a clean KB on the default branch."""
+    root = drafted(tmp_path)
+    ok(root, "baseline", "freeze", "v1")
+    commit(root, "baseline v1")
+    return root
+
+
+def test_branch_item_first_on_default_branch_after_baseline(tmp_path):
+    root = frozen(tmp_path)
+    put(root, "docs/b.md", "# B\n\nText.\n")
+    t = todo(root)
+    assert [d["id"] for d in t["do"]] == ["branch", "ingest:docs/b.md"]
+    branch = t["do"][0]
+    assert re.fullmatch(r"git switch -c kb/update-\d{8}", branch["command"]), branch
+    assert branch == {"id": "branch", "code": "kb.branch", "message": BRANCH_MESSAGE, "command": branch["command"],
+                      "path": None, "record": None}
+    assert t["state"]["clean"] is False and t["state"]["baseline"] == "v1"
+    text = ok(root, "todo")
+    assert text.stdout.startswith(f"Do:\n- {BRANCH_MESSAGE}\n  run: {branch['command']}\n- ")
+    assert text.stderr.strip() == "2 things to do, 0 questions for the user"
+
+    git(root, "branch", branch["command"].split()[-1])  # that name is taken: the next free one
+    assert items(root)["branch"]["command"] == branch["command"] + "-2"
+
+    (root / "docs/b.md").unlink()
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001") + "# a note\n")  # an uncommitted change
+    assert list(items(root)) == ["branch", "commit"]
+
+    git(root, "switch", "-qc", "kb/update-x")  # following it: the work goes on, the branch item is gone
+    assert list(items(root)) == ["commit"]
+
+
+def test_no_branch_item_before_baseline(tmp_path):
+    root = drafted(tmp_path)
+    put(root, "docs/b.md", "# B\n\nText.\n")
+    assert list(items(root)) == ["ingest:docs/b.md"]
+
+
+def test_no_branch_item_on_a_feature_branch(tmp_path):
+    root = frozen(tmp_path)
+    git(root, "switch", "-qc", "feature")
+    put(root, "docs/b.md", "# B\n\nText.\n")
+    assert list(items(root)) == ["ingest:docs/b.md"]
+    git(root, "switch", "-q", "--detach", "main")  # detached HEAD, as in CI: no branch to leave
+    assert list(items(root)) == ["ingest:docs/b.md"]
+
+
+def test_no_branch_item_when_nothing_to_do(tmp_path):
+    root = frozen(tmp_path)
+    t = todo(root)
+    assert (t["do"], t["ask"], t["state"]["clean"]) == ([], [], True)
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", flags=("vague",)))
+    commit(root, "flag")
+    t = todo(root)  # only an optional ask: still nothing to do, so no branch item
+    assert t["do"] == [] and t["state"]["clean"] is True

@@ -7,6 +7,7 @@ import json
 import re
 import shlex
 from dataclasses import asdict, dataclass
+from datetime import date
 from pathlib import Path
 
 from kb.baseline import requirement_hashes
@@ -16,6 +17,7 @@ from kb.config.schema import KbConfig
 from kb.gates.base import GateContext
 from kb.gates.sources import STORE_NAMES, changed_message, differs_prefix, source_gate
 from kb.gitfiles import (
+    current_branch,
     find_default_branch,
     has_commits,
     head_commit,
@@ -38,7 +40,7 @@ from kb.yamlio import YamlError, load_yaml_strict
 @dataclass(frozen=True)
 class DoItem:
     id: str  # stable, e.g. "sync", "ingest:docs/refund-policy.md", "fix:quote.not_found:REQ-F-002"
-    code: str  # the issue code it comes from, or "kb.init" / "kb.ingest" / "kb.sync" / "kb.redraft"
+    code: str  # the issue code it comes from, or "kb.init" / "kb.ingest" / "kb.sync" / "kb.redraft" / "kb.branch"
     message: str
     command: str | None  # what the agent runs, e.g. "kb source sync"
     path: str | None
@@ -64,7 +66,7 @@ class AskItem:
 
 @dataclass(frozen=True)
 class Todo:
-    do: tuple[DoItem, ...]  # sorted by id
+    do: tuple[DoItem, ...]  # the `branch` item first when there is one, the rest sorted by id
     ask: tuple[AskItem, ...]  # sorted by id
     state: dict  # initialized, sources, records, errors, warnings, baseline ("vN" or None), clean, blocking_asks
 
@@ -90,6 +92,30 @@ def _baseline(root: Path) -> str | None:
     folder = root / "kb/baseline"
     nums = [int(m.group(1)) for p in folder.iterdir() if (m := _BASELINE.fullmatch(p.name))] if folder.is_dir() else []
     return f"v{max(nums)}" if nums else None
+
+
+def _on_default_branch(root: Path) -> str | None:
+    """The default branch (find_default_branch, as `kb baseline freeze` finds it) when it is checked out by name;
+    None on any other branch, on a detached HEAD (CI) or before the first commit."""
+    if not has_commits(root):
+        return None
+    branch = find_default_branch(root)
+    return branch if branch is not None and current_branch(root) == branch else None
+
+
+def _branch_item(root: Path, branch: str) -> DoItem:
+    """Start a pull-request branch: the work after the baseline is reviewed, never committed on `branch`. The new
+    branch's name is fixed text (today's date, then -2, -3, … while that name is taken), never document text."""
+    stem = f"kb/update-{date.today():%Y%m%d}"
+    name, n = stem, 2
+    while rev_parse(root, f"refs/heads/{name}") is not None:
+        name, n = f"{stem}-{n}", n + 1
+    return DoItem(
+        "branch", "kb.branch",
+        f"a baseline exists: do this work on a new branch, not on {inline_code(branch)}; open a pull request and never "
+        "merge it yourself",
+        f"git switch -c {name}", None, None,
+    )
 
 
 def _refs(refs: list[str]) -> str:
@@ -404,8 +430,10 @@ def _baseline_requirements(root: Path, version: str) -> object:
 def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pending: bool) -> list[AskItem]:
     """Offer the next baseline when nothing else is left (no error, no do item, no ask but flag asks: keeping a
     flag is a valid answer), there is a live requirement, HEAD is the tip of the default branch with kb/ and
-    kb.config.yaml committed, the live requirements differ from the `latest` baseline (or there is none), and
-    `kb baseline freeze` would accept the next version (kb and kb/baseline are no symlinks, its tag is free)."""
+    kb.config.yaml committed (once a baseline exists, also checked out by name: never on a pull-request branch, even
+    one still at that tip, nor on a detached HEAD), the live requirements differ from the `latest` baseline (or there
+    is none), and `kb baseline freeze` would accept the next version (kb and kb/baseline are no symlinks, its tag is
+    free)."""
     if errors or pending or not has_commits(root):
         return []
     folder = root / "kb/baseline"
@@ -416,6 +444,8 @@ def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pend
         return []
     branch = find_default_branch(root)
     if branch is None or rev_parse(root, branch) != head_commit(root):
+        return []
+    if latest is not None and current_branch(root) != branch:
         return []
     if latest is not None and _baseline_requirements(root, latest) == reqs:
         return []
@@ -465,13 +495,18 @@ def build_todo(root: Path) -> Todo:
     blocking = _owner_asks(issues, config) + _secret_asks(issues, repo) + _unreadable_asks(unreadable)
     errors = sum(i.severity == "error" for i in issues)
     latest = _baseline(root)
+    do.sort(key=lambda d: d.id)
+    # after the baseline, work on the default branch goes to a pull-request branch first; only alongside other work,
+    # so it never makes a KB unclean on its own
+    if do and latest is not None and (branch := _on_default_branch(root)) is not None:
+        do.insert(0, _branch_item(root, branch))
     ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, latest, errors, bool(do or blocking))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
         "warnings": len(issues) - errors, "baseline": latest, "clean": not errors and not do and not blocking,
         "blocking_asks": len(blocking),
     }
-    return Todo(tuple(sorted(do, key=lambda d: d.id)), tuple(sorted(ask, key=lambda a: a.id)), state)
+    return Todo(tuple(do), tuple(sorted(ask, key=lambda a: a.id)), state)
 
 
 def _line(text: str) -> str:

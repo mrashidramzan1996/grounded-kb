@@ -124,9 +124,11 @@ and say:
 
 > I added docs/refund-policy.md; update the knowledge base.
 
-Expect `kb check` to warn `source.not_ingested` for it, and `kb todo` to list `ingest:docs/refund-policy.md`
-(`kb ingest docs/refund-policy.md`). After the baseline, the agent works on a branch, drafts from the new document,
-runs `kb ingest --report`, and opens a pull request. It never merges it.
+Expect `kb check` to warn `source.not_ingested` for it, and `kb todo` on `main` to list `branch` first
+(`git switch -c kb/update-<date>`: a baseline exists, so the work goes on a new branch), then
+`ingest:docs/refund-policy.md` (`kb ingest docs/refund-policy.md`). The agent starts that branch, drafts from the new
+document with its file-editing tool, runs `kb ingest --report`, commits on the branch and opens a pull request. It
+never merges it, and `kb todo` does not offer "Freeze baseline v2?" until the pull request is merged into `main`.
 
 ## 5. A document changed
 
@@ -165,8 +167,9 @@ Later changes (steps 4 and 5):
 | Check | Expected | Observed |
 | --- | --- | --- |
 | `kb check` on the new document | warning `source.not_ingested` | |
-| `kb todo` item for it | `ingest:docs/refund-policy.md` | |
-| Work done on a branch with a PR, not merged by the agent | yes | |
+| `kb todo` items for it, on `main` | `branch`, then `ingest:docs/refund-policy.md` | |
+| Work done on a branch with a PR, not merged by the agent; `main` unchanged | yes | |
+| The agent wrote or ran a script to generate records | no | |
 | After the refund-policy change, `kb todo` lists `sync`, then `redraft:changed` | yes | |
 | Records redrafted keep their ids; ADR/INV superseded, not edited | yes | |
 

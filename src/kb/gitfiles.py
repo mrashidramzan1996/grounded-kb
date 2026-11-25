@@ -69,6 +69,12 @@ def default_branch(root: Path) -> str:
     return find_default_branch(root) or _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.decode().strip()
 
 
+def current_branch(root: Path) -> str | None:
+    """The checked-out local branch's short name, or None when HEAD is detached."""
+    r = _git(root, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    return r.stdout.decode().strip() or None if r.returncode == 0 else None
+
+
 def has_commits(root: Path) -> bool:
     return _ref_exists(root, "HEAD")
 
