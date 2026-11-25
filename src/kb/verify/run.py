@@ -18,7 +18,12 @@ from kb.ports.forge import Forge, PullRequest
 from kb.records.repo import KbRepo
 from kb.testrun import run_tests
 from kb.verify.affected import affected
-from kb.verify.approvals import no_approver_warnings, owner_approval, required_owners
+from kb.verify.approvals import (
+    no_approver_warnings,
+    owner_approval,
+    policy_files_changed,
+    required_owners,
+)
 from kb.verify.changes import compute_changes
 from kb.verify.engine import EngineInput, Verdict, derive, snapshot, tests_needed
 from kb.verify.index import INDEX_PATH, build_index
@@ -98,12 +103,15 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     # Who must approve, what blocks and the mode come from the target branch's tip (ConfigError/GitError when it
     # cannot be read), so the change under review cannot loosen them, not even by branching from an old commit; the
     # working tree's config drives everything else. The merge-base stays the base of the diff.
-    policy = load_policy(root, _policy_branch(root, base_branch, pr), config)
+    policy_branch = _policy_branch(root, base_branch, pr)
+    policy = load_policy(root, policy_branch, config)
 
     check = run_check(root, base=base_branch[1] if base_branch else None)  # the schema gates, and decision_guard when there is a base
     repo = KbRepo.load(root)
     base_repo = KbRepo.at_ref(root, base_ref) if base_ref else None
     changes = compute_changes(root, base_ref, head_repo=repo) if base_ref else None
+    # --all with a PR has no changes to diff: the gate's own files are compared with the policy tip instead
+    policy_changed = policy_files_changed(root, policy_branch[1]) if pr and changes is None and policy_branch else []
     index = build_index(root, config)
     write_cache(root, INDEX_PATH, index.to_json())
     hit = affected(None if all_ else changes, config, repo, index, base_repo)
@@ -121,7 +129,8 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     issues = check.issues + verdict_issues(verdicts, repo) + stale
     required = None
     if forge and pr:
-        required = required_owners(root, policy.config, repo, base_repo, changes, verdicts, rules=policy.codeowners)
+        required = required_owners(root, policy.config, repo, base_repo, changes, verdicts, rules=policy.codeowners,
+                                   policy_changed=policy_changed)
         issues += owner_approval(forge, pr, policy.config, required, bootstrap=policy.bootstrap)
         issues += no_approver_warnings(policy.config, repo, base_repo, changes, verdicts)
 

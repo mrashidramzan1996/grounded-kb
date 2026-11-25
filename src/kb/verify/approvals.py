@@ -53,6 +53,25 @@ def codeowners_rules_at(root: Path, ref: str) -> CodeownersRules | None:
     return None
 
 
+# The gate's own files: who decides and what runs the check. A change to one needs the decision approvers.
+POLICY_FILES = (CONFIG, *CODEOWNERS_LOCATIONS, *CI_WORKFLOWS)
+
+
+def policy_files_changed(root: Path, tip: str) -> list[str]:
+    """POLICY_FILES whose working-tree bytes differ from `tip`'s (added, edited or deleted): for `kb verify --all`
+    with a pull request, which computes no changed files. A file that cannot be read safely (a symlink) counts as
+    changed."""
+    out = []
+    for rel in POLICY_FILES:
+        try:
+            data = read_regular(root, rel)
+        except UnsafePath:
+            data = b"\0unreadable"  # never equal to a tracked file's bytes as git stores a symlink
+        if data != file_at(root, tip, rel) or rel in tree_symlinks(root, tip, rel):
+            out.append(rel)
+    return out
+
+
 def _file_owners(path: str, rules, config: KbConfig) -> set[str]:
     if rules is not None:
         raw = owners_for(path, rules)
@@ -89,12 +108,14 @@ def required_owners(
     verdicts: Sequence[Verdict],
     *,
     rules: "CodeownersRules | None | object" = _READ_NOW,
+    policy_changed: Sequence[str] = (),
 ) -> dict[str, list[str]]:
     """{owner handle: reasons}. `config` is the approval policy's config (kb.verify.policy: the target branch tip's), so its
     approvers, teams and modules decide, not the change's. `changes` None (no base): no changed files; records count
     as changed against `base_repo` (every record when that is None too). `rules`: the policy's CODEOWNERS rules taken
     earlier (None: no CODEOWNERS, module owners apply); left out, CODEOWNERS is read now. A change to kb.config.yaml,
-    a CODEOWNERS file or the kb CI workflow needs the decision approvers; with none named, NO_DECISION_APPROVERS, which never approves."""
+    a CODEOWNERS file or the kb CI workflow (POLICY_FILES: in `changes`, or in `policy_changed` when there are no
+    changes to diff, as policy_files_changed finds them) needs the decision approvers; with none named, NO_DECISION_APPROVERS, which never approves."""
     reasons: dict[str, set[str]] = {}
 
     def need(handle: str, reason: str) -> None:
@@ -114,8 +135,8 @@ def required_owners(
 
     intent = _handles(config.policy.approvers.intent, config)
     decisions = _handles(config.policy.approvers.decisions, config)
-    policy_files = (CONFIG, *CODEOWNERS_LOCATIONS, *CI_WORKFLOWS)  # the gate: who decides, and what runs it
-    for path in sorted(p for p in (changes.files if changes else ()) if p in policy_files):
+    changed_policy = {p for p in (changes.files if changes else ()) if p in POLICY_FILES} | set(policy_changed)
+    for path in sorted(changed_policy):
         for h in decisions or [NO_DECISION_APPROVERS]:
             need(h, f"{path} changed")
     for rid, path in _changed_records(repo, base_repo).items():

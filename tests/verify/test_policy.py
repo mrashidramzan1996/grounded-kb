@@ -239,3 +239,20 @@ def test_a_checked_pr_warns_when_an_approver_group_is_empty(tmp_path):
     ]
     no_pr = run_verify(root, base="main", all_=False, forge=None)  # no PR: approvals are not checked
     assert "owner_approval.no_approvers" not in {i.code for i in no_pr.issues}
+
+
+def test_all_with_a_pull_request_still_needs_approval_for_policy_files(tmp_path):
+    """--all computes no changed files: the config, CODEOWNERS and CI workflow are compared with the policy tip."""
+    root = _loosened_feature(tmp_path)  # kb.config.yaml differs from main's
+    (root / ".github/workflows").mkdir(parents=True)
+    (root / ".github/workflows/kb.yml").write_text("on: push\n")
+    (root / "CODEOWNERS").write_text("* @mallory\n")
+    commit(root, "workflow and CODEOWNERS")
+    report = run_verify(root, base=None, all_=True, forge=local_forge(tmp_path, root))
+    assert report.required == {
+        "@acme/tech-leads": [".github/workflows/kb.yml changed", "CODEOWNERS changed", "kb.config.yaml changed"]
+    }
+    assert "missing_owner_approval" in {i.code for i in report.blocking}
+    git(root, "checkout", "-q", "main")  # the tip itself: nothing differs
+    report = run_verify(root, base=None, all_=True, forge=local_forge(tmp_path, root))
+    assert report.required == {}
