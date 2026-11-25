@@ -14,7 +14,7 @@ until the end of the billing cycle") are the usual numbering. If your agent numb
 ```sh
 cd /Users/dev/projects/kb
 uv build --wheel --out-dir /tmp/kb-dist
-uv tool install --force /tmp/kb-dist/grounded_kb-0.3.0-py3-none-any.whl
+uv tool install --force /tmp/kb-dist/grounded_kb-0.3.1-py3-none-any.whl
 kb verify --help                # lists --base, --all, --format, --forge, --comment, --strict
 ```
 
