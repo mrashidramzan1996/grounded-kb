@@ -8,10 +8,11 @@ Judge each item on its own; you have not seen any other verdicts. Over-flag: if 
 say `missing`. Every verdict needs a verbatim `span` copied from the item's text.
 
 You propose; a person decides. kb checks every verdict and sets aside one that answers an item not listed below,
-answers an item twice, gives a `span` that is not word for word in the item's text (at least $min_span characters,
-unless it is the whole text, and not starting or ending inside a word or number), uses a value not listed for its
+answers an item twice, gives a `span` that is not word for word inside one passage of the item's text (at least
+$min_span characters, unless it is a whole passage, and not starting or ending inside a word or number), uses a value not listed for its
 field, adds a field the item does not take, or names in `related` an ID that is not a live record. An item with no
-verdict counts as unanswered. When you are done, run `kb eval report`.
+verdict counts as unanswered. When an item's text shows several passages, one per line, copy the span from a
+single one. When you are done, run `kb eval report`.
 
 ## How to answer
 

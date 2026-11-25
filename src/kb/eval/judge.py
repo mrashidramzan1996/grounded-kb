@@ -7,7 +7,10 @@ IDs it names live). The brief shows no verdict and never says which extraction a
 """
 
 import hashlib
+import hmac
 import json
+import re
+import secrets
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -37,6 +40,7 @@ from kb.yamlio import YamlError, load_yaml_strict
 JUDGE_BRIEF = ".kb/cache/eval/judge.md"
 VERDICTS = ".kb/cache/eval/verdicts.yaml"
 JUDGE_ITEMS = ".kb/cache/eval/items.json"  # the items kb asked about, written by kb
+SALT = ".kb/cache/eval/salt"  # the key of this cycle's public ids, hex; written by `kb eval judge`
 JUDGE_VERSION = "v1"
 MAX_ITEMS_BYTES = 64 * 1024 * 1024
 MAX_VERDICTS_BYTES = 8 * 1024 * 1024
@@ -70,10 +74,26 @@ _FIELDS = {kind: ("id", "span", "note", *YES_NO.get(kind, ()),
 
 # --- items -------------------------------------------------------------------------------------------------------
 
-def public_id(canonical: str) -> str:
-    """The opaque, stable id an item and its finding are shown by: "F-" and 10 hex digits of the canonical id's sha256.
-    Canonical ids (R:, S:, B:, M:, T:, L:, E:, N:) stay internal: they would tell the judge where an item came from."""
-    return "F-" + hashlib.sha256(canonical.encode()).hexdigest()[:10]
+def public_id(canonical: str, salt: bytes) -> str:
+    """The opaque id an item and its finding are shown by: "F-" and 10 hex digits of HMAC-SHA256(salt, canonical id).
+    Canonical ids (R:, S:, B:, M:, T:, L:, E:, N:) stay internal: they would tell the judge where an item came from.
+    Keyed by the cycle's random salt, so the id cannot be recomputed from what the brief shows (a sentence's key, run
+    B's numbering). Stable for one cycle; later commands resolve ids through summary.yaml, never by recomputing."""
+    return "F-" + hmac.new(salt, canonical.encode(), "sha256").hexdigest()[:10]
+
+
+def new_salt() -> bytes:
+    return secrets.token_bytes(16)
+
+
+def read_salt(root: Path) -> bytes:
+    """This cycle's salt from SALT; EvalError when it is missing or not 32 hex digits."""
+    data = read_regular(Path(root), SALT, max_bytes=256)
+    text = (data or b"").decode("ascii", errors="replace").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", text):
+        raise EvalError(f"{SALT} (the key of this evaluation's item ids) is missing or not 32 hex digits: "
+                        "run `kb eval judge` again")
+    return bytes.fromhex(text)
 
 
 def _segment_at(repo: KbRepo, src: str, offset: int):
@@ -108,7 +128,7 @@ def _quoted(repo: KbRepo, ev: Evidence) -> tuple[list[list], list[str], str]:
 
 def _item(iid: str, kind: str, ref: str, passages: list[str], context: str, spans: list[list], **extra) -> dict:
     """An item. Its `text` is its passages joined by line breaks; a verdict's span must lie inside one passage."""
-    return {"id": iid, "public": public_id(iid), "kind": kind, "ref": ref, "text": "\n".join(passages),
+    return {"id": iid, "kind": kind, "ref": ref, "text": "\n".join(passages),
             "passages": passages, "context": context, "spans": spans, **extra}
 
 
@@ -166,8 +186,9 @@ def _granularity(repo: KbRepo, alignment: Alignment) -> list[dict]:
 
 
 def _entities(repo: KbRepo, live: set[str]) -> list[dict]:
-    """T: every live term with evidence; L: every relation of a live term (L:<term>:<type>:<target>:<n>, n its index
-    among the term's relations)."""
+    """T: every live term with evidence; L: every relation of a live term, L:<term>:<type>:<target>:<h> with h the first
+    8 hex digits of the sha256 of its quote text (stable when relations are added or reordered; the very same relation
+    twice is one question)."""
     out = []
     for tid, term in sorted(repo.records.items()):
         if tid not in live or not isinstance(term, Term):
@@ -177,12 +198,17 @@ def _entities(repo: KbRepo, live: set[str]) -> list[dict]:
             context = (f"term {tid}\nname: {term.name}\naliases: {', '.join(term.aliases) or 'none'}\n"
                        f"kind: {term.kind or 'not set'}\ndefinition: {term.definition}")
             out.append(_item(f"T:{tid}", "entity_faithful", ref, passages, context, spans))
-        for n, r in enumerate(term.relations):
+        seen: set[str] = set()
+        for r in term.relations:
+            iid = f"L:{tid}:{r.type}:{r.target}:{hashlib.sha256(r.quote.text.encode()).hexdigest()[:8]}"
+            if iid in seen:
+                continue
+            seen.add(iid)
             spans, passages, ref = _quoted(repo, Evidence(quotes=[r.quote]))
             target = repo.records.get(r.target)
             tname = target.name if isinstance(target, Term) else "not a term"
             context = f"source: {tid} ({term.name})\nrelation: {r.type}\ntarget: {r.target} ({tname})"
-            out.append(_item(f"L:{tid}:{r.type}:{r.target}:{n}", "relation_faithful", ref, passages, context, spans))
+            out.append(_item(iid, "relation_faithful", ref, passages, context, spans))
     return out
 
 
@@ -204,8 +230,10 @@ def _entity_gaps(repo: KbRepo, alignment: Alignment) -> list[dict]:
             found[phrase] = _item(f"E:{phrase}", "entity_missing", ref, [s.text], f"name: {phrase}",
                                   [[ref.partition("#")[0], s.start, s.end]], names=[phrase], detected=True)
     out = list(found.values())
-    for (src, rtype, tgt), rq in zip(alignment.only_b_relations, alignment.only_b_relation_quotes, strict=True):
+    for (_, rtype, _), rq in zip(alignment.only_b_relations, alignment.only_b_relation_quotes, strict=True):
         spans, passages, ref = _quoted(repo, Evidence(quotes=[Quote(source=rq.ref, text=rq.quote)]))
+        # an end is shown by its name, never by its run B id: "(unnamed)" when it has no usable name
+        src, tgt = (names[0] if names else "(unnamed)" for names in (rq.source_names, rq.target_names))
         out.append(_item(f"N:{rq.label}", "relation_missing", ref, passages, f"source: {src}\nrelation: {rtype}\ntarget: {tgt}",
                          spans, ends=[list(rq.source_names), list(rq.target_names)]))
     return out
@@ -223,15 +251,20 @@ def _order(item: dict) -> tuple:
     return _GROUP[item["kind"]], pos[0], pos[1], item["id"]
 
 
-def judge_items(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str]) -> list[dict]:
+def judge_items(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str],
+                salt: bytes | None = None) -> list[dict]:
     """The items the judge answers, each {id (canonical), public, kind, ref, text, passages, context, spans} (entity
     gaps also carry `names` and `detected`, relation gaps `ends`), sorted by question, document position and id. Ids
-    are unique (AssertionError otherwise). `decided` holds the sentence keys a person has decided, not asked again."""
+    are unique (AssertionError otherwise). `decided` holds the sentence keys a person has decided, not asked again.
+    `public` is keyed by `salt` (the cycle's, from SALT; without one, a fresh random salt)."""
     live = live_ids(repo)
     out: dict[str, dict] = {}
     for item in (*_records(repo, live), *_gaps(repo, alignment, decided), *_granularity(repo, alignment),
                  *_entities(repo, live), *_entity_gaps(repo, alignment)):
         _add(out, item)
+    key = new_salt() if salt is None else salt
+    for item in out.values():
+        item["public"] = public_id(item["id"], key)
     publics = [i["public"] for i in out.values()]
     assert len(set(publics)) == len(publics), "two judge items share a public id"
     return sorted(out.values(), key=_order)
@@ -253,11 +286,13 @@ class JudgeState:
     run_b_issues: list[Issue]
 
 
-def judge_state(root: Path, repo: KbRepo) -> JudgeState:
+def judge_state(root: Path, repo: KbRepo, salt: bytes | None = None) -> JudgeState:
+    """The items now, keyed by `salt` (by default the cycle's, read from SALT: EvalError when it is unusable)."""
+    key = read_salt(root) if salt is None else salt
     b_items, issues = load_run_b(Path(root), repo)
     kb = kb_items(repo)
     al = align(kb, b_items)
-    return JudgeState(judge_items(repo, al, _decided(Path(root))), al, sum(i.kind != "entity" for i in kb),
+    return JudgeState(judge_items(repo, al, _decided(Path(root)), salt=key), al, sum(i.kind != "entity" for i in kb),
                       sum(i.kind != "entity" for i in b_items), issues)
 
 
@@ -276,8 +311,11 @@ def require_eval_base(root: Path) -> str:
 
 
 def write_judge(root: Path, repo: KbRepo) -> JudgeState:
-    """Write JUDGE_ITEMS and the brief, and remove the verdicts of an earlier brief."""
-    state = judge_state(root, repo)
+    """Start a cycle: a new salt (so its ids differ from every earlier cycle's), JUDGE_ITEMS and the brief; the
+    verdicts of an earlier brief are removed."""
+    salt = new_salt()
+    state = judge_state(root, repo, salt)
+    write_cache(Path(root), SALT, salt.hex() + "\n")
     write_cache(Path(root), JUDGE_ITEMS, items_json(state.items))
     write_cache(Path(root), JUDGE_BRIEF, build_judge_brief(repo, state.items))
     remove_cache(Path(root), VERDICTS)

@@ -42,7 +42,7 @@ from kb.eval.align import agreement
 from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, build_extract_brief, clear_run_b
 from kb.eval.findings import SUMMARY, build_findings, fingerprint, render_eval_report, summary, write_summary
 from kb.eval.judge import (
-    JUDGE_BRIEF, VERDICTS, check_items_file, check_verdicts, judge_state, require_eval_base, write_judge,
+    JUDGE_BRIEF, VERDICTS, check_items_file, check_verdicts, judge_state, read_salt, require_eval_base, write_judge,
 )
 from kb.gates.coverage import coverage_stats
 from kb.graph import build_graph, render_mermaid
@@ -715,7 +715,8 @@ def eval_report(
         raise typer.Exit(1)
     if write:
         try:
-            write_summary(root, summary(commit, fingerprint(repo), coverage, agr, findings, datetime.date.today().isoformat()))
+            write_summary(root, summary(commit, fingerprint(repo), read_salt(root).hex(), coverage, agr, findings,
+                                        datetime.date.today().isoformat()))
         except TOOL_ERRORS as e:
             raise _fail(e) from e
         typer.echo(f"wrote {SUMMARY}")

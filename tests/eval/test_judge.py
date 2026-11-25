@@ -1,6 +1,7 @@
 """`kb eval judge`: one item per question, a blind judge brief, and verdicts validated as untrusted input."""
 
 import hashlib
+import hmac
 import json
 import re
 from pathlib import Path
@@ -23,7 +24,9 @@ from kb.eval.judge import (
     judge_items,
     judge_state,
     public_id,
+    read_salt,
     validate_verdicts,
+    write_judge,
 )
 from kb.ingest.brief import INJECTION_FLAG
 from kb.sources.sentences import sentence_key, sentences
@@ -37,21 +40,22 @@ def key_of(repo, text: str) -> str:
 
 REFUNDS = "Refunds are never given for a removed seat."
 INVOICES = "Invoices must be paid within 30 days."
-L_ID = "L:TERM-account:owns:TERM-invoice:0"  # the relation's index among its term's relations
+# keyed by its quote text, not its place in the list: stable when relations are added or reordered
+L_ID = "L:TERM-account:owns:TERM-invoice:" + hashlib.sha256(b"Each account owns its invoices.").hexdigest()[:8]
+SALT = bytes(range(16))
 N_ID = "N:B-TERM-account:uses:B-TERM-seat"  # run B's relation label: unique even when two relations share names
 
 
-def shown(canonical: str) -> str:
-    """How an item is named to the agent and the person: its public id, as inline code."""
-    return inline_code(public_id(canonical))
+def shown(root: Path, canonical: str) -> str:
+    """How an item is named to the agent and the person: its public id (keyed by this cycle's salt), as inline code."""
+    return inline_code(public_id(canonical, read_salt(root)))
 
 
 def judged(tmp_path: Path, files: dict[str, str] = FILES):
     """(root, repo, items) with run B and the items file written, as `kb eval judge` leaves them."""
     repo = stored_repo(SPEC, files)
     write_run_b(tmp_path)
-    state = judge_state(tmp_path, repo)
-    write_cache(tmp_path, JUDGE_ITEMS, items_json(state.items))
+    state = write_judge(tmp_path, repo)
     return tmp_path, repo, state.items
 
 
@@ -67,7 +71,7 @@ def test_judge_items_cover_every_record_and_gap(tmp_path):
     b_items, issues = load_run_b(tmp_path, repo)
     assert issues == []
     al = align(kb_items(repo), b_items)
-    items = judge_items(repo, al, set())
+    items = judge_items(repo, al, set(), salt=SALT)
     refunds, invoices = key_of(repo, REFUNDS), key_of(repo, INVOICES)
     assert [(i["id"], i["kind"]) for i in items] == [
         ("R:REQ-F-001", "faithful"),  # the rejected REQ-F-002 and the decision are not judged
@@ -82,10 +86,11 @@ def test_judge_items_cover_every_record_and_gap(tmp_path):
         ("E:billing admin", "entity_missing"),  # a run B entity and a detected candidate: one item
         (N_ID, "relation_missing"),
     ]
-    # each item's public id: opaque, stable, derived from the canonical id only
+    # each item's public id: opaque, keyed by the cycle's salt, so nobody can recompute it from what the brief shows
     for i in items:
-        assert i["public"] == "F-" + hashlib.sha256(i["id"].encode()).hexdigest()[:10] == public_id(i["id"])
+        assert i["public"] == "F-" + hmac.new(SALT, i["id"].encode(), "sha256").hexdigest()[:10] == public_id(i["id"], SALT)
         assert re.fullmatch(r"F-[0-9a-f]{10}", i["public"])
+        assert i["public"] != "F-" + hashlib.sha256(i["id"].encode()).hexdigest()[:10]
     by_id = {i["id"]: i for i in items}
     assert all(set(i) >= {"id", "kind", "ref", "text", "context"} for i in items)
     r = by_id["R:REQ-F-001"]
@@ -106,12 +111,12 @@ def test_judge_items_cover_every_record_and_gap(tmp_path):
     n = by_id[N_ID]
     assert n["text"] == "Each account buys seats for its users." and n["ref"] == "SRC-spec#seg-02"
     # stable, and decided sentences are no longer asked about
-    assert judge_items(repo, al, set()) == items
-    assert f"S:{refunds}" not in {i["id"] for i in judge_items(repo, al, {refunds})}
+    assert judge_items(repo, al, set(), salt=SALT) == items
+    assert f"S:{refunds}" not in {i["id"] for i in judge_items(repo, al, {refunds}, salt=SALT)}
     # splits and merges: one item each, named after the kb record(s)
     al2 = Alignment(matched=[], only_kb=[], only_b=[], splits=[("REQ-F-001", ["B-REQ-F-001", "B-REQ-F-009"])],
                     merges=[(["EXCL-001", "REQ-F-001"], "B-REQ-F-003")])
-    m = [i for i in judge_items(repo, al2, set()) if i["kind"] == "split_merge"]
+    m = [i for i in judge_items(repo, al2, set(), salt=SALT) if i["kind"] == "split_merge"]
     assert [i["id"] for i in m] == ["M:EXCL-001+REQ-F-001", "M:REQ-F-001"]  # same position: by id
     assert m[1]["text"] == "A seat costs 5 EUR per month." and "2 separate" in m[1]["context"]
     assert "Gift cards" in m[0]["text"] and "merged" in m[0]["context"]
@@ -129,6 +134,9 @@ def test_judge_brief_is_blind_and_fenced(tmp_path):
     assert ("Judge each item on its own; you have not seen any other verdicts. Over-flag: if unsure whether a sentence is "
             "a rule, say `missing`. Every verdict needs a verbatim `span` copied from the item's text.") in flat
     assert "Do not read kb/eval/ or anything under .kb/cache/eval/ except this brief." in flat
+    # a span lies in one passage: the brief says so
+    assert ("When an item's text shows several passages, one per line, copy the span from a single one." in flat
+            and "unless it is a whole passage" in flat)
     for i in items:
         assert f"### `{i['public']}`" in brief
         assert i["id"] not in brief  # canonical ids stay internal
@@ -146,9 +154,9 @@ def test_judge_brief_is_blind_and_fenced(tmp_path):
     low = brief.lower()
     for leak in ("run b", "run-b", "second extraction", "only_b", "only in", "other run", "kb eval extract", "verdict:"):
         assert leak not in low.replace("verdict: missing", ""), leak
-    excl = brief.split(f"### {shown('R:EXCL-001')}")[1].split("### ")[0]
+    excl = brief.split(f"### {shown(tmp_path, 'R:EXCL-001')}")[1].split("### ")[0]
     assert INJECTION_FLAG in excl and "`````" in excl  # a fence longer than the text's backtick run
-    assert INJECTION_FLAG not in brief.split(f"### {shown('R:REQ-F-001')}")[1].split("### ")[0]
+    assert INJECTION_FLAG not in brief.split(f"### {shown(tmp_path, 'R:REQ-F-001')}")[1].split("### ")[0]
     assert build_judge_brief(repo, items) == brief
 
 
@@ -182,7 +190,7 @@ def test_verdicts_outside_the_brief_are_rejected(tmp_path):
     # an item with no verdict at all
     write_verdicts(root, [v for k, v in good.items() if k != "R:REQ-F-001"])
     verdicts, issues = validate_verdicts(root, repo)
-    assert [(i.code, i.message) for i in issues] == [("eval.verdict_missing", f"{shown('R:REQ-F-001')}: no verdict")]
+    assert [(i.code, i.message) for i in issues] == [("eval.verdict_missing", f"{shown(root, 'R:REQ-F-001')}: no verdict")]
     assert len(verdicts) == len(items) - 1
     # no verdicts file: every item is unanswered; a file that is not a verdict list is one invalid issue
     (root / VERDICTS).unlink()
@@ -246,8 +254,8 @@ def test_entity_and_relation_items_validated(tmp_path):
     verdicts, issues = validate_verdicts(root, repo)
     msgs = sorted(i.message for i in issues)
     assert [i.code for i in issues] == ["eval.verdict_invalid"] * 2
-    assert any(shown(N_ID) in m and "both" in m for m in msgs)
-    assert any(shown("E:seat") in m and "name" in m for m in msgs)
+    assert any(shown(root, N_ID) in m and "both" in m for m in msgs)
+    assert any(shown(root, "E:seat") in m and "name" in m for m in msgs)
     # with spans that name them, both are kept
     write_verdicts(root, [*(v for k, v in good.items() if k not in (N_ID, "E:seat")),
                           good[N_ID] | {"span": "account buys seats"},
@@ -265,7 +273,7 @@ def test_entity_and_relation_items_validated(tmp_path):
     b_items, _ = load_run_b(root, repo)
     findings = {f.canonical: f for f in build_findings(items, verdicts, align(kb_items(repo), b_items))}
     f = findings["E:billing admin"]
-    assert (f.id, f.kind, f.kind_hint, f.related) == (public_id("E:billing admin"), "omission", "entity", ("TERM-account",))
+    assert (f.id, f.kind, f.kind_hint, f.related) == (public_id("E:billing admin", read_salt(root)), "omission", "entity", ("TERM-account",))
     assert findings[N_ID].kind_hint == "relation"
 
 
@@ -299,14 +307,22 @@ def test_item_ids_are_unique():
     twin = Item("B-REQ-F-009", "requirement", "x", (("SRC-spec", 11, 40),))
     other = Item("B-REQ-F-009", "requirement", "y", (("SRC-spec", 41, 85),))
     with pytest.raises(AssertionError, match="B:B-REQ-F-009"):
-        judge_items(repo, Alignment(matched=[], only_kb=[], only_b=[twin, other], splits=[], merges=[]), set())
-    # a term with two relations of the same type to the same target: two L items
+        judge_items(repo, Alignment(matched=[], only_kb=[], only_b=[twin, other], splits=[], merges=[]), set(), salt=SALT)
+    # a relation inserted before the existing one, of the same type and target: two L items, and the existing one
+    # keeps its id
     files = dict(FILES)
+    files["kb/glossary/TERM-account.yaml"] = files["kb/glossary/TERM-account.yaml"].replace(
+        "relations:\n", "relations:\n- type: owns\n  target: TERM-invoice\n  quote:\n    source: SRC-spec#seg-02\n"
+        "    text: Each account buys seats for its users.\n")
+    repo = stored_repo(SPEC, files)
+    ids = [i["id"] for i in judge_items(repo, align(kb_items(repo), []), set(), salt=SALT)]
+    other = "L:TERM-account:owns:TERM-invoice:" + hashlib.sha256(b"Each account buys seats for its users.").hexdigest()[:8]
+    assert sorted(i for i in ids if i.startswith("L:")) == sorted([L_ID, other])
+    # the very same relation twice is one question, not a collision
     files["kb/glossary/TERM-account.yaml"] += ("- type: owns\n  target: TERM-invoice\n  quote:\n    source: SRC-spec#seg-02\n"
                                               "    text: Each account owns its invoices.\n")
     repo = stored_repo(SPEC, files)
-    ids = [i["id"] for i in judge_items(repo, align(kb_items(repo), []), set())]
-    assert [i for i in ids if i.startswith("L:")] == [L_ID, "L:TERM-account:owns:TERM-invoice:1"]
+    assert [i for i in judge_items(repo, align(kb_items(repo), []), set(), salt=SALT) if i["id"] == L_ID]
 
 
 def test_span_must_stay_in_one_passage(tmp_path):
@@ -371,3 +387,65 @@ def test_report_survives_crafted_files(tmp_path):
     (root / JUDGE_ITEMS).write_text("[" * 100000 + "]" * 100000)
     r = invoke(root, "eval", "report")
     assert r.exit_code == 2 and "run `kb eval judge` again" in r.stderr
+
+
+def test_public_ids_are_keyed_per_cycle(tmp_path):
+    """Public ids are keyed by a random salt per `kb eval judge`: nobody can recompute them from what the brief shows
+    (a sentence's key, run B's numbering), so S and B items cannot be told apart. One cycle agrees with itself."""
+    root = ingested_with_run_b(tmp_path)
+    assert invoke(root, "eval", "judge").exit_code == 0
+    first = {i["id"]: i["public"] for i in json.loads((root / JUDGE_ITEMS).read_text())}
+    salt = (root / judge.SALT).read_text().strip()
+    assert re.fullmatch(r"[0-9a-f]{32}", salt)
+    from kb.records.repo import KbRepo
+
+    repo = KbRepo.load(root)
+    for canonical, public in first.items():
+        guessed = "F-" + hashlib.sha256(canonical.encode()).hexdigest()[:10]
+        assert public != guessed and public == public_id(canonical, bytes.fromhex(salt))
+    for s in sentences(repo, "SRC-spec"):
+        assert "F-" + hashlib.sha256(f"S:{sentence_key(s)}".encode()).hexdigest()[:10] not in first.values()
+    # the brief, the verdicts and the summary of this cycle use the same ids
+    brief = (root / JUDGE_BRIEF).read_text()
+    assert all(f"### `{p}`" in brief for p in first.values())
+    items = json.loads((root / JUDGE_ITEMS).read_text())
+    good = valid(items)
+    good["R:REQ-F-001"]["same_actor"] = "no"
+    from kb.yamlio import dump_yaml
+
+    (root / VERDICTS).write_text(dump_yaml({"verdicts": list(good.values())}))
+    assert invoke(root, "eval", "report", "--write").exit_code == 0
+    summary = load_yaml_strict((root / "kb/eval/summary.yaml").read_text())
+    assert summary["salt"] == salt
+    assert {f["id"]: f["canonical"] for f in summary["open_findings"]} == {
+        first[c]: c for c in (f["canonical"] for f in summary["open_findings"])}
+    # a second cycle: new salt, new ids
+    assert invoke(root, "eval", "judge").exit_code == 0
+    second = {i["id"]: i["public"] for i in json.loads((root / JUDGE_ITEMS).read_text())}
+    assert first.keys() == second.keys() and not set(first.values()) & set(second.values())
+
+
+def test_missing_or_garbled_salt_is_refused(tmp_path):
+    root, repo, _ = judged(tmp_path)
+    (root / judge.SALT).write_text("not hex\n")
+    with pytest.raises(EvalError, match="run `kb eval judge` again"):
+        validate_verdicts(root, repo)
+    (root / judge.SALT).unlink()
+    with pytest.raises(EvalError, match="run `kb eval judge` again"):
+        validate_verdicts(root, repo)
+
+
+def test_relation_with_an_unnamed_end_shows_no_run_b_id(tmp_path):
+    """A run B relation whose source has no usable name (test_align's B-TERM-a): shown as (unnamed), never by its id."""
+    from kb.eval.align import RelationQuote
+
+    repo = stored_repo(SPEC, FILES)
+    al = Alignment(matched=[], only_kb=[], only_b=[], splits=[], merges=[],
+                   only_b_relations=[("B-TERM-a", "owns", "invoice")],
+                   only_b_relation_quotes=[RelationQuote("B-TERM-a:owns:B-TERM-invoice", (), ("invoice", "invoices"),
+                                                         "Each account owns its invoices.", "SRC-spec#seg-02")])
+    items = judge_items(repo, al, set(), salt=SALT)
+    (n,) = [i for i in items if i["kind"] == "relation_missing"]
+    assert n["context"] == "source: (unnamed)\nrelation: owns\ntarget: invoice"
+    brief = build_judge_brief(repo, items)
+    assert "B-" not in brief and "(unnamed)" in brief

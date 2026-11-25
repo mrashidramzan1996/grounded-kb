@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from kb.eval.align import Alignment, render_agreement
-from kb.eval.judge import YES_NO, public_id
+from kb.eval.judge import YES_NO
 from kb.ingest.report import issue_lines, section
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
@@ -48,7 +48,7 @@ def _finding(item: dict, v: dict, b_spans: list[list], s_spans: list[list], b_na
     related = tuple(v.get("related", ()))
 
     def make(fkind: str, severity: str, supporters: int, kind_hint: str | None = None, text_note: str = note) -> Finding:
-        return Finding(public_id(item["id"]), item["id"], fkind, item["ref"], item["text"], severity, supporters, related,
+        return Finding(item["public"], item["id"], fkind, item["ref"], item["text"], severity, supporters, related,
                        text_note, kind_hint)
 
     if kind in YES_NO:
@@ -80,8 +80,8 @@ def build_findings(items: list[dict], verdicts: list[dict], alignment: Alignment
 
     An S or B item judged missing or unknown is an omission; an S item that run B also extracted (or a B item the
     coverage gate also flagged) has every supporter. A B omission on the sentence of an S item judged missing is the
-    same gap: it is folded into the S finding, which keeps the higher of the two severities (and B's kind_hint when
-    it has none). Judged unknown as a sentence, the B omission stands on its own. An R, T or L item with any "no" is
+    same gap when the B item is judged missing too: it is folded into the S finding, which keeps the higher of the
+    two severities (and B's kind_hint when it has none). When either is judged unknown, the B omission stands. An R, T or L item with any "no" is
     unfaithful. A split_merge item not judged ok is a split, merge or unknown. An E or N item judged missing or
     unknown is an omission with kind_hint entity or relation."""
     by_id = {v["id"]: v for v in verdicts}
@@ -93,7 +93,8 @@ def build_findings(items: list[dict], verdicts: list[dict], alignment: Alignment
     missing_s = [i for i in items if i["kind"] == "uncovered" and i["id"] in found and by_id[i["id"]].get("verdict") == "missing"]
     for item in items:
         b = found.get(item["id"])
-        if item["kind"] != "only_b" or b is None:
+        # only a B item judged missing folds: an unknown one stands, and its default severity never raises S
+        if item["kind"] != "only_b" or b is None or by_id[item["id"]].get("verdict") != "missing":
             continue
         s_item = next((s for s in missing_s if _overlap(item["spans"], s["spans"])), None)
         if s_item is not None:
@@ -123,9 +124,10 @@ def finding_dict(f: Finding) -> dict:
     return asdict(f) | {"related": list(f.related)}
 
 
-def summary(commit: str, fp: str, coverage: dict, agreement: dict, findings: list[Finding], judged_at: str) -> dict:
-    """The committed summary, in its key order."""
-    return {"commit": commit, "fingerprint": fp, "coverage": coverage, "agreement": agreement,
+def summary(commit: str, fp: str, salt: str, coverage: dict, agreement: dict, findings: list[Finding], judged_at: str) -> dict:
+    """The committed summary, in its key order. `salt` (hex) keys the cycle's public ids; later commands resolve an id
+    through `open_findings` (id and canonical), never by recomputing it."""
+    return {"commit": commit, "fingerprint": fp, "salt": salt, "coverage": coverage, "agreement": agreement,
             "open_findings": [finding_dict(f) for f in findings], "judged_at": judged_at}
 
 
