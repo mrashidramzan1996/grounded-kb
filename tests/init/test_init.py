@@ -98,7 +98,7 @@ def test_codeowners_block_covers_the_gate_itself(tmp_path):
     repo = make_git_repo(None, tmp_path)
     init_repo(repo)
     text = (repo / "CODEOWNERS").read_text()
-    for p in ("/.github/workflows/kb.yml", "/.gitlab-ci.yml", "/CODEOWNERS", "/.github/CODEOWNERS", "/docs/CODEOWNERS"):
+    for p in ("/.github/workflows/kb.yml", "/.github/workflows/kb-claims.yml", "/.gitlab-ci.yml", "/CODEOWNERS", "/.github/CODEOWNERS", "/docs/CODEOWNERS"):
         assert f"# {p} TODO" in text
     assert "decision approvers" in text
 
@@ -141,7 +141,7 @@ def test_github_ci_template(tmp_path):
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     assert "fetch-depth: 0" in text and "KB_INSTALL_SPEC: 'grounded-kb==9.9'" in text
-    assert 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto' in text
+    assert 'uvx --from "$KB_INSTALL_SPEC" kb -C "$GITHUB_WORKSPACE" verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto' in text
     assert "--strict" not in text
     assert "BASE_REF: ${{ github.event.pull_request.base.ref }}" in text  # M7: never expanded inside run:
 
@@ -216,7 +216,7 @@ def test_unsafe_install_spec_is_refused_before_writing(tmp_path):
     assert not (repo / "kb.config.yaml").exists()
 
 
-@pytest.mark.parametrize("target", ["AGENTS.md", "CLAUDE.md", "CODEOWNERS", ".gitlab-ci.yml", "kb/README.md", ".github/workflows/kb.yml"])
+@pytest.mark.parametrize("target", ["AGENTS.md", "CLAUDE.md", "CODEOWNERS", ".gitlab-ci.yml", "kb/README.md", ".github/workflows/kb.yml", ".github/workflows/kb-claims.yml"])
 def test_refuses_symlinked_target_and_writes_nothing(tmp_path, target):
     repo = make_git_repo(None, tmp_path)
     outside = tmp_path / "outside.txt"
@@ -271,7 +271,7 @@ def test_install_spec_is_single_quoted_in_both_templates(tmp_path):
         repo = make_git_repo(None, tmp_path / ci)
         init_repo(repo, ci=ci, install_spec="grounded-kb>=1")
         text = (repo / rel).read_text()
-        assert "KB_INSTALL_SPEC: 'grounded-kb>=1'" in text and 'uvx --from "$KB_INSTALL_SPEC" kb verify' in text
+        assert "KB_INSTALL_SPEC: 'grounded-kb>=1'" in text and 'uvx --from "$KB_INSTALL_SPEC" kb ' in text
         YAML(typ="safe").load(text)
 
 
@@ -283,50 +283,99 @@ def test_unsafe_specs_rejected(tmp_path, spec):
     assert not (repo / "kb.config.yaml").exists()
 
 
-def test_github_workflow_pr_and_push_steps(tmp_path):
+POLICY_ON = "env.KB_INSTALL_SPEC != '' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')"
+
+
+def _workflow(repo, name):
     from ruamel.yaml import YAML
 
+    text = (repo / ".github/workflows" / name).read_text()
+    return text, YAML(typ="safe").load(text)
+
+
+def _on(wf):
+    return wf[True] if True in wf else wf["on"]
+
+
+def test_github_workflow_pr_and_push_steps(tmp_path):
     repo = make_git_repo(None, tmp_path)
     init_repo(repo, install_spec="grounded-kb==9.9")
-    text = (repo / ".github/workflows/kb.yml").read_text()
-    wf = YAML(typ="safe").load(text)
-    assert set(wf[True] if True in wf else wf["on"]) == {"pull_request", "pull_request_review", "push"}
-    jobs = wf["jobs"]
-    env = {"KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.event.pull_request.base.ref }}"}
-    assert jobs["kb-policy"]["env"] == env and jobs["kb-claims"]["env"] == env
-    for job in jobs.values():
-        assert job["steps"][0]["with"]["fetch-depth"] == 0
-    pr = "env.KB_INSTALL_SPEC != '' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')"
-    (policy_run,) = [s["run"] for s in jobs["kb-policy"]["steps"] if "run" in s and s.get("if") == pr]
-    assert policy_run == 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto'
-    assert "${{" not in policy_run
-    runs = {s["if"]: s["run"] for s in jobs["kb-claims"]["steps"] if "run" in s}
-    pr_run = runs["env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'"]
-    assert pr_run.endswith('kb verify --base "origin/$BASE_REF" --forge none') and "${{" not in pr_run
-    assert runs["env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"].endswith("kb verify --all")
+    text, wf = _workflow(repo, "kb.yml")
+    assert set(_on(wf)) == {"pull_request", "pull_request_review", "push"}
+    assert set(wf["jobs"]) == {"kb-policy"}  # kb-claims is its own workflow: a skipped required job counts as passing
+    job = wf["jobs"]["kb-policy"]
+    assert job["env"] == {"KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.event.pull_request.base.ref }}"}
+    assert job["steps"][0]["with"]["fetch-depth"] == 0
+    runs = {s["if"]: s["run"] for s in job["steps"] if "run" in s}
+    assert runs[POLICY_ON].endswith("--skip-tests --comment --forge auto") and "${{" not in runs[POLICY_ON]
     assert runs["env.KB_INSTALL_SPEC == ''"].startswith("echo ")
     assert "branches: [main]" in text
+    assert "never runs pull-request code" in text
 
 
 def test_workflow_has_policy_job_without_install(tmp_path):
-    from ruamel.yaml import YAML
+    """kb-policy is an allowlist: nothing else runs, so nothing can install or run what the pull request provides."""
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, install_spec="grounded-kb==9.9")
+    _, wf = _workflow(repo, "kb.yml")
+    steps = wf["jobs"]["kb-policy"]["steps"]
+    assert [s["uses"] for s in steps if "uses" in s] == [
+        "actions/checkout@v4", "astral-sh/setup-uv@v5", "actions/upload-artifact@v4"]
+    runs = [s["run"] for s in steps if "run" in s]
+    assert len(runs) == 2 and runs[0].startswith("echo ")
+    assert runs[1] == 'uvx --from "$KB_INSTALL_SPEC" kb -C "$GITHUB_WORKSPACE" verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto'
+
+
+def test_policy_job_cannot_reach_the_uv_cache_or_the_pull_requests_uv_config(tmp_path):
+    """kb-claims runs pull-request code that can poison ~/.cache/uv; setup-uv would restore it (keyed on the PR's
+    uv.lock) and pick its uv version from the PR's pyproject.toml; uvx reads uv.toml and pyproject.toml from the
+    working directory."""
+    import re
 
     repo = make_git_repo(None, tmp_path)
     init_repo(repo, install_spec="grounded-kb==9.9")
-    text = (repo / ".github/workflows/kb.yml").read_text()
-    jobs = YAML(typ="safe").load(text)["jobs"]
-    policy, claims = jobs["kb-policy"], jobs["kb-claims"]
-    for step in policy["steps"]:  # the echo step only warns about the empty install spec
-        text_of_step = str(step.get("uses", "")) + ("" if str(step.get("run", "")).startswith("echo ") else str(step.get("run", "")))
-        assert "install" not in text_of_step.lower().replace("kb_install_spec", "") and "sync" not in text_of_step
-    (run,) = [s["run"] for s in policy["steps"] if "run" in s and "kb verify" in s["run"]]
-    assert "--skip-tests" in run and "--comment" in run and '"origin/$BASE_REF"' in run
-    assert policy["permissions"]["pull-requests"] == "write"
-    claim_runs = [s["run"] for s in claims["steps"] if "run" in s and "kb verify" in s["run"]]
-    assert claim_runs and all("--comment" not in r and "--skip-tests" not in r for r in claim_runs)
-    assert any("--forge none" in r for r in claim_runs if "--base" in r)
-    assert "pull-requests" not in claims["permissions"]
-    assert "never runs pull-request code" in text
+    _, wf = _workflow(repo, "kb.yml")
+    steps = wf["jobs"]["kb-policy"]["steps"]
+    (setup,) = [s for s in steps if s.get("uses") == "astral-sh/setup-uv@v5"]
+    assert setup["with"]["enable-cache"] is False
+    assert re.fullmatch(r"\d+\.\d+\.\d+", setup["with"]["version"])
+    (verify,) = [s for s in steps if "kb verify" in s.get("run", "") or " verify " in s.get("run", "")]
+    assert verify["env"]["UV_NO_CONFIG"] == "1"
+    assert verify["env"]["UV_INDEX_URL"] == "https://pypi.org/simple"
+    assert verify["env"]["UV_PYTHON_DOWNLOADS"] == "never"
+    assert verify["working-directory"] == "${{ runner.temp }}"  # not the checkout
+    assert "GITHUB_TOKEN" in verify["env"]
+
+
+def test_claims_workflow_is_separate_and_never_holds_a_token(tmp_path):
+    """kb-claims runs pull-request code: its own workflow (so a review run cannot cancel it into a skipped, passing
+    required job), no token, and no credentials left in .git/config."""
+    repo = make_git_repo(None, tmp_path)
+    r = init_repo(repo, install_spec="grounded-kb==9.9")
+    assert ".github/workflows/kb-claims.yml" in r.files_written
+    text, wf = _workflow(repo, "kb-claims.yml")
+    assert set(_on(wf)) == {"pull_request", "push"}
+    _, policy = _workflow(repo, "kb.yml")
+    assert wf["concurrency"]["group"] != policy["concurrency"]["group"]
+    assert wf["concurrency"]["group"].startswith("kb-claims-")
+    (job,) = wf["jobs"].values()
+    assert job["permissions"] == {"contents": "read"}
+    checkout = next(s for s in job["steps"] if s.get("uses") == "actions/checkout@v4")
+    assert checkout["with"]["persist-credentials"] is False and checkout["with"]["fetch-depth"] == 0
+    assert "secrets." not in str(job) and "GITHUB_TOKEN" not in str(job)
+    runs = {s["if"]: s["run"] for s in job["steps"] if "run" in s}
+    pr = runs["env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'"]
+    assert pr == 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --forge none'
+    assert runs["env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"] == (
+        'uvx --from "$KB_INSTALL_SPEC" kb verify --all --forge none')
+    assert "--comment" not in text and "--skip-tests" not in text
+    assert "# install your project's test dependencies here" in text
+
+
+def test_workflow_files_are_policy_files():
+    from kb.verify.approvals import POLICY_FILES
+
+    assert ".github/workflows/kb-claims.yml" in POLICY_FILES and ".github/workflows/kb.yml" in POLICY_FILES
 
 
 def test_gitlab_ci_mr_and_default_branch_jobs(tmp_path):
@@ -388,10 +437,10 @@ def test_github_template_runs_verify_with_comment_and_artifact(tmp_path):
     wf = YAML(typ="safe").load(text)
     assert wf["permissions"] == {"contents": "read"}
     assert wf["jobs"]["kb-policy"]["permissions"] == {"contents": "read", "pull-requests": "write"}
-    assert "# install your project's test dependencies here" in text
+    assert "# install your project's test dependencies here" not in text  # kb-claims only
     steps = wf["jobs"]["kb-policy"]["steps"]
     verify = next(s for s in steps if "--comment" in s.get("run", ""))
-    assert verify["env"] == {"GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+    assert verify["env"]["GITHUB_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
     assert "${{ secrets.GITHUB_TOKEN }}" in text
     # the default token cannot read organisation teams: say what to do next to it, not only in the README
     token = text.split("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", 1)[0].rsplit("env:", 1)[1]

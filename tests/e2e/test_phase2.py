@@ -390,3 +390,34 @@ def test_local_branch_shadowing_the_remote_base_is_refused(repo, tmp_path):
     assert "refs/heads/origin/main" in r.stderr and "refs/remotes/origin/main" in r.stderr
     r = invoke(repo, "verify", "--base", "refs/remotes/origin/main", "--forge", unapproved)
     assert r.exit_code == 1, r.output  # the full ref is not ambiguous
+
+
+def verify_skipping_tests(repo: Path, tmp_path: Path, **forge):
+    r = invoke(repo, "verify", "--base", "main", "--skip-tests", "--forge", approving_forge(tmp_path, repo, **forge), "--format", "json")
+    assert r.exit_code in (0, 1), r.output
+    return r, json.loads(r.stdout)
+
+
+def test_skip_tests_still_breaks_a_claim_whose_linked_test_was_deleted(repo, tmp_path):
+    branch(repo)
+    (repo / "tests/test_seats.py").unlink()
+    commit(repo, "delete the seat test")
+    r, data = verify_skipping_tests(repo, tmp_path)
+    claim = verdicts(r.stdout)["FEAT-001.C1"]
+    assert claim["status"] == "broken"  # needs no test run
+    assert claim["reasons"] == ["linked test tests/test_seats.py::test_no_refund_on_removal was deleted"]
+    assert {"code": "claim.broken", "record": "FEAT-001.C1"} in data["blocking"]
+
+
+def test_skip_tests_still_marks_a_changed_cited_segment_stale_and_needs_intent_approvers(repo, tmp_path):
+    branch(repo)
+    old = "A removed seat stays active until the end of the billing cycle. No refund is given."
+    spec = repo / SPEC
+    spec.write_text(spec.read_text().replace(old, f"Removal takes effect at the next renewal. {old}"))
+    assert invoke(repo, "source", "sync").exit_code == 0
+    commit(repo, "reword the seat removal section")
+    no_intent = tuple(t for t in TEAMS if t != "@acme/product")
+    r, data = verify_skipping_tests(repo, tmp_path, approvers=no_intent)
+    assert verdicts(r.stdout)["REQ-F-001"]["status"] == "stale"
+    (missing,) = [i for i in data["issues"] if i["code"] == "missing_owner_approval"]
+    assert missing["message"].startswith("@acme/product has not approved")

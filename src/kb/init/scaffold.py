@@ -32,7 +32,8 @@ _APPROVAL_PATHS = [
     "/kb.config.yaml",
 ]
 # CI workflows that run `kb verify` (the files `kb init` writes): a change to one can drop or weaken the gate
-CI_WORKFLOWS = [".github/workflows/kb.yml", ".gitlab-ci.yml"]
+CLAIMS_WORKFLOW = ".github/workflows/kb-claims.yml"  # runs pull-request code: kb.yml (the gate) never does
+CI_WORKFLOWS = [".github/workflows/kb.yml", CLAIMS_WORKFLOW, ".gitlab-ci.yml"]
 # the gate itself: who decides (CODEOWNERS) and what runs the check; the decision approvers own them, as kb.config.yaml
 _GATE_PATHS = [f"/{p}" for p in (*CI_WORKFLOWS, *CODEOWNERS_LOCATIONS)]
 _SAFE_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+=<>!~,\[\]-]*$")
@@ -210,10 +211,10 @@ def init_repo(
 
     ci_path = {"github": ".github/workflows/kb.yml", "gitlab": ".gitlab-ci.yml", "none": None}[ci]
     existing: dict[str, bool] = {}
-    for rel in [".gitignore", "AGENTS.md", "CLAUDE.md", *CODEOWNERS_LOCATIONS, "kb/README.md", ".gitlab-ci.yml", ".github/workflows/kb.yml"]:
+    for rel in [".gitignore", "AGENTS.md", "CLAUDE.md", *CODEOWNERS_LOCATIONS, "kb/README.md", *CI_WORKFLOWS]:
         existing[rel] = _check_target(root, rel, "file")
     _check_target(root, "kb", "dir")
-    if ci_path == ".github/workflows/kb.yml":
+    if ci == "github":
         _check_target(root, ".github/workflows", "dir")
 
     codeowners_rel = next((p for p in CODEOWNERS_LOCATIONS if existing[p]), CODEOWNERS_DEFAULT)
@@ -236,21 +237,26 @@ def init_repo(
         issues.append(Issue("init.kept", "kb/README.md already exists and was left as is", "warning", path="kb/README.md"))
     else:
         files["kb/README.md"] = _template("kb_readme.md")
-    if ci_path:
+    ci_files = {
+        "github": {ci_path: "github_workflow.yml", CLAIMS_WORKFLOW: "github_claims_workflow.yml"},
+        "gitlab": {ci_path: "gitlab_ci.yml"},
+        "none": {},
+    }[ci]
+    for path, template in ci_files.items():
         ci_text = (
-            _template("github_workflow.yml" if ci == "github" else "gitlab_ci.yml")
+            _template(template)
             .replace("{{install_spec}}", install_spec or "")
             .replace("{{base}}", _base_branch(root))
         )
-        if existing[ci_path]:
+        if existing[path]:
             issues.append(Issue(
                 "init.ci_exists",
-                f"{ci_path} already exists and was left as is; add this to it:\n{ci_text}",
+                f"{path} already exists and was left as is; add this to it:\n{ci_text}",
                 "warning",
-                path=ci_path,
+                path=path,
             ))
         else:
-            files[ci_path] = ci_text
+            files[path] = ci_text
 
     # kb.config.yaml goes last: a failed run then leaves no config and `kb init` can simply be re-run
     order = sorted(files, key=lambda rel: (rel == "kb.config.yaml", rel))

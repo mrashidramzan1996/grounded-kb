@@ -42,12 +42,12 @@ kb version
 For CI, `kb init --install-spec 'grounded-kb==0.3.1'` (or the pinned git spec above) writes it into the workflow;
 without `--install-spec` the CI job only warns.
 
-The generated GitHub workflow has two jobs, so the approval gate never runs pull-request code. `kb-policy` runs
+The generated GitHub setup has two workflows (`kb.yml` and `kb-claims.yml`), so the approval gate never runs pull-request code. `kb-policy` runs
 `kb verify --base origin/<target> --skip-tests --comment` on pull requests: approvals, schema, stale context and the
 decision guard, with no dependency install and no project test (one updated comment, plus `.kb/cache/status.json` and
-`.kb/cache/verify.md` as an artifact; it holds `pull-requests: write`). `kb-claims` installs your project's test
+`.kb/cache/verify.md` as an artifact; it holds `pull-requests: write`). `kb-claims` (its own workflow, so a review run cannot cancel it into a skipped, passing job) installs your project's test
 dependencies, runs the tests and reports claim verification with `kb verify --base origin/<target> --forge none`
-(read-only token, no comment), and runs `kb verify --all` on the default branch. Keep `fetch-depth: 0` so the merge-base
+(read-only token, no comment), and runs `kb verify --all --forge none` on the default branch. Keep `fetch-depth: 0` so the merge-base
 exists. `kb verify --skip-tests` runs no project test: claims that need tests are `unverified` ("tests not run
 (--skip-tests)"), never broken.
 
@@ -66,7 +66,7 @@ branch, looked up by exact ref among local and remote-tracking branches only: a 
 like the branch's full ref), or a local branch and a remote one of that name at different commits, is an error
 (exit 2); delete the tag, or pass a full ref such as `refs/remotes/origin/main`. A change to `kb.config.yaml`, to a
 CODEOWNERS file (`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) or to the CI workflow that runs the check
-(`.github/workflows/kb.yml`, `.gitlab-ci.yml`) also needs the decision approvers; a rename counts as a change to both
+(`.github/workflows/kb.yml`, `.github/workflows/kb-claims.yml`, `.gitlab-ci.yml`) also needs the decision approvers; a rename counts as a change to both
 paths. With `kb verify --all` and a pull request, the policy comes from the branch the pull request targets (or
 the default branch); a base branch that cannot be found is an error (exit 2). Without a pull request and without a base the working
 tree's policy applies. Only when the target branch has no `kb.config.yaml` yet does the change's own policy apply, with
@@ -79,7 +79,7 @@ the target branch's CODEOWNERS.
   `kb-claims` runs the project's tests and reports claim verification; it runs pull-request code, so it is not the gate.
 - Enable "Require review from Code Owners" (GitLab: code owner approval) and give the CODEOWNERS lines `kb init`
   writes real owners, including the gate's own files (`/kb.config.yaml`, the CODEOWNERS locations,
-  `/.github/workflows/kb.yml`, `/.gitlab-ci.yml`): a pull request runs its own copy of the workflow, so only the
+  `/.github/workflows/kb.yml`, `/.github/workflows/kb-claims.yml`, `/.gitlab-ci.yml`): a pull request runs its own copy of the workflow, so only the
   forge's code-owner review stops one that edits the workflow to skip or weaken the check.
 - Restrict who can create tags (GitHub: a tag ruleset; GitLab: protected tags with `*`), so nobody can push a tag
   named like a branch. `kb verify` refuses such a tag (exit 2) rather than trusting it.
@@ -123,7 +123,7 @@ cannot read an `@org/team` approver's members, an approval by one of them no lon
   `owner_approval.deferred` warning, leaving the check to branch protection's required code-owner review).
 
 Also give the decision approvers CODEOWNERS lines for the CI workflow and the CODEOWNERS files themselves
-(`/.github/workflows/kb.yml`, `/.gitlab-ci.yml`, `/CODEOWNERS`, `/.github/CODEOWNERS`, `/docs/CODEOWNERS`; `kb init`
+(`/.github/workflows/kb.yml`, `/.github/workflows/kb-claims.yml`, `/.gitlab-ci.yml`, `/CODEOWNERS`, `/.github/CODEOWNERS`, `/docs/CODEOWNERS`; `kb init`
 does not rewrite an existing setup), and see the prerequisites under [Approvals](#approvals).
 
 ## Use (Phase 1)

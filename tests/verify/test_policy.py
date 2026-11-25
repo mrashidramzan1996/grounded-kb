@@ -259,28 +259,34 @@ def test_all_with_a_pull_request_still_needs_approval_for_policy_files(tmp_path)
 
 
 def test_default_branch_tag_shadow_refused(tmp_path):
+    """The default branch is `trunk`, so only origin/HEAD names it: the old code (git symbolic-ref --short, which
+    git turns into a different name once a tag origin/trunk exists) lost it and fell back to a hardcoded main."""
     from kb.gitfiles import default_branch_tip
 
     root = make_git_repo(None, tmp_path, {"README.md": "x\n"})
-    git(root, "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+    git(root, "branch", "-m", "main", "trunk")
+    git(root, "update-ref", "refs/remotes/origin/trunk", "refs/heads/trunk")
     git(root, "checkout", "-q", "-b", "work")
-    git(root, "branch", "-D", "main")  # a CI checkout: only origin/main, as the default branch
-    git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-    assert default_branch_tip(root) is not None
-    git(root, "tag", "origin/main", "HEAD")  # git abbreviates origin/HEAD's target differently once this exists
+    git(root, "branch", "-D", "trunk")  # a CI checkout: only origin/trunk, as the default branch
+    git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    assert default_branch_tip(root)[0] == "origin/trunk"
+    git(root, "tag", "origin/trunk", "HEAD")
     with pytest.raises(GitError, match="shadows the branch"):
         default_branch_tip(root)
 
 
-def test_unreadable_policy_file_counts_as_changed(tmp_path):
+@pytest.mark.parametrize("make", ["directory", "too_large"])
+def test_unreadable_policy_file_counts_as_changed(tmp_path, make):
+    """A policy file absent at the tip, present but unreadable in the working tree: read_regular says None (as for
+    an absent file), which compared equal to the tip's nothing."""
     from kb.verify.approvals import policy_files_changed
 
-    root = make_git_repo(None, tmp_path, {"kb.config.yaml": BASE_CONFIG, "CODEOWNERS": "* @a\n"})
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": BASE_CONFIG})
     tip = sha(root)
     assert policy_files_changed(root, tip) == []
-    (root / "CODEOWNERS").unlink()
-    (root / "CODEOWNERS").mkdir()  # exists, not a regular file
-    assert policy_files_changed(root, tip) == ["CODEOWNERS"]
-    (root / "CODEOWNERS").rmdir()
-    (root / "CODEOWNERS").write_bytes(b"x" * (2 * 1024 * 1024 + 1))  # too large to read
-    assert policy_files_changed(root, tip) == ["CODEOWNERS"]
+    (root / ".github").mkdir()
+    if make == "directory":
+        (root / ".github/CODEOWNERS").mkdir()
+    else:
+        (root / ".github/CODEOWNERS").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    assert policy_files_changed(root, tip) == [".github/CODEOWNERS"]

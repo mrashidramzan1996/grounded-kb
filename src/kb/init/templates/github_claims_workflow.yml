@@ -1,0 +1,50 @@
+name: kb-claims
+
+# Verifies claims by running the project's own tests: pull-request code. It holds no token, never posts and never reads
+# the forge; the approval gate is kb-policy in .github/workflows/kb.yml (the job to mark as a required status check).
+# A separate workflow, so a review run of kb.yml cannot cancel it into a skipped job.
+
+on:
+  pull_request:
+  push:
+    branches: [{{base}}]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "kb-claims-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  kb-claims:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      KB_INSTALL_SPEC: '{{install_spec}}'
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+      - if: env.KB_INSTALL_SPEC == ''
+        run: 'echo "::warning::kb: set the install spec in .github/workflows/kb-claims.yml — see kb/README.md"'
+      # install your project's test dependencies here (kb verify runs the tests that claims link to, with the project's own python)
+      # No token and --forge none: this job runs pull-request code, so it never posts and never reads the forge.
+      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'
+        run: uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --forge none
+      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
+        run: uvx --from "$KB_INSTALL_SPEC" kb verify --all --forge none
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kb-verify
+          path: |
+            .kb/cache/status.json
+            .kb/cache/verify.md
+          include-hidden-files: true
+          if-no-files-found: warn

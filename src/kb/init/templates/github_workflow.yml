@@ -16,11 +16,10 @@ concurrency:
   group: "kb-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
-# Two jobs, so the approval gate never runs pull-request code:
-#   kb-policy  checks approvals, schema, stale context and the decision guard. It installs no project dependency and
-#              runs no project test, so a pull request cannot reach the token that reads the forge and posts the comment.
-#   kb-claims  runs the project's tests (pull-request code) to verify claims. It has a read-only token, never posts,
-#              and never reads the forge.
+# The approval gate never runs pull-request code. kb-policy checks approvals, schema, stale context and the decision
+# guard: it installs no project dependency, runs no project test, and uses no cache, uv config or uv version the pull
+# request can influence, so a pull request cannot reach the token that reads the forge and posts the comment.
+# The project's tests (pull-request code) run in .github/workflows/kb-claims.yml, with no token.
 
 jobs:
   # Mark THIS job as the required status check (branch protection or a ruleset).
@@ -44,6 +43,11 @@ jobs:
           # kb does no authenticated git operation: leave no token in .git/config
           persist-credentials: false
       - uses: astral-sh/setup-uv@v5
+        with:
+          # the uv cache and the uv version are not the pull request's to choose: kb-claims runs PR code that could
+          # poison ~/.cache/uv, and setup-uv reads the version from the PR's pyproject.toml
+          enable-cache: false
+          version: "0.12.6"
       - if: env.KB_INSTALL_SPEC == ''
         run: 'echo "::warning::kb: set the install spec in .github/workflows/kb.yml — see kb/README.md"'
       # Honours policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
@@ -54,44 +58,17 @@ jobs:
           # kb.config.yaml on the default branch, or use a token that can read teams (read:org; e.g. a GitHub App
           # token with Members: read), or set policy.unreadable_teams: defer to leave it to code-owner review.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto
+          # uv reads uv.toml and pyproject.toml of the working directory (hence the runner temp dir, not the checkout),
+          # and its index, config and Python downloads would otherwise be configurable by the pull request
+          UV_NO_CONFIG: "1"
+          UV_INDEX_URL: https://pypi.org/simple
+          UV_PYTHON_DOWNLOADS: never
+        working-directory: ${{ runner.temp }}
+        run: uvx --from "$KB_INSTALL_SPEC" kb -C "$GITHUB_WORKSPACE" verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kb-policy
-          path: |
-            .kb/cache/status.json
-            .kb/cache/verify.md
-          include-hidden-files: true
-          if-no-files-found: warn
-
-  kb-claims:
-    if: github.event_name != 'pull_request_review'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      KB_INSTALL_SPEC: '{{install_spec}}'
-      BASE_REF: ${{ github.event.pull_request.base.ref }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
-      - if: env.KB_INSTALL_SPEC == ''
-        run: 'echo "::warning::kb: set the install spec in .github/workflows/kb.yml — see kb/README.md"'
-      # install your project's test dependencies here (kb verify runs the tests that claims link to, with the project's own python)
-      # No GITHUB_TOKEN and --forge none: this job runs pull-request code, so it never posts and never reads the forge.
-      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'
-        run: uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --forge none
-      - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
-        run: uvx --from "$KB_INSTALL_SPEC" kb verify --all
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kb-verify
           path: |
             .kb/cache/status.json
             .kb/cache/verify.md

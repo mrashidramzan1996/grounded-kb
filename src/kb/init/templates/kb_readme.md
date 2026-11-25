@@ -24,7 +24,7 @@ After the baseline, this is a pull request: the intent approvers sign off on sta
 
 ## CI
 
-`kb init` writes a CI job (`.github/workflows/kb.yml` or `.gitlab-ci.yml`) that runs `kb verify` on every pull request
+`kb init` writes a CI job (`.github/workflows/kb.yml` and `.github/workflows/kb-claims.yml`, or `.gitlab-ci.yml`) that runs `kb verify` on every pull request
 and `kb verify --all` on the default branch. It installs nothing until you set its install spec, `KB_INSTALL_SPEC`; until then the job
 only prints a warning. Use a spec you control and pin it:
 
@@ -33,8 +33,8 @@ only prints a warning. Use a spec you control and pin it:
 
 On GitHub the `kb-policy` job (the one to mark as a required check; it installs no dependency and runs no project test) posts (and updates) one comment and uploads `.kb/cache/status.json` and `.kb/cache/verify.md`
 as an artifact; the comment needs `permissions: pull-requests: write` (the template sets it). GitLab prints the Markdown to
-the job log and keeps both files as artifacts. Install your project's test dependencies before the verify step, because
-`kb verify` runs the linked tests with the project's own `python`. Keep `fetch-depth: 0` (`GIT_DEPTH: "0"` on GitLab):
+the job log and keeps both files as artifacts. Install your project's test dependencies in `kb-claims` (`.github/workflows/kb-claims.yml`) only, never in
+`kb-policy`, because `kb verify` runs the linked tests with the project's own `python` and `kb-policy` runs none. Keep `fetch-depth: 0` (`GIT_DEPTH: "0"` on GitLab):
 a shallow clone has no merge-base and `kb verify --base` exits 2. The GitHub job checks out the PR head
 (`ref: ${{ github.event.pull_request.head.sha }}`), not GitHub's test-merge commit, so the stale-context check sees
 the branch's real fork point; it also re-runs when a review is submitted or dismissed, so an approval clears
