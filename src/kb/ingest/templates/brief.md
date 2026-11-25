@@ -8,7 +8,7 @@ shape of the examples. The gates then check what you wrote: when you are done, r
 
 1. Draft one fact per requirement: one `kb/requirements/REQ-*.yaml` file per testable statement.
    Use `REQ-F-…` for functional and `REQ-NF-…` for non-functional requirements.
-2. Quote word for word from the cited segment. Every requirement, decision and invariant carries
+2. Quote word for word from the cited segment. Every requirement, exclusion, decision and invariant carries
    `evidence.quotes`; each quote names one segment (`source: SRC-…#seg-NN`) and its `text` must appear
    in that segment exactly as written. A quote that is not in its segment is rejected.
 3. Never invent numbers, targets or details. Every number in a statement must appear in one of its
@@ -22,6 +22,10 @@ shape of the examples. The gates then check what you wrote: when you are done, r
      requirement must later be confirmed by the user.
 4. Draft passages that record a choice as ADRs (`kb/decisions/ADR-*.md`) with quotes, and must-keep
    rules as INVs (`kb/invariants/INV-*.md`) with quotes.
+4b. Draft each statement that puts something out of scope (out of scope, not in this release, not supported) as an
+   exclusion, `kb/exclusions/EXCL-*.yaml`, with `statement`, `evidence.quotes` and the `modules:` or `features:` it
+   limits. An exclusion has no `modality`, `actor`, `category` or `origin`. Never triage such a segment
+   `none: out-of-scope`; name the EXCL id instead.
 5. Link each requirement to a module or feature (`modules:` or `features:`).
 6. Propose the modules the documents describe with
    `kb module add MOD-<name> --owner <@team|TODO> [--risk …]`, with no paths. Never guess paths;

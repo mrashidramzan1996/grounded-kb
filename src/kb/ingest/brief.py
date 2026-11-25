@@ -16,7 +16,7 @@ from kb.config.schema import KbConfig
 from kb.gitfiles import head_commit, is_ancestor, repo_files, rev_parse
 from kb.records.ids import valid_segment_id
 from kb.records.io import render_record
-from kb.records.models import Component, Decision, Feature, Invariant, Requirement, Source, Term
+from kb.records.models import Component, Decision, Exclusion, Feature, Invariant, Requirement, Source, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.sources.guard import has_injection
@@ -37,6 +37,7 @@ _NUMBERED = [
     ("Feature", "FEAT", 3),
     ("Decision", "ADR", 4),
     ("Invariant", "INV", 3),
+    ("Exclusion", "EXCL", 3),
 ]
 
 
@@ -157,6 +158,10 @@ def _example_records() -> list[tuple[str, bytes]]:
             evidence=quote("seg-05", "Sessions must be stored encrypted."), modules=["MOD-sessions"],
             modality="must", actor="the session store", category="security",
         )),
+        ("kb/exclusions/EXCL-002.yaml", Exclusion(
+            id="EXCL-002", drafted_by=by, statement="Gift cards are not supported in this release.",
+            evidence=quote("seg-09", "Gift cards are out of scope for this release."), modules=["MOD-billing"],
+        )),
         ("kb/features/FEAT-014.md", Feature(
             id="FEAT-014", drafted_by=by, title="Seat removal", module="MOD-billing", requirements=["REQ-F-034"],
             body="Administrators remove seats; a removed seat stays active until the end of the cycle.\n",
@@ -180,7 +185,7 @@ def _example_records() -> list[tuple[str, bytes]]:
     ]
     # origin defaults to stated, which render_record omits; the examples spell it out
     out = [(path, render_record(rec, keep=("origin",) if isinstance(rec, Requirement) else ())) for path, rec in records]
-    triage = {"segments": {"seg-01": "none: heading: document title", "seg-08": ["REQ-F-034"]}}
+    triage = {"segments": {"seg-01": "none: heading: document title", "seg-08": ["REQ-F-034"], "seg-09": ["EXCL-002"]}}
     out.append((f"kb/sources/{src}/triage.yaml", dump_yaml(triage).encode()))
     return out
 

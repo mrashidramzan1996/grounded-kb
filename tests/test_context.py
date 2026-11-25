@@ -274,3 +274,52 @@ def test_requirement_shows_classification_fields(acme_repo_drafted):
     data = {r["id"]: r for r in json.loads(render_pack(p, "json"))["requirements"]}
     assert data["REQ-NF-002"]["modality"] == "must" and data["REQ-NF-002"]["origin"] == "stated"
     assert data["REQ-NF-002"]["actor"] == "the billing system" and data["REQ-NF-002"]["category"] == "compliance"
+
+
+# --- exclusions (EXCL) -------------------------------------------------------------------------
+
+EXCL_DOC = "# Seats\n\nA seat costs 5 EUR.\n\n# Scope\n\nMobile apps are not part of the first release.\n"
+
+
+def excl_repo(tmp_path, modules="\n- MOD-a\n", features=""):
+    from helpers import TODO_CONFIG, make_git_repo, ok
+
+    config = TODO_CONFIG + "  - id: MOD-b\n    owner: \"@bob\"\n"
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": config, "docs/n.md": EXCL_DOC})
+    ok(root, "ingest")
+    write(root, "kb/exclusions/EXCL-001.yaml",
+          "id: EXCL-001\nstatement: Mobile apps are out of scope.\nevidence:\n  quotes:\n  - source: SRC-n#seg-02\n"
+          f"    text: Mobile apps are not part of the first release.\nmodules:{modules}{features}")
+    return root
+
+
+def test_cli_module_lists_exclusions_out_of_scope(tmp_path):
+    root = excl_repo(tmp_path)
+    r = invoke(root, "context", "--module", "MOD-a")
+    assert r.exit_code == 0, r.output
+    lines = r.stdout.splitlines()
+    at = lines.index("## Out of scope (live)")
+    assert lines[at + 1] == "[EXCL-001] exclusion, modules MOD-a: `Mobile apps are out of scope.`"
+    assert lines[at + 2] == "[EXCL-001] quote SRC-n#seg-02: `Mobile apps are not part of the first release.`"
+    assert all(CITES_ID.match(l) for l in body_lines(r.stdout))
+    data = json.loads(invoke(root, "context", "--module", "MOD-a", "--format", "json").stdout)
+    assert data["exclusions"] == [{
+        "id": "EXCL-001", "statement": "Mobile apps are out of scope.", "modules": ["MOD-a"], "features": [],
+        "quotes": [{"source": "SRC-n#seg-02", "text": "Mobile apps are not part of the first release."}],
+        "instruction_like": False,
+    }]
+    other = invoke(root, "context", "--module", "MOD-b")
+    assert other.exit_code == 0 and "EXCL-001" not in other.stdout and "Out of scope" not in other.stdout
+    assert json.loads(invoke(root, "context", "--module", "MOD-b", "--format", "json").stdout)["exclusions"] == []
+
+
+def test_exclusion_selected_by_feature_id_and_status(tmp_path):
+    root = excl_repo(tmp_path, modules=" []\n", features="features:\n- FEAT-001\n")
+    write(root, "kb/features/FEAT-001.md", "---\nid: FEAT-001\ntitle: Seats\nmodule: MOD-a\n---\nbody\n")
+    assert ids(governing(*args(root), features=["FEAT-001"]).exclusions) == ["EXCL-001"]
+    assert ids(governing(*args(root), modules=["MOD-a"]).exclusions) == ["EXCL-001"]  # through its feature's module
+    p = governing(*args(root), ids=["EXCL-001"])
+    assert ids(p.exclusions) == ["EXCL-001"] and p.modules == ["MOD-a"]
+    path = root / "kb/exclusions/EXCL-001.yaml"
+    path.write_text(path.read_text() + "status: rejected\n")
+    assert governing(*args(root), modules=["MOD-a"]).exclusions == []

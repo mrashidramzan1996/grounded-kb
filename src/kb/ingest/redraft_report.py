@@ -34,14 +34,14 @@ from kb.ingest.report import (
     tainted,
 )
 from kb.issues import Issue, issue_key
-from kb.records.ids import ADR_ID, INV_ID, REQ_ID, SOURCE_REF
+from kb.records.ids import ADR_ID, EXCL_ID, INV_ID, REQ_ID, SOURCE_REF
 from kb.records.lifecycle import live_ids
-from kb.records.models import Decision, Invariant, Requirement
+from kb.records.models import QUOTED_TYPES, Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.textfmt import inline_code
 
-_SELECTABLE = re.compile(rf"{REQ_ID}|{ADR_ID}|{INV_ID}")
+_SELECTABLE = re.compile(rf"{REQ_ID}|{EXCL_ID}|{ADR_ID}|{INV_ID}")
 _REF = re.compile(SOURCE_REF)
 _TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
 _BRIEF_BASE = re.compile(r"this brief was written at commit ([0-9a-f]+)\.")
@@ -62,7 +62,7 @@ class RedraftReport:
     sources: list[Issue] = field(default_factory=list)  # every source issue; its errors are also in `rejected`
     caused: list[Issue] = field(default_factory=list)  # new errors on records and files the redraft did not touch
     documents_changed: list[str] = field(default_factory=list)  # originals whose sha256 differs from base
-    drafted: list[str] = field(default_factory=list)  # new REQ/ADR/INV ids quoting only offered segments, with no rejection
+    drafted: list[str] = field(default_factory=list)  # new REQ/EXCL/ADR/INV ids quoting only offered segments, with no rejection
     segments: list[str] = field(default_factory=list)  # the segments new records may cite (REDRAFT_NEW)
 
 
@@ -134,10 +134,10 @@ def _superseding(head: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
 
 
 def _drafting(head: KbRepo, before: KbRepo, segments: set[str]) -> list[str]:
-    """New REQ/ADR/INV ids at head, superseding nothing, whose every quote cites one of `segments`."""
+    """New REQ/EXCL/ADR/INV ids at head, superseding nothing, whose every quote cites one of `segments`."""
     return sorted(
         rid for rid, rec in head.records.items()
-        if rid not in before.records and isinstance(rec, (Requirement, Decision, Invariant))
+        if rid not in before.records and isinstance(rec, QUOTED_TYPES)
         and not getattr(rec, "supersedes", None) and rec.evidence and rec.evidence.quotes
         and all(q.source in segments for q in rec.evidence.quotes)
     )
@@ -227,7 +227,7 @@ def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[
             issues.append(Issue("redraft.out_of_scope", f"{path} is not in this redraft; redraft only the listed records", path=path))
         elif at_base.get(path) not in selected and rid not in allowed:
             rec = head.records.get(rid)
-            new = rid not in before.records and isinstance(rec, (Requirement, Decision, Invariant))
+            new = rid not in before.records and isinstance(rec, QUOTED_TYPES)
             if new and (old := getattr(rec, "supersedes", None)):
                 why = f"supersedes {old}, which is not in this redraft"
             elif new:

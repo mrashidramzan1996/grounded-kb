@@ -1,6 +1,6 @@
 """`kb trace`: record -> quote -> segment (heading, page) -> original file, with every quote re-checked.
 
-`SRC-…#seg-NN` lists every requirement, decision and invariant whose quotes cite that segment.
+`SRC-…#seg-NN` lists every requirement, exclusion, decision and invariant whose quotes cite that segment.
 """
 
 from pathlib import Path
@@ -9,8 +9,10 @@ from kb.gates.quotes import quote_results, too_short
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import superseded_by
 from kb.records.models import (
+    QUOTED_TYPES,
     Component,
     Decision,
+    Exclusion,
     Feature,
     Invariant,
     Quote,
@@ -40,8 +42,11 @@ def _summary(rec) -> tuple[str, str]:
         return "feature", rec.title
     if isinstance(rec, Component):
         return "component", rec.title
-    assert isinstance(rec, Term)
-    return "term", rec.name
+    if isinstance(rec, Term):
+        return "term", rec.name
+    if isinstance(rec, Exclusion):
+        return "exclusion", rec.statement
+    raise TraceError(f"no trace summary for record type {type(rec).__name__}")
 
 
 def _state(repo: KbRepo, gone: dict[str, str], rid: str) -> str:
@@ -96,7 +101,7 @@ def _segment_chain(repo: KbRepo, ref: str) -> tuple[list[str], bool]:
         raise TraceError(f"unknown segment {ref}")
     lines, ok, gone = _segment_lines(repo, ref, seg), True, superseded_by(repo)
     for rid, rec in sorted(repo.records.items()):
-        if not isinstance(rec, (Requirement, Decision, Invariant)) or rec.evidence is None:
+        if not isinstance(rec, QUOTED_TYPES) or rec.evidence is None:
             continue
         for q in rec.evidence.quotes:
             if q.source == ref:

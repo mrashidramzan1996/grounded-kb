@@ -43,8 +43,9 @@ def test_next_ids(acme_repo):
     invoke(acme_repo, "ingest", "docs/")
     assert "REQ-F-001" in brief_of(acme_repo) and "ADR-0001" in brief_of(acme_repo)
     ids = _section(brief_of(acme_repo), "## Next free IDs")
-    for first in ("REQ-F-001", "REQ-NF-001", "FEAT-001", "ADR-0001", "INV-001"):
+    for first in ("REQ-F-001", "REQ-NF-001", "FEAT-001", "ADR-0001", "INV-001", "EXCL-001"):
         assert first in ids
+    assert "- Exclusion: EXCL-001" in ids
 
 
 def test_next_ids_follow_existing_records(acme_repo):
@@ -54,9 +55,11 @@ def test_next_ids_follow_existing_records(acme_repo):
     _write(acme_repo, Decision(id="ADR-0012", title="t", governs=["MOD-a"], body="b\n"))
     _write(acme_repo, Invariant(id="INV-1234", statement="s", governs=["MOD-a"]))
     (acme_repo / "kb/requirements/REQ-NF-004.yaml").write_text("not: a valid record\n")  # still takes the id
+    (acme_repo / "kb/exclusions").mkdir()
+    (acme_repo / "kb/exclusions/EXCL-0009.yaml").write_text("not: a valid record\n")
     invoke(acme_repo, "ingest", "docs/")
     ids = _section(brief_of(acme_repo), "## Next free IDs")
-    for nxt in ("REQ-F-008", "REQ-NF-005", "FEAT-001", "ADR-0013", "INV-1235"):
+    for nxt in ("REQ-F-008", "REQ-NF-005", "FEAT-001", "ADR-0013", "INV-1235", "EXCL-0010"):
         assert nxt in ids
     assert "REQ-F-001" not in ids and "ADR-0001" not in ids
 
@@ -81,7 +84,8 @@ def test_examples_are_valid_records_of_each_type(acme_repo):
     examples = _section(brief_of(acme_repo), "## Examples")
     blocks = re.findall(r"^#### (kb/\S+)\n\n(`{3,})\w+\n(.*?)\n\2$", examples, re.M | re.S)
     names = [path for path, _, _ in blocks]
-    for prefix in ("requirements/REQ-", "features/FEAT-", "decisions/ADR-", "invariants/INV-", "components/COMP-", "glossary/TERM-"):
+    for prefix in ("requirements/REQ-", "exclusions/EXCL-", "features/FEAT-", "decisions/ADR-", "invariants/INV-", "components/COMP-",
+                   "glossary/TERM-"):
         assert any(n.startswith(f"kb/{prefix}") for n in names), prefix
     assert any(n.endswith("/triage.yaml") for n in names)
     for path, _, text in blocks:
@@ -223,3 +227,12 @@ def test_redraft_templates_teach_the_fields():
         text = (templates / name).read_text()
         assert "3b." in text and "modality" in text and "origin" in text
     assert "keep or add the four fields" in (templates / "redraft_records.md").read_text()
+
+
+def test_brief_teaches_exclusions(acme_repo):
+    invoke(acme_repo, "ingest", "docs/")
+    brief = brief_of(acme_repo)
+    rules = _section(brief, "## The rules")
+    assert "`kb/exclusions/EXCL-*.yaml`" in rules and "out of scope" in rules
+    example = _section(brief, "## Examples").split("#### kb/exclusions/EXCL-002.yaml", 1)[1].split("####", 1)[0]
+    assert "evidence:" in example and "modality" not in example

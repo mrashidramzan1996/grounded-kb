@@ -10,6 +10,7 @@ class RecordType(str, Enum):
     CLAIM = "claim"
     DECISION = "decision"
     INVARIANT = "invariant"
+    EXCLUSION = "exclusion"
     COMPONENT = "component"
     TERM = "term"
 
@@ -28,6 +29,7 @@ FEAT_ID = r"FEAT-\d{3,}"
 CLAIM_ID = rf"{FEAT_ID}\.C\d+"
 ADR_ID = r"ADR-\d{4,}"
 INV_ID = r"INV-\d{3,}"
+EXCL_ID = r"EXCL-\d{3,}"
 COMP_ID = r"COMP-[a-z0-9][a-z0-9-]*"
 TERM_ID = r"TERM-[a-z0-9][a-z0-9-]*"
 
@@ -38,6 +40,7 @@ _PATTERNS: list[tuple[RecordType, re.Pattern[str]]] = [
     (RecordType.FEATURE, re.compile(rf"(?P<id>{FEAT_ID})")),
     (RecordType.DECISION, re.compile(rf"(?P<id>{ADR_ID})")),
     (RecordType.INVARIANT, re.compile(rf"(?P<id>{INV_ID})")),
+    (RecordType.EXCLUSION, re.compile(rf"(?P<id>{EXCL_ID})")),
     (RecordType.COMPONENT, re.compile(rf"(?P<id>{COMP_ID})")),
     (RecordType.TERM, re.compile(rf"(?P<id>{TERM_ID})")),
 ]

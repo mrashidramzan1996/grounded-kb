@@ -5,7 +5,7 @@ from kb.config.validate import resolve_owner
 from kb.gates.base import GateContext
 from kb.issues import Issue
 from kb.records.lifecycle import supersede_edges
-from kb.records.models import Component, Decision, Evidence, Feature, Invariant, Requirement
+from kb.records.models import QUOTED_TYPES, Component, Decision, Evidence, Exclusion, Feature, Invariant, Requirement
 from kb.records.repo import KbRepo
 
 
@@ -30,7 +30,7 @@ def _ref_problems(rec, ctx: GateContext) -> Iterator[str]:
         if r not in repo.records:
             yield f"{r} does not exist"
 
-    if isinstance(rec, Requirement):
+    if isinstance(rec, (Requirement, Exclusion)):
         for f in rec.features:
             yield from record(f)
         for m in rec.modules:
@@ -46,7 +46,7 @@ def _ref_problems(rec, ctx: GateContext) -> Iterator[str]:
     if isinstance(rec, (Decision, Invariant)):
         for g in rec.governs:
             yield from module(g) if g.startswith("MOD-") else record(g)
-    if isinstance(rec, (Requirement, Decision, Invariant)):
+    if isinstance(rec, QUOTED_TYPES):
         yield from _evidence_refs(rec.evidence, repo)
 
 

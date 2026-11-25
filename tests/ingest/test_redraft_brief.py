@@ -198,3 +198,36 @@ def test_cli_changed_nothing_suggests_base(md_repo_ingested):
     assert "nothing to redraft; if you already committed the sync, pass --base <commit before it>" in r.stderr
     r = invoke(md_repo_ingested, "redraft", "--changed", "--base", "HEAD")
     assert r.exit_code == 0 and r.stderr.strip() == "nothing to redraft"
+
+
+EXCL_YAML = (
+    "id: EXCL-001\nstatement: Seats are out of scope.\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n"
+    f"    text: {QUOTE}\n"
+)
+
+
+def test_redraft_accepts_an_exclusion(md_repo_ingested):
+    root = md_repo_ingested
+    put(root, "kb/exclusions/EXCL-001.yaml", EXCL_YAML)
+    repo = KbRepo.load(root)
+    sel = select(repo, ["EXCL-001"], flagged_=False, changed=False, before=None)
+    assert sel == {"EXCL-001": ["named"]}
+    brief = build_redraft_brief(root, repo, sel, "abc")
+    assert "## EXCL-001" in brief and "Current file `kb/exclusions/EXCL-001.yaml`:" in brief and QUOTE in brief
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "exclusion")
+    r = invoke(root, "redraft", "EXCL-001")
+    assert r.exit_code == 0, r.output
+    assert (root / REDRAFT_IDS).read_text() == "EXCL-001\n"
+    put(root, "kb/exclusions/EXCL-001.yaml", EXCL_YAML.replace("Seats are out of scope.", "Seats are not in scope."))
+    r = invoke(root, "redraft", "--report")
+    assert "Selection: EXCL-001" in r.stdout and "- EXCL-001" in r.stdout.split("## Redrafted", 1)[1].split("##", 1)[0]
+
+
+def test_changed_text_selects_a_citing_exclusion(md_repo_ingested):
+    root = md_repo_ingested
+    put(root, "kb/exclusions/EXCL-001.yaml", EXCL_YAML)
+    before = KbRepo.load(root)
+    sync(root, "# Seats\n\nA seat costs 7 EUR.\n")
+    got = select(KbRepo.load(root), [], flagged_=False, changed=True, before=before)
+    assert got == {"EXCL-001": ["cites changed text SRC-n#seg-01", "quote not found SRC-n#seg-01"]}

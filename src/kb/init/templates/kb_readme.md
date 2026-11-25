@@ -68,6 +68,7 @@ then passes is reported as flaky.
 | --- | --- |
 | `kb/sources/SRC-<name>/` | Stored documents: `source.yaml`, `text.md`, `segments.jsonl`, `triage.yaml`. Written by `kb`; never edit. |
 | `kb/requirements/REQ-*.yaml` | Requirements. |
+| `kb/exclusions/EXCL-*.yaml` | Scope exclusions: what the documents put out of scope. |
 | `kb/features/FEAT-*.md` | Features: YAML front matter plus a Markdown body. |
 | `kb/decisions/ADR-*.md` | Architecture decisions. |
 | `kb/invariants/INV-*.md` | Invariants. |
@@ -98,6 +99,21 @@ origin: stated         # stated | implied (implied needs a confirming quote from
 
 `kb check` warns `requirement.fields_missing` (modality, actor or category absent), `requirement.modality_mismatch` (the quote's rule word differs from `modality`), and `requirement.implied_unconfirmed`. For a requirement drafted in the current ingest or redraft range, the first two are errors.
 
+Exclusion (`EXCL-001.yaml`): a statement the documents put out of scope, quoted like a requirement.
+
+```yaml
+id: EXCL-001
+statement: Mobile apps are out of scope for the first release.
+evidence:
+  quotes:
+    - source: SRC-pricing-spec-v3#seg-09
+      text: Mobile apps are out of scope for the first release.   # verbatim
+modules: [MOD-billing] # optional
+features: [FEAT-001]   # optional
+```
+
+An exclusion has no `modality`, `actor`, `category` or `origin`. Its quotes are checked like a requirement's, the sentences it quotes count as covered, `kb context` lists it under "Out of scope" for its modules and features, and `kb redraft` can redraft it in place. Record an out-of-scope segment as an exclusion rather than triaging it `none: out-of-scope`.
+
 Feature (`FEAT-001.md`): front matter with `id`, `title`, `module`, `requirements`, `claims` (each `id`, `claim`, and optional `requirement`, `code`, `test`); the Markdown body follows.
 
 Decision (`ADR-0001.md`): front matter with `id`, `title`, `governs` (module or record ids), `evidence`, optional `decided_by`, `revisit_when`, `supersedes`; the reasoning is the body. An accepted decision is never edited: to change it, add a new decision whose `supersedes` names it.
@@ -108,7 +124,7 @@ A decision or invariant drafted from documents (`drafted_by` set) must quote the
 
 Quotes must be verbatim and aligned to word and number boundaries: `seat` does not match inside `seats`, nor `2` inside `25`. A quote shorter than 12 non-space characters is rejected (`quote.too_short`). `evidence.mode` is `all` by default (every quote must be found); with `mode: any` an unfound quote is only a warning (`quote.not_found`) while at least one quote is found, and an error when none is.
 
-Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/features/`, `kb/glossary/` and every `kb/sources/SRC-<name>/triage.yaml`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
+Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/exclusions/`, `kb/features/`, `kb/glossary/` and every `kb/sources/SRC-<name>/triage.yaml`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
 
 Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`.
 
@@ -125,7 +141,7 @@ segments:
   seg-03: "none: background"
 ```
 
-- The reason codes are `heading`, `background`, `contact`, `boilerplate`, `example`, `duplicate`, `out-of-scope` and `other`, written `none: <code>[: free text]`. A `none:` reason without a code is the warning `triage.none_uncoded`. `out-of-scope` is the warning `triage.use_exclusion`: record the exclusion as an `EXCL` record instead.
+- The reason codes are `heading`, `background`, `contact`, `boilerplate`, `example`, `duplicate`, `out-of-scope` and `other`, written `none: <code>[: free text]`. A `none:` reason without a code is the warning `triage.none_uncoded`. `out-of-scope` is the warning `triage.use_exclusion`: record the exclusion as an `EXCL` record (`kb/exclusions/EXCL-NNN.yaml`) instead.
 - A list must name at least one live record with a quote found in that segment: a requirement, decision or invariant, or a feature whose linked requirement (or a claim's) has one. A quote that is not found, too short, or on a rejected or superseded record does not count. Otherwise `kb check` warns `triage.not_quoted`. Glossary terms and components in a list are not checked yet.
 - `kb check` reports both as warnings, so an older knowledge base keeps passing. The ingest and redraft reports make them errors when the issue is new since the base. That covers an entry written or changed in the range, and also an unchanged entry whose record stopped quoting the segment, which the ingest report lists under "Caused by this change". An entry committed before the range with the same problem stays a warning. One exception: in a redraft, a list that stops being quoted only because a selected record now quotes another segment stays a warning. For a `triage.yaml` that existed at the base, Flagged shows only the warnings that are new since the base; a triage file written in the range shows all of them.
 - A change to a `triage.yaml` needs the intent approvers (`triage of SRC-<name> changed`): a `none:` entry says that a part of a document holds no product intent.

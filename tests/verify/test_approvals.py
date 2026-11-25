@@ -392,7 +392,7 @@ def test_empty_approver_groups_with_changed_records_warn_once(tmp_path):
     warnings = no_approver_warnings(empty, head, base, files, [])
     assert [(i.code, i.severity, i.message) for i in warnings] == [
         ("owner_approval.no_approvers", "warning", "intent approvers are empty in the approval policy; changes to "
-         "requirements, features, glossary terms and triage need no approval"),
+         "requirements, exclusions, features, glossary terms and triage need no approval"),
         ("owner_approval.no_approvers", "warning", "decisions approvers are empty in the approval policy; changes to "
          "decisions, invariants and components need no approval"),
     ]
@@ -420,3 +420,22 @@ def test_triage_change_needs_intent_approvers(tmp_path):
     assert required_owners(tmp_path, cfg(), repo_of({text: b"x"}), repo_of({}), changes(text), []) == {}
     empty = cfg(policy={"approvers": {"intent": [], "decisions": ["@arch"]}})
     assert [i.code for i in no_approver_warnings(empty, head, base, changes(path), [])] == ["owner_approval.no_approvers"]
+
+
+EXCL = b"id: EXCL-001\nstatement: S\nevidence:\n  quotes:\n  - source: SRC-a#seg-01\n    text: Some quoted text.\nmodules: [MOD-a]\n"
+
+
+def test_exclusion_change_requires_intent_approvers(tmp_path):
+    from kb.verify.approvals import no_approver_warnings
+
+    path = "kb/exclusions/EXCL-001.yaml"
+    head = _only(path, EXCL)
+    assert required_owners(tmp_path, cfg(), head, None, changes(), []) == {"@pm": ["exclusion EXCL-001 changed"]}
+    base = repo_of({path: EXCL.replace(b"statement: S", b"statement: Was")})
+    assert required_owners(tmp_path, cfg(), head, base, changes(path), []) == {"@pm": ["exclusion EXCL-001 changed"]}
+    # one that does not parse is routed by its directory
+    broken = repo_of({path: b"id: [\n"})
+    assert required_owners(tmp_path, cfg(), broken, repo_of({}), changes(path), []) == {"@pm": [f"{path} changed"]}
+    (w,) = no_approver_warnings(policy_cfg(intent=[]), head, repo_of({}), changes(path), [])
+    assert w.message == ("intent approvers are empty in the approval policy; changes to requirements, exclusions, features, "
+                         "glossary terms and triage need no approval")

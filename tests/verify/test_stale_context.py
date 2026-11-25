@@ -104,3 +104,13 @@ def test_test_merge_checkout_hides_stale_context(forked):
     assert run(forked) == []
     git(forked, "checkout", "feature")  # the PR head, as the template checks out
     assert [i.record for i in run(forked)] == ["ADR-0041"]
+
+
+def test_exclusion_landed_after_fork_is_stale_context(forked):
+    quote = next(q for r in KbRepo.load(forked).records.values() if getattr(r, "evidence", None) for q in r.evidence.quotes)
+    git(forked, "checkout", "main")
+    commit(forked, "kb/exclusions/EXCL-001.yaml",
+           f"id: EXCL-001\nstatement: Out of scope.\nevidence:\n  quotes:\n  - source: {quote.source}\n"
+           f"    text: {quote.text!r}\nmodules:\n- MOD-billing\n", "add EXCL-001")
+    git(forked, "checkout", "feature")
+    assert [(i.code, i.record) for i in run(forked)] == [("stale_context", "EXCL-001")]

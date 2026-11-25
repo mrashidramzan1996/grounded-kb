@@ -231,7 +231,7 @@ def ingest(
 @app.command()
 def redraft(
     ctx: typer.Context,
-    ids: Annotated[list[str] | None, typer.Argument(help="Record ids (REQ-*, ADR-*, INV-*) to redraft.")] = None,
+    ids: Annotated[list[str] | None, typer.Argument(help="Record ids (REQ-*, EXCL-*, ADR-*, INV-*) to redraft.")] = None,
     flagged: Annotated[bool, typer.Option("--flagged", help="Also select live requirements with flags.")] = False,
     changed: Annotated[bool, typer.Option("--changed", help="Also select records citing changed text or with a quote not found, and offer changed text no record cites.")] = False,
     new: Annotated[bool, typer.Option("--new", help="Also offer the segments with no triage entry, to draft new records from.")] = False,
@@ -556,7 +556,7 @@ def context(
     brief: Annotated[bool, typer.Option("--session-brief", help="What a coding agent gets at session start.")] = False,
     format: Annotated[str, typer.Option("--format", help="md or json.")] = "md",
 ) -> None:
-    """Print the live requirements, decisions and invariants governing what you are about to touch."""
+    """Print the live requirements, exclusions, decisions and invariants governing what you are about to touch."""
     given = [bool(paths), bool(module), bool(feature), bool(id), changed, brief]
     if sum(given) != 1:
         typer.echo("give exactly one of --paths, --module, --feature, --id, --changed or --session-brief", err=True)

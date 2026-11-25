@@ -88,8 +88,8 @@ def test_codeowners_block_covers_every_record_dir(tmp_path):
     repo = make_git_repo(None, tmp_path)
     init_repo(repo)
     text = (repo / "CODEOWNERS").read_text()
-    for p in ("/kb/requirements/", "/kb/features/", "/kb/glossary/", "/kb/sources/*/triage.yaml", "/kb/decisions/",
-              "/kb/invariants/", "/kb/components/", "/kb.config.yaml"):
+    for p in ("/kb/requirements/", "/kb/exclusions/", "/kb/features/", "/kb/glossary/", "/kb/sources/*/triage.yaml",
+              "/kb/decisions/", "/kb/invariants/", "/kb/components/", "/kb.config.yaml"):
         assert f"# {p} " in text
 
 

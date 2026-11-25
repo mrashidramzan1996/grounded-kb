@@ -77,3 +77,31 @@ def test_trace_mode_any_marks_quote_but_record_is_found(acme_repo_drafted):
     assert ok and any("QUOTE NOT FOUND" in l for l in lines)
     path.write_text(text.replace('text: "No refund is given."', 'text: "Also not in the document."'))
     assert not trace_chain(acme_repo_drafted, "REQ-F-002")[1]
+
+
+def test_trace_exclusion_shows_its_quote(tmp_path):
+    from helpers import TODO_CONFIG, make_git_repo, ok
+
+    doc = "# Seats\n\nA seat costs 5 EUR.\n\n# Scope\n\nMobile apps are not part of the first release.\n"
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": TODO_CONFIG, "docs/n.md": doc})
+    ok(root, "ingest")
+    write(root, "kb/exclusions/EXCL-001.yaml",
+          "id: EXCL-001\nstatement: Mobile apps are out of scope.\nevidence:\n  quotes:\n  - source: SRC-n#seg-02\n"
+          "    text: Mobile apps are not part of the first release.\nmodules:\n- MOD-a\n")
+    lines, found = trace_chain(root, "EXCL-001")
+    assert found
+    assert lines[0] == "[EXCL-001] exclusion (live): `Mobile apps are out of scope.`"
+    assert lines[1].startswith("[EXCL-001] quote `Mobile apps are not part of the first release.` found in SRC-n#seg-02")
+    seg = trace(root, "SRC-n#seg-02")
+    assert any(l.startswith("[EXCL-001] exclusion (live) quote ") for l in seg)
+    r = invoke(root, "trace", "EXCL-001")
+    assert r.exit_code == 0 and "Mobile apps are not part of the first release." in r.stdout
+
+
+def test_trace_summary_rejects_unknown_record_types():
+    import pytest
+
+    from kb.trace import TraceError, _summary
+
+    with pytest.raises(TraceError, match="no trace summary for record type object"):
+        _summary(object())

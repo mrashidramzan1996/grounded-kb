@@ -6,7 +6,8 @@ record cites them.
 1. Draft only from these segments: every quote of a new record cites one of them.
 2. Draft one fact per requirement: one `kb/requirements/REQ-*.yaml` file per testable statement
    (`REQ-F-…` functional, `REQ-NF-…` non-functional), linked to a module or feature. Draft a passage that
-   records a choice as an ADR, and a must-keep rule as an INV, each with quotes.
+   records a choice as an ADR, a must-keep rule as an INV, and a statement that puts something out of scope as an
+   exclusion (`kb/exclusions/EXCL-*.yaml`: `statement`, `evidence.quotes`, `modules:` or `features:`), each with quotes.
 3. Quote word for word from the segment: its `text` must appear in that segment exactly as written.
 3b. Give every requirement `modality`, `actor` (who it binds), `category` for REQ-NF, and `origin`:
    - `modality` is `must` (must, shall, required, is to), `must_not` (must not, shall not, never, no X is, prohibited,

@@ -26,7 +26,7 @@ from kb.gates.triage import triage_gate
 from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.issues import Issue, issue_key, new_since
-from kb.records.models import Decision, Invariant, Requirement
+from kb.records.models import QUOTED_TYPES, Decision, Invariant
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
 
@@ -124,7 +124,7 @@ def citers(repo: KbRepo, src_ids: set[str]) -> list[tuple[str, str]]:
     """(record id, source) for records whose evidence cites one of `src_ids`."""
     out = []
     for rid, rec in sorted(repo.records.items()):
-        if isinstance(rec, (Requirement, Decision, Invariant)) and rec.evidence:
+        if isinstance(rec, QUOTED_TYPES) and rec.evidence:
             cited = sorted({q.source.partition("#")[0] for q in rec.evidence.quotes} & src_ids)
             out.extend((rid, src) for src in cited)
     return out

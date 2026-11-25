@@ -11,7 +11,7 @@ from kb.records.repo import KbRepo
 
 
 def _governing_ids(pack: ContextPack) -> set[str]:
-    ids = {r.id for r in (*pack.decisions, *pack.invariants, *pack.requirements)}
+    ids = {r.id for r in (*pack.decisions, *pack.invariants, *pack.requirements, *pack.exclusions)}
     return ids | set(pack.claim_features.values())
 
 

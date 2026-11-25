@@ -5,13 +5,13 @@ from kb.gates.quotes import located_quotes
 from kb.gates.sources import bad_segment_ids
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
-from kb.records.models import Decision, Invariant, Requirement
+from kb.records.models import Decision, Exclusion, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.sources.sentences import Sentence, is_normative, sentence_key, sentences
 from kb.textfmt import inline_code
 
-# the record types whose quotes cover a sentence (Task 5 adds Exclusion); entity and relation quotes never do
-COVERING_TYPES: tuple[type, ...] = (Requirement, Decision, Invariant)
+# the record types whose quotes cover a sentence; entity and relation quotes never do
+COVERING_TYPES: tuple[type, ...] = (Requirement, Exclusion, Decision, Invariant)
 Span = tuple[int, int, str]  # [start, end) in the source's text.md, and the record id
 
 

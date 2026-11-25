@@ -21,6 +21,7 @@ CODEOWNERS_LOCATIONS = ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]
 CODEOWNERS_DEFAULT = "CODEOWNERS"
 _APPROVAL_PATHS = [
     "/kb/requirements/",
+    "/kb/exclusions/",
     "/kb/features/",
     "/kb/glossary/",
     "/kb/sources/*/triage.yaml",
@@ -109,7 +110,7 @@ def _render_config(modules: list[dict[str, str]], has_docs: bool) -> str:
         "  # warn-only: `kb check` reports problems but exits 0. Switch to `enforce` once the KB is trusted.",
         "  mode: warn-only",
         "  approvers:",
-        "    # TODO: forge handles (e.g. \"@acme/product\") that approve intent (requirements, features)...",
+        "    # TODO: forge handles (e.g. \"@acme/product\") that approve intent (requirements, exclusions, features)...",
         "    intent: [TODO]",
         "    # TODO: ...and decisions (ADRs, invariants).",
         "    decisions: [TODO]",

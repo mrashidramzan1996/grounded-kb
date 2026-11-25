@@ -5,7 +5,16 @@ from kb.gates.base import GateContext
 from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
-from kb.records.models import Decision, Evidence, Feature, Invariant, Quote, Requirement
+from kb.records.models import (
+    QUOTED_TYPES,
+    Decision,
+    Evidence,
+    Exclusion,
+    Feature,
+    Invariant,
+    Quote,
+    Requirement,
+)
 from kb.records.repo import KbRepo
 from kb.sources.sentences import cues
 from kb.textfmt import inline_code
@@ -22,7 +31,7 @@ def numbers(text: str) -> set[str]:
     return {m.group().replace(",", "").rstrip(".") for m in _NUMBER.finditer(_ID_LIKE.sub(" ", text))}
 
 
-def _claimed_text(rec: Requirement | Decision | Invariant) -> str:
+def _claimed_text(rec: Requirement | Exclusion | Decision | Invariant) -> str:
     """What the record asserts, whose numbers its quotes must contain."""
     return f"{rec.title}\n{rec.body}" if isinstance(rec, Decision) else rec.statement
 
@@ -121,7 +130,7 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
     live = live_ids(repo)
     issues.extend(feature_number_issues(repo))
     for rid, rec in sorted(repo.records.items()):
-        if not isinstance(rec, (Requirement, Decision, Invariant)):
+        if not isinstance(rec, QUOTED_TYPES):
             continue
         path = repo.paths[rid]
         ev = rec.evidence

@@ -7,6 +7,7 @@ from kb.records.ids import (
     ADR_ID,
     CLAIM_ID,
     COMP_ID,
+    EXCL_ID,
     FEAT_ID,
     INV_ID,
     REQ_ID,
@@ -76,6 +77,16 @@ class Requirement(_Record):
         if not self.features and not self.modules:
             raise ValueError("a requirement needs at least one feature or module (A-10)")
         return self
+
+
+class Exclusion(_Record):
+    """A scope exclusion: an "out of scope" statement, quoted like a requirement. It covers the sentences it quotes."""
+
+    id: str = Field(pattern=rf"^{EXCL_ID}$")
+    statement: str
+    evidence: Evidence
+    modules: list[str] = []
+    features: list[str] = []
 
 
 class FeatureClaim(_Model):
@@ -191,4 +202,6 @@ class Triage(_Model):
         return v
 
 
-Record = Requirement | Feature | Decision | Invariant | Component | Term
+Record = Requirement | Exclusion | Feature | Decision | Invariant | Component | Term
+# the record types whose evidence.quotes the quote gate checks
+QUOTED_TYPES: tuple[type, ...] = (Requirement, Exclusion, Decision, Invariant)

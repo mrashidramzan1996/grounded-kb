@@ -17,7 +17,7 @@ from kb.sources.segment import Segment
 from kb.yamlio import YamlError, load_yaml_strict
 
 _RECORD_FILE = re.compile(
-    r"kb/(?:requirements/REQ-[^/]+\.yaml|features/FEAT-[^/]+\.md|decisions/ADR-[^/]+\.md"
+    r"kb/(?:requirements/REQ-[^/]+\.yaml|exclusions/EXCL-[^/]+\.yaml|features/FEAT-[^/]+\.md|decisions/ADR-[^/]+\.md"
     r"|invariants/INV-[^/]+\.md|components/COMP-[^/]+\.md|glossary/TERM-[^/]+\.yaml)"
 )
 _SOURCE_FILE = re.compile(r"kb/sources/(SRC-[^/]+)/(source\.yaml|text\.md|segments\.jsonl|triage\.yaml)")

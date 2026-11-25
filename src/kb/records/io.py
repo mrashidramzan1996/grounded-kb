@@ -7,6 +7,7 @@ from pydantic import BaseModel, ValidationError
 from kb.records.models import (
     Component,
     Decision,
+    Exclusion,
     Feature,
     Invariant,
     Record,
@@ -23,6 +24,7 @@ class RecordError(ValueError):
 # file-name prefix -> (model, extension); .md records carry a free-text body
 _BY_PREFIX: dict[str, tuple[type[BaseModel], str]] = {
     "REQ-": (Requirement, ".yaml"),
+    "EXCL-": (Exclusion, ".yaml"),
     "TERM-": (Term, ".yaml"),
     "FEAT-": (Feature, ".md"),
     "ADR-": (Decision, ".md"),

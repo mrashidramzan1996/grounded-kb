@@ -16,7 +16,14 @@ from kb.config.validate import modules_for
 from kb.gitfiles import changed_files
 from kb.markers import evidence_files, scan_markers
 from kb.records.lifecycle import live_ids, superseded_by
-from kb.records.models import Decision, Feature, FeatureClaim, Invariant, Requirement
+from kb.records.models import (
+    Decision,
+    Exclusion,
+    Feature,
+    FeatureClaim,
+    Invariant,
+    Requirement,
+)
 from kb.records.repo import KbRepo
 from kb.rules import AGENT_RULES
 from kb.sources.guard import has_injection
@@ -44,6 +51,7 @@ class ContextPack:
     claims: list[FeatureClaim]
     requirements: list[Requirement]
     status: dict[str, str]
+    exclusions: list[Exclusion] = field(default_factory=list)  # live scope exclusions, selected like requirements
     module_cfgs: dict[str, ModuleCfg] = field(default_factory=dict)
     claim_features: dict[str, str] = field(default_factory=dict)  # claim id -> feature id
     flagged: frozenset[str] = frozenset()  # ids whose text or cited segments look like instructions
@@ -61,7 +69,17 @@ class _Index:
         self.features = {r.id: r for r in repo.records.values() if isinstance(r, Feature)}
         self.claims = {c.id: (f, c) for f, c in repo.claims() if f.id in self.live}
         self.req_modules = requirement_modules(config, repo)
+        self.excl_modules = self._exclusion_modules()
         self.status = requirement_status(self.root, config, repo)
+
+    def _exclusion_modules(self) -> dict[str, list[str]]:
+        """Configured modules per exclusion (its own plus its features'), in config order, as for requirements."""
+        out = {}
+        for rid, rec in self.repo.records.items():
+            if isinstance(rec, Exclusion):
+                mods = set(rec.modules) | {self.features[f].module for f in rec.features if f in self.features}
+                out[rid] = [m for m in self.modules if m in mods]
+        return out
 
     def live_of(self, kind) -> list:
         return [r for rid, r in sorted(self.repo.records.items()) if isinstance(r, kind) and rid in self.live]
@@ -86,7 +104,7 @@ def _anchor_file(ref: str | None, sep: str) -> str | None:
     return ref.partition(sep)[0] if ref else None
 
 
-def _flagged(repo: KbRepo, rec: Requirement | Decision | Invariant, texts: list[str]) -> bool:
+def _flagged(repo: KbRepo, rec: Requirement | Exclusion | Decision | Invariant, texts: list[str]) -> bool:
     """Instruction-like text in the record, in its quotes, or in a guard-flagged segment it cites."""
     if any(has_injection(t) for t in texts):
         return True
@@ -104,6 +122,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
     scope_feats: set[str] = set()  # features whose requirements and rules are included
     gov: set[str] = set()  # extra targets whose governing rules are included
     reqs: set[str] = set()
+    excls: set[str] = set()
     rules: set[str] = set()
     claims: set[str] = set()
 
@@ -123,6 +142,8 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
             scope_feats.add(x)
         elif isinstance(rec, Requirement):
             reqs.add(x)
+        elif isinstance(rec, Exclusion):
+            excls.add(x)
         elif isinstance(rec, (Decision, Invariant)):
             if (live := ix.successor(x)) is not None:
                 rules.add(live)
@@ -130,7 +151,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
             claims.add(x)
         else:
             raise ContextError(
-                f"unknown id {x}: give a module, feature, claim, requirement, decision or invariant id"
+                f"unknown id {x}: give a module, feature, claim, requirement, exclusion, decision or invariant id"
             )
 
     paths = sorted(set(paths))
@@ -158,6 +179,10 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
         if isinstance(rec, Requirement):
             gov.update(ix.req_modules.get(rid, []), rec.features)
             gov.update(ix.features[f].module for f in rec.features if f in ix.features)
+    # an exclusion picked by id brings the rules of its modules and features, as a requirement does
+    for xid in excls:
+        rec = repo.records[xid]
+        gov.update(ix.excl_modules.get(xid, []), rec.features)  # type: ignore[union-attr]
     for fid in scope_feats:
         gov.add(ix.features[fid].module)
         reqs.update(ix.features[fid].requirements)
@@ -165,6 +190,11 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
         if set(ix.req_modules.get(req.id, [])) & scope_mods or set(req.features) & scope_feats:
             reqs.add(req.id)
     picked = [r for r in ix.live_of(Requirement) if r.id in reqs]
+    # exclusions are selected by module or feature exactly as requirements are
+    out_of_scope = [
+        x for x in ix.live_of(Exclusion)
+        if x.id in excls or set(ix.excl_modules.get(x.id, [])) & scope_mods or set(x.features) & scope_feats
+    ]
     gov |= reqs | scope_mods | scope_feats | {fid for fid, f in ix.features.items() if f.module in scope_mods}
 
     def governed(kind) -> list:
@@ -173,6 +203,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
     decisions, invariants = governed(Decision), governed(Invariant)
     picked_claims = [ix.claims[c][1] for c in sorted(claims)]
     flagged = {r.id for r in picked if _flagged(repo, r, [r.statement])}
+    flagged |= {x.id for x in out_of_scope if _flagged(repo, x, [x.statement])}
     flagged |= {d.id for d in decisions if _flagged(repo, d, [d.title, d.body])}
     flagged |= {i.id for i in invariants if _flagged(repo, i, [i.statement, i.body])}
     flagged |= {c.id for c in picked_claims if has_injection(c.claim)}
@@ -184,6 +215,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
         claims=picked_claims,
         requirements=picked,
         status={r.id: ix.status[r.id] for r in picked},
+        exclusions=out_of_scope,
         module_cfgs={m: ix.modules[m] for m in mods},
         claim_features={c.id: ix.claims[c.id][0].id for c in picked_claims},
         flagged=frozenset(flagged),
@@ -201,7 +233,7 @@ def governing(
     features: Iterable[str] = (),
     ids: Iterable[str] = (),
 ) -> ContextPack:
-    """Live decisions, invariants, requirements (with status) and claims governing the selection.
+    """Live decisions, invariants, requirements (with status), exclusions and claims governing the selection.
 
     Modules come from `modules`, from the module globs of each path and from `r[impl X]` markers inside
     those files (X's modules), so a module with no paths yet still gets its context."""
@@ -269,6 +301,12 @@ def _md(pack: ContextPack, body_limit: int | None = None) -> str:
             cls += ", implied" if r.origin == "implied" else ""
             out.append(f"[{r.id}] {pack.status[r.id]}, {links}{flags}{cls}: {inline_code(r.statement)}{_mark(pack, r.id)}")
             out += _quote_lines(r.id, r)
+    if pack.exclusions:
+        out.append("## Out of scope (live)")
+        for x in pack.exclusions:
+            links = f"modules {_refs(x.modules)}" + (f", features {_refs(x.features)}" if x.features else "")
+            out.append(f"[{x.id}] exclusion, {links}: {inline_code(x.statement)}{_mark(pack, x.id)}")
+            out += _quote_lines(x.id, x)
     if pack.claims:
         out.append("## Claims")
         for c in pack.claims:
@@ -309,6 +347,11 @@ def _json(pack: ContextPack) -> str:
              "features": r.features, "flags": r.flags, "modality": r.modality, "actor": r.actor,
              "category": r.category, "origin": r.origin, "quotes": _quotes(r), "instruction_like": r.id in pack.flagged}
             for r in pack.requirements
+        ],
+        "exclusions": [
+            {"id": x.id, "statement": x.statement, "modules": x.modules, "features": x.features, "quotes": _quotes(x),
+             "instruction_like": x.id in pack.flagged}
+            for x in pack.exclusions
         ],
         "claims": [
             {"id": c.id, "feature": pack.claim_features[c.id], "claim": c.claim, "requirement": c.requirement,
@@ -377,7 +420,7 @@ def session_brief(root: Path) -> str:
     root = Path(root)
     ix = _Index(root, load_config(root / "kb.config.yaml"), KbRepo.load(root))
     pack = _select(ix, changed_files(root), (), (), [])
-    empty = not (pack.modules or pack.decisions or pack.invariants or pack.requirements or pack.claims)
+    empty = not (pack.modules or pack.decisions or pack.invariants or pack.requirements or pack.exclusions or pack.claims)
     body = _overview(ix) if empty else _md(pack, MAX_BODY_CHARS)
     rules = "# KB rules\n" + "\n".join(AGENT_RULES) + "\n"
     return _cap(body, MAX_BRIEF_CHARS - len(rules)) + rules

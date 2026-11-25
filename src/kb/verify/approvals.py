@@ -25,7 +25,7 @@ CodeownersRules = list[tuple[str, list[str]]]
 _READ_NOW = object()  # required_owners default: read CODEOWNERS from the working tree when called
 # required_owners' handle when the policy names no decision approvers: no login matches it, so it fails closed
 NO_DECISION_APPROVERS = "(no decision approvers)"
-_INTENT_DIRS = ("kb/requirements/", "kb/features/", "kb/glossary/")
+_INTENT_DIRS = ("kb/requirements/", "kb/exclusions/", "kb/features/", "kb/glossary/")
 _DECISION_DIRS = ("kb/decisions/", "kb/invariants/", "kb/components/")
 # a source's triage says which segments hold no product intent: the intent approvers sign off on it
 _TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
@@ -155,6 +155,9 @@ def required_owners(
         if path.startswith("kb/requirements/"):
             for h in intent:
                 need(h, f"requirement {rid} changed")
+        elif path.startswith("kb/exclusions/"):
+            for h in intent:
+                need(h, f"exclusion {rid} changed")
         elif path.startswith("kb/features/"):
             for h in intent:
                 need(h, f"feature {rid} changed")
@@ -192,7 +195,7 @@ def required_owners(
     return {h: _ordered(rs) for h, rs in sorted(reasons.items())}
 
 
-_GROUP_RECORDS = {"intent": "requirements, features, glossary terms and triage", "decisions": "decisions, invariants and components"}
+_GROUP_RECORDS = {"intent": "requirements, exclusions, features, glossary terms and triage", "decisions": "decisions, invariants and components"}
 
 
 def no_approver_warnings(

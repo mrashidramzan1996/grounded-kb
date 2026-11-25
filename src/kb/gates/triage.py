@@ -91,6 +91,6 @@ def triage_gate(ctx: GateContext) -> list[Issue]:
                 ))
             elif code == "out-of-scope":
                 issues.append(Issue("triage.use_exclusion", f"{_ref(src_id, seg_id)}: triaged out-of-scope; record it as an "
-                                    "EXCL record instead", "warning", path, src_id))
+                                    "EXCL record instead (`kb/exclusions/EXCL-NNN.yaml`)", "warning", path, src_id))
     issues.extend(not_quoted_issue(*entry) for entry in unquoted_entries(repo))
     return issues

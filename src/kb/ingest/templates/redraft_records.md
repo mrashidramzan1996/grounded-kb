@@ -12,9 +12,10 @@
 5. Remove `vague` only when the statement now states a measurable target whose number is in a quote
    from the record's own segments or the new text below. If the document is still vague, keep the flag
    and leave the statement as it is.
-6. A requirement is edited in place. A live ADR or INV is never edited: draft a new record with
+6. A requirement or an exclusion (EXCL) is edited in place; an exclusion has no `modality`, `actor`, `category` or
+   `origin`. A live ADR or INV is never edited: draft a new record with
    `supersedes: <id>`, using the next free ID.
-7. If the cited text is gone and no replacement exists, set `status: rejected` on the requirement.
+7. If the cited text is gone and no replacement exists, set `status: rejected` on the requirement or exclusion.
    For an ADR or INV, report it and do not draft.
 8. Update `triage.yaml` entries for segments you now cite.
 9. Set `drafted_by: "agent:<your name> via kb redraft brief $version"` on what you change.

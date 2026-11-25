@@ -8,7 +8,7 @@ from kb.gates.quotes import quote_results
 from kb.ingest.brief import BRIEF_VERSION, INJECTION_FLAG, _fence, _segments, next_ids
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
-from kb.records.models import Decision, Invariant, Requirement
+from kb.records.models import QUOTED_TYPES, Decision, Exclusion, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.sources.guard import has_injection
 from kb.textfmt import inline_code
@@ -19,11 +19,11 @@ REDRAFT_IDS = ".kb/cache/redraft/ids"  # selected ids, one per line, sorted
 REDRAFT_NEW = ".kb/cache/redraft/new"  # segments new records may cite: those offered to draft from plus the changed cited ones
 REDRAFT_FILES = (REDRAFT_BRIEF, REDRAFT_BASE, REDRAFT_IDS, REDRAFT_NEW)
 
-_Cited = Requirement | Decision | Invariant
+_Cited = Requirement | Exclusion | Decision | Invariant
 
 
 class RedraftError(ValueError):
-    """An id that is unknown, not live, or not a requirement, decision or invariant."""
+    """An id that is unknown, not live, or not a requirement, exclusion, decision or invariant."""
 
 
 def segment_hashes(repo: KbRepo) -> dict[str, str]:
@@ -55,7 +55,7 @@ def untriaged(repo: KbRepo) -> list[str]:
 
 
 def citers(repo: KbRepo) -> dict[str, list[str]]:
-    """'SRC-x#seg-NN' -> the live REQ/ADR/INV ids quoting it, sorted."""
+    """'SRC-x#seg-NN' -> the live REQ/EXCL/ADR/INV ids quoting it, sorted."""
     out: dict[str, list[str]] = {}
     for rid, rec in _live_cited(repo):
         for ref in sorted({q.source for q in rec.evidence.quotes} if rec.evidence else set()):
@@ -85,11 +85,11 @@ def untriaged_cited(repo: KbRepo, base: KbRepo, refs: set[str] | None = None) ->
 
 def _live_cited(repo: KbRepo) -> list[tuple[str, _Cited]]:
     live = live_ids(repo)
-    return [(rid, rec) for rid, rec in sorted(repo.records.items()) if rid in live and isinstance(rec, (Requirement, Decision, Invariant))]
+    return [(rid, rec) for rid, rec in sorted(repo.records.items()) if rid in live and isinstance(rec, QUOTED_TYPES)]
 
 
 def citing(repo: KbRepo, refs: set[str]) -> list[str]:
-    """Live REQ/ADR/INV ids with a quote citing any of `refs`."""
+    """Live REQ/EXCL/ADR/INV ids with a quote citing any of `refs`."""
     return [rid for rid, rec in _live_cited(repo) if rec.evidence and any(q.source in refs for q in rec.evidence.quotes)]
 
 
@@ -99,7 +99,7 @@ def flagged(repo: KbRepo) -> list[str]:
 
 
 def unfound(repo: KbRepo) -> list[str]:
-    """Live REQ/ADR/INV ids with a quote not found in its segment (or whose segment is missing); under mode any, with none found."""
+    """Live REQ/EXCL/ADR/INV ids with a quote not found in its segment (or whose segment is missing); under mode any, with none found."""
     out = []
     for rid, rec in _live_cited(repo):
         if rec.evidence is None:
@@ -111,12 +111,12 @@ def unfound(repo: KbRepo) -> list[str]:
 
 
 def check_named(repo: KbRepo, rid: str) -> None:
-    """RedraftError unless `rid` is a live requirement, decision or invariant of `repo`."""
+    """RedraftError unless `rid` is a live requirement, exclusion, decision or invariant of `repo`."""
     rec = repo.records.get(rid)
     if rec is None:
         raise RedraftError(f"{rid} is unknown")
-    if not isinstance(rec, (Requirement, Decision, Invariant)):
-        raise RedraftError(f"{rid} is a {type(rec).__name__}; only requirements, decisions and invariants can be redrafted")
+    if not isinstance(rec, QUOTED_TYPES):
+        raise RedraftError(f"{rid} is a {type(rec).__name__}; only requirements, exclusions, decisions and invariants can be redrafted")
     if rid not in live_ids(repo):
         raise RedraftError(f"{rid} is not live")
 
