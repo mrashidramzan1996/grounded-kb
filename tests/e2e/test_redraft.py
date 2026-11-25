@@ -6,7 +6,8 @@ CONFIG = 'version: 1\nsources:\n  - paths: ["docs/**"]\nmodules:\n  - id: MOD-we
 DOC = "# Speed\n\nPages should load fast.\n"
 REQ = (
     "id: REQ-NF-001\nstatement: {statement}\nevidence:\n  quotes:\n  - source: SRC-product#seg-01\n"
-    "    text: {quote}\nmodules: [MOD-web]\n{flags}drafted_by: agent:test via kb ingest brief v1\n"
+    "    text: {quote}\nmodules: [MOD-web]\n"
+    "modality: should\nactor: the pages\ncategory: performance\norigin: stated\n{flags}drafted_by: agent:test via kb ingest brief v1\n"
 )
 
 
@@ -95,7 +96,9 @@ def test_supersede_adr_after_document_change(tmp_path):
 
 
 def _req(rid: str, text: str, seg: str) -> str:
-    return (REQ.format(statement=text, quote=text, flags="").replace("REQ-NF-001", rid)
+    req = REQ.format(statement=text, quote=text, flags="")
+    req = req if rid.startswith("REQ-NF-") else req.replace("category: performance\n", "")  # category is for REQ-NF only
+    return (req.replace("REQ-NF-001", rid)
             .replace("seg-01", seg).replace("kb ingest brief", "kb redraft brief"))
 
 
@@ -113,7 +116,7 @@ def test_changed_and_new_text_redrafted_and_drafted(tmp_path):
 
     # 1. the cited sentence gains a target, the uncited "Support" text now states one, and a section is added;
     #    sync names the record and both segments with no records
-    support, refunds = "Support answers within 24 hours.", "Refunds are paid within 14 days."
+    support, refunds = "Support should answer within 24 hours.", "Refunds should be paid within 14 days."
     write(repo, "docs/product.md", doc.replace("load fast.", "load in under 2 seconds.")
           .replace("Support is friendly.", support) + f"\n# Refunds\n\n{refunds}\n")
     out = invoke(repo, "source", "sync")

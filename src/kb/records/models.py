@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -39,6 +40,9 @@ class Evidence(_Model):
     quotes: list[Quote] = Field(min_length=1)
 
 
+_MARKUP = re.compile(r"[`<>\[\]*#|\r\n]")
+
+
 class Requirement(_Record):
     id: str = Field(pattern=rf"^{REQ_ID}$")
     statement: str
@@ -46,6 +50,26 @@ class Requirement(_Record):
     features: list[str] = []
     modules: list[str] = []
     flags: list[Literal["vague", "conflicting", "untestable"]] = []
+    modality: Literal["must", "must_not", "should", "may"] | None = None
+    actor: str | None = None  # who the rule binds: plain text (or a TERM id), at most 60 characters
+    category: Literal["performance", "security", "privacy", "availability", "reliability", "usability",
+                      "compliance", "compatibility", "maintainability", "portability"] | None = None
+    origin: Literal["stated", "implied"] = "stated"
+
+    @field_validator("actor")
+    @classmethod
+    def _plain_actor(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not v.strip() or len(v) > 60 or _MARKUP.search(v):
+            raise ValueError("actor must be plain text of 1 to 60 characters without markup")
+        return v
+
+    @model_validator(mode="after")
+    def _category_only_nf(self):
+        if self.category is not None and not self.id.startswith("REQ-NF-"):
+            raise ValueError("category is only allowed on REQ-NF-* requirements")
+        return self
 
     @model_validator(mode="after")
     def _needs_feature_or_module(self):

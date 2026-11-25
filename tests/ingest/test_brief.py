@@ -172,3 +172,14 @@ def test_brief_says_when_an_owner_is_a_handle(acme_repo):
     rules = _section(brief_of(acme_repo), "## The rules")
     assert "use `--owner <@handle>` only when the documents name a forge handle (e.g. @acme/billing)" in rules
     assert "a team name like 'Billing team' means `--owner TODO`" in rules
+
+
+def test_brief_examples_show_fields(acme_repo):
+    invoke(acme_repo, "ingest", "docs/")
+    brief = brief_of(acme_repo)
+    example = _section(brief, "## Examples").split("#### kb/requirements/REQ-F-034.yaml", 1)[1].split("####", 1)[0]
+    for field in ("modality:", "actor:", "origin:"):
+        assert field in example
+    rules = _section(brief, "## The rules")
+    for needle in ("modality", "must_not", "actor", "category", "origin", "implied", "confirmed by the user"):
+        assert needle in rules

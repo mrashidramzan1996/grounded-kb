@@ -8,6 +8,9 @@ record cites them.
    (`REQ-F-…` functional, `REQ-NF-…` non-functional), linked to a module or feature. Draft a passage that
    records a choice as an ADR, and a must-keep rule as an INV, each with quotes.
 3. Quote word for word from the segment: its `text` must appear in that segment exactly as written.
+3b. Give every requirement `modality` (must, must_not, should, may), `actor` (who it binds), `category` for
+   REQ-NF, and `origin` (stated, or implied when the document implies it without saying it). An implied
+   requirement must later be confirmed by the user.
 4. Start from the next free IDs above and count up. Never reuse an ID.
 5. Never duplicate an existing requirement: check the list under "Existing requirements". When a segment
    only restates one, draft nothing from it and triage it `"none: duplicate: restates <ID>"`.

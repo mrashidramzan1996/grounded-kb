@@ -50,3 +50,19 @@ def test_triage_rejects_bad_values(val):
 def test_triage_accepts_ids_and_reasoned_none():
     t = Triage.model_validate({"segments": {"seg-01": ["REQ-F-001", "ADR-0002"], "seg-02": "none: title"}})
     assert t.segments["seg-02"] == "none: title"
+
+
+def test_classification_fields_default_and_validate(spec_req):
+    r = Requirement.model_validate(spec_req)
+    assert (r.modality, r.actor, r.category, r.origin) == (None, None, None, "stated")
+    nf = {**spec_req, "id": "REQ-NF-001", "modality": "must_not", "actor": "TERM-seat", "category": "security", "origin": "implied"}
+    assert Requirement.model_validate(nf).category == "security"
+
+
+@pytest.mark.parametrize("bad", [
+    {"modality": "shall"}, {"origin": "guessed"}, {"actor": "x" * 61}, {"actor": "the `admin`"}, {"actor": "<b>admin</b>"},
+    {"actor": "line\nbreak"}, {"category": "performance"}, {"id": "REQ-NF-001", "category": "speed"},
+])
+def test_classification_fields_rejected(spec_req, bad):
+    with pytest.raises(ValidationError):
+        Requirement.model_validate({**spec_req, **bad})

@@ -11,7 +11,7 @@ import re
 import shlex
 from pathlib import Path
 
-from helpers import commit, git, invoke, make_git_repo, write
+from helpers import classification, commit, git, invoke, make_git_repo, write
 
 from kb.rules import PLAYBOOK
 
@@ -19,13 +19,14 @@ SPEC = (
     "# Checkout\n\nCustomers pay by card.\n\n"
     "# Performance\n\nThe checkout page must be fast.\n"
 )
-REQ = "drafted_by: agent:test via kb {brief} brief v1\nid: {id}\nstatement: {statement}\nevidence:\n  quotes:\n{quotes}modules:\n- MOD-checkout\n{flags}"
+REQ = "drafted_by: agent:test via kb {brief} brief v1\nid: {id}\nstatement: {statement}\nevidence:\n  quotes:\n{quotes}modules:\n- MOD-checkout\n{fields}{flags}"
 TARGET = "The checkout page loads in under 2 seconds."
 
 
 def req(rid: str, statement: str, quotes: list[tuple[str, str]], brief: str = "ingest", flags: str = "") -> str:
     lines = "".join(f"  - source: {src}\n    text: {text}\n" for src, text in quotes)
-    return REQ.format(brief=brief, id=rid, statement=statement, quotes=lines, flags=flags)
+    fields = "".join(f"{k}: {v}\n" for k, v in classification(rid, " ".join(t for _, t in quotes)).items())
+    return REQ.format(brief=brief, id=rid, statement=statement, quotes=lines, flags=flags, fields=fields)
 
 
 def kb(repo: Path, *args: str, code: int = 0):

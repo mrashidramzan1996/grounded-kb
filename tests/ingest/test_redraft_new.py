@@ -1,7 +1,7 @@
 """`kb redraft --new`: draft records from document text no record covers yet, alone or with --changed."""
 
 import pytest
-from helpers import QUOTE, adr_md, git, invoke, put, req_yaml
+from helpers import QUOTE, adr_md, git, invoke, put, quiet, req_yaml
 
 from kb.ingest.brief import INJECTION_FLAG
 from kb.ingest.redraft import REDRAFT_BRIEF, REDRAFT_IDS, REDRAFT_NEW, untriaged
@@ -135,7 +135,7 @@ def test_new_record_citing_new_segment_accepted(kb):
     put(kb, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", REFUND, seg="seg-03"))
     put(kb, TRIAGE, TRIAGED + "  seg-03: [REQ-F-002]\n")
     r = redraft_report(kb, None)
-    assert (r.rejected, r.drafted, r.redrafted, r.selected, r.flagged) == ([], ["REQ-F-002"], [], [], [])
+    assert (r.rejected, r.drafted, r.redrafted, r.selected, quiet(r.flagged)) == ([], ["REQ-F-002"], [], [], [])
     text = render_redraft_report(r)
     assert "Selection: none\nNew or changed segments: SRC-n#seg-03\n" in text
     assert "## Redrafted (0)\n\n- none\n\n## Drafted (1)\n\n- REQ-F-002\n" in text
@@ -174,12 +174,12 @@ def test_new_segment_left_untriaged_flagged(kb):
     put(kb, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", REFUND, seg="seg-03"))
     r = redraft_report(kb, None)
     assert r.rejected == [] and r.drafted == ["REQ-F-002"]
-    assert [(i.record, i.code, i.severity, i.path) for i in r.flagged] == [("SRC-n", "segment.untriaged", "warning", TRIAGE)]
-    assert "SRC-n#seg-03" in r.flagged[0].message
-    assert "## Flagged (1)" in render_redraft_report(r)
+    assert [(i.record, i.code, i.severity, i.path) for i in quiet(r.flagged)] == [("SRC-n", "segment.untriaged", "warning", TRIAGE)]
+    assert "SRC-n#seg-03" in quiet(r.flagged)[0].message
+    assert "## Flagged (2)" in render_redraft_report(r)  # and requirement.implied_unconfirmed
     put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: duplicate: covered by REQ-F-002'\n")
     # a rule triaged none, even as a duplicate, is flagged (the segment was not triaged at base)
-    assert [i.code for i in redraft_report(kb, None).flagged] == ["triage.none_has_rules"]
+    assert [i.code for i in quiet(redraft_report(kb, None).flagged)] == ["triage.none_has_rules"]
 
 
 def test_triage_of_old_segment_still_out_of_scope(kb):
@@ -203,7 +203,7 @@ def test_changed_alone_lets_new_records_cite_changed_text(kb):
     r = redraft_report(kb, None)
     assert (r.rejected, r.redrafted, r.drafted) == ([], ["REQ-F-001"], ["REQ-F-002"])
     # seg-01 was triaged at base and seg-03 was not offered (no untriaged warning), but seg-03's rule is new and unquoted
-    assert [(i.code, i.message.split(":")[0]) for i in r.flagged] == [("sentence.uncovered", "SRC-n#seg-03")]
+    assert [(i.code, i.message.split(":")[0]) for i in quiet(r.flagged)] == [("sentence.uncovered", "SRC-n#seg-03")]
 
 
 def test_new_file_must_match_brief(kb):
@@ -253,7 +253,7 @@ def test_changed_uncited_segment_offered_for_new_records(kb):
     put(kb, "kb/requirements/REQ-NF-002.yaml", req_yaml("REQ-NF-002", ANSWER, seg="seg-03"))
     put(kb, TRIAGE, TRIAGED + "  seg-03: [REQ-NF-002]\n")  # a "none" entry may change: the text did
     r = redraft_report(kb, None)
-    assert (r.rejected, r.drafted, r.flagged) == ([], ["REQ-NF-002"], [])
+    assert (r.rejected, r.drafted, quiet(r.flagged)) == ([], ["REQ-NF-002"], [])
     put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: other: still no requirement'\n")
     (kb / "kb/requirements/REQ-NF-002.yaml").unlink()
     r = redraft_report(kb, None)
@@ -363,7 +363,7 @@ def test_new_offers_only_truly_new_text_and_report_warns_untriaged_cited(kb):
     put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n  seg-03: [REQ-F-002]\n")
     r = redraft_report(kb, None)
     assert (r.rejected, r.drafted) == ([], ["REQ-F-002"])
-    assert [(i.record, i.code, i.severity, i.path, i.message) for i in r.flagged] == [
+    assert [(i.record, i.code, i.severity, i.path, i.message) for i in quiet(r.flagged)] == [
         ("SRC-n", "segment.untriaged_cited", "warning", TRIAGE, UNTRIAGED_CITED)
     ]
 
@@ -401,7 +401,7 @@ def test_new_rule_triaged_none_is_flagged(kb):
     put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: other: later'\n")
     r = redraft_report(kb, None)
     assert r.rejected == []
-    flagged = [(i.code, i.path) for i in r.flagged]
+    flagged = [(i.code, i.path) for i in quiet(r.flagged)]
     assert ("triage.none_has_rules", TRIAGE) in flagged and ("sentence.uncovered", TRIAGE) in flagged
     assert all("SRC-n#seg-03" in i.message for i in r.flagged)
     assert "triage.none_has_rules" in render_redraft_report(r)

@@ -265,7 +265,9 @@ def _md(pack: ContextPack, body_limit: int | None = None) -> str:
         for r in pack.requirements:
             flags = f", flags {_refs(r.flags)}" if r.flags else ""
             links = f"modules {_refs(r.modules)}" + (f", features {_refs(r.features)}" if r.features else "")
-            out.append(f"[{r.id}] {pack.status[r.id]}, {links}{flags}: {inline_code(r.statement)}{_mark(pack, r.id)}")
+            cls = "".join(f", {k} {_refs([v])}" for k, v in (("modality", r.modality), ("actor", r.actor), ("category", r.category)) if v)
+            cls += ", implied" if r.origin == "implied" else ""
+            out.append(f"[{r.id}] {pack.status[r.id]}, {links}{flags}{cls}: {inline_code(r.statement)}{_mark(pack, r.id)}")
             out += _quote_lines(r.id, r)
     if pack.claims:
         out.append("## Claims")

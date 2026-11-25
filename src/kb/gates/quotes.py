@@ -7,6 +7,7 @@ from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Evidence, Feature, Invariant, Quote, Requirement
 from kb.records.repo import KbRepo
+from kb.sources.sentences import cues
 from kb.textfmt import inline_code
 
 MAX_QUOTES_PER_CLAIM = 5
@@ -93,6 +94,34 @@ def quote_results(repo: KbRepo, evidence: Evidence) -> tuple[list[Quote], list[Q
     return [q for q in evidence.quotes if q in located], [q for q in evidence.quotes if q not in located]
 
 
+_MODALITY_CUES = {"must": "must", "must_not": "must_not", "should": "should", "may": "may"}
+
+
+def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], path: str) -> list[Issue]:
+    """The classification fields against the record's found quotes."""
+    issues: list[Issue] = []
+    missing = [f for f in ("modality", "actor") if getattr(rec, f) is None]
+    if rec.id.startswith("REQ-NF-") and rec.category is None:
+        missing.append("category")
+    if missing:
+        issues.append(Issue("requirement.fields_missing", f"{rid}: missing {', '.join(missing)}; set them from the quote", "warning", path, rid))
+    if rec.origin == "implied" and not any(q.source.partition("#")[0] == "SRC-clarifications" for q in rec.evidence.quotes):
+        issues.append(Issue("requirement.implied_unconfirmed",
+                            f"{rid}: origin is implied and no quote cites SRC-clarifications; a person must confirm it", "warning", path, rid))
+    if not found:
+        return issues
+    seen = {_MODALITY_CUES[c] for q in found for c in cues(q.text) if c in _MODALITY_CUES}
+    if not seen:
+        if rec.origin == "stated":
+            issues.append(Issue("requirement.no_rule_word",
+                                f"{rid}: origin is stated but the quote has no rule word (must, should, may); if the document implies it, set origin: implied",
+                                "warning", path, rid))
+    elif rec.modality is not None and rec.modality not in seen:
+        issues.append(Issue("requirement.modality_mismatch",
+                            f"{rid}: modality {rec.modality} but the quote says {', '.join(sorted(seen))}", "warning", path, rid))
+    return issues
+
+
 def quote_gate(ctx: GateContext) -> list[Issue]:
     repo, issues = ctx.repo, []
     live = live_ids(repo)
@@ -113,6 +142,8 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
         if len(ev.quotes) > MAX_QUOTES_PER_CLAIM:
             issues.append(Issue("quote.too_many", f"{rid} has {len(ev.quotes)} quotes; at most {MAX_QUOTES_PER_CLAIM} are allowed", path=path, record=rid))
         found, _ = quote_results(repo, ev)
+        if isinstance(rec, Requirement):
+            issues.extend(requirement_field_issues(rid, rec, found, path))
         unfound: list[Issue] = []
         for q in ev.quotes:
             src, _, seg_id = q.source.partition("#")

@@ -6,3 +6,6 @@ evidence:
     text: Adding a seat mid-cycle is charged pro-rata for the remaining days of the billing cycle.
 modules:
 - MOD-billing
+modality: must
+actor: the billing system
+origin: implied

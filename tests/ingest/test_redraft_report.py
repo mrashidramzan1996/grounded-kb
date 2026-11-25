@@ -1,5 +1,5 @@
 import pytest
-from helpers import adr_md, git, invoke, put, req_yaml
+from helpers import adr_md, git, invoke, put, quiet, req_yaml
 
 from kb.ingest.redraft import REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, RedraftError
 from kb.ingest.redraft_report import RedraftReport, redraft_report, render_redraft_report
@@ -57,7 +57,7 @@ def test_good_redraft_accepted_and_vague_cleared(kb):
     r = redraft_report(kb, None)
     assert r.base == git(kb, "rev-parse", "HEAD").strip()
     assert (r.selected, r.redrafted, r.rejected, r.still_flagged, r.unchanged) == (["REQ-NF-001"], ["REQ-NF-001"], [], [], [])
-    assert r.flagged == [] and r.superseding == []
+    assert quiet(r.flagged) == [] and r.superseding == []
 
 
 def test_vague_cleared_without_target_rejected(kb):
@@ -130,7 +130,7 @@ def test_other_flag_removed_is_a_warning(kb):
     put(kb, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
     r = redraft_report(kb, None)
     assert (r.rejected, r.redrafted) == ([], ["REQ-F-001"])
-    assert [(i.record, i.code, i.severity, i.message) for i in r.flagged] == [
+    assert [(i.record, i.code, i.severity, i.message) for i in quiet(r.flagged)] == [
         ("REQ-F-001", "flag.cleared", "warning", "REQ-F-001: conflicting was removed; reviewer to confirm")
     ]
 
@@ -385,7 +385,7 @@ def test_brief_base_must_match(kb):
 
 
 WIDER = (
-    "id: REQ-NF-001\nstatement: Pages load fast.\nevidence:\n  quotes:\n  - source: SRC-n#seg-02\n    text: Pages load fast.\n"
+    "id: REQ-NF-001\nstatement: Pages load fast.\nmodality: must\nactor: the pages\ncategory: performance\norigin: implied\nevidence:\n  quotes:\n  - source: SRC-n#seg-02\n    text: Pages load fast.\n"
     "  - source: SRC-n#seg-01\n    text: A seat costs 5 EUR.\nmodules:\n- MOD-a\nflags:\n- vague\n"
 )
 

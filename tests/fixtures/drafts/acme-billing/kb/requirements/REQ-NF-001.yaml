@@ -9,3 +9,7 @@ modules:
 - MOD-web
 flags:
 - vague
+modality: must
+actor: the checkout page
+category: performance
+origin: stated

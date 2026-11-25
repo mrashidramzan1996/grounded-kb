@@ -232,6 +232,25 @@ def grep(directory: Path, pattern: str) -> list[Path]:
 
 # --- acme quote-gate helpers -----------------------------------------------------------------
 
+# a quote without a rule word (most test documents) is classified implied, and warns until a person confirms it
+UNCLASSIFIED = ("requirement.no_rule_word", "requirement.implied_unconfirmed")
+
+
+def quiet(issues):
+    """The issues without the warnings about test quotes that carry no rule word."""
+    return [i for i in issues if i.code not in UNCLASSIFIED]
+
+
+def classification(rid: str, text: str) -> dict:
+    """modality, actor, category and origin read off a quote, as an agent following the brief would fill them in."""
+    from kb.sources.sentences import cues
+
+    found = cues(text)
+    modality = next((m for m in ("must_not", "must", "should", "may") if m in found), None)
+    out = {"modality": modality or "must", "actor": "the system", "origin": "stated" if modality else "implied"}
+    return out | ({"category": "performance"} if rid.startswith("REQ-NF-") else {})
+
+
 def req(id: str, statement: str, quote: tuple[str, str, str], **fields):
     """A Requirement for acme_kb_with. quote=(source stem, heading suffix, text); the segment is resolved later:
     the first one under that heading containing the text, else the first under it."""
@@ -240,13 +259,13 @@ def req(id: str, statement: str, quote: tuple[str, str, str], **fields):
         from kb.records.models import Requirement
 
         stem, suffix, text = quote
-        data = {
+        data = classification(id, text) | {
             "id": id,
             "statement": statement,
             "evidence": {"quotes": [{"source": f"SRC-{stem}#{segment_id(stem, suffix, text)}", "text": text}]},
             "modules": ["MOD-billing"],
         } | fields
-        return Requirement.model_validate(data)
+        return Requirement.model_validate({k: v for k, v in data.items() if v is not None})  # None drops a default
 
     return build
 
@@ -387,8 +406,9 @@ QUOTE = "A seat costs 5 EUR."
 
 def req_yaml(rid: str, text: str = QUOTE, flags: tuple[str, ...] = (), seg: str = "seg-01") -> str:
     flag_lines = "flags:\n" + "".join(f"- {f}\n" for f in flags) if flags else ""
+    fields = "".join(f"{k}: {v}\n" for k, v in classification(rid, text).items())
     return (
-        f"id: {rid}\nstatement: {text!r}\nevidence:\n  quotes:\n  - source: SRC-n#{seg}\n    text: {text!r}\nmodules:\n- MOD-a\n{flag_lines}"
+        f"id: {rid}\nstatement: {text!r}\n{fields}evidence:\n  quotes:\n  - source: SRC-n#{seg}\n    text: {text!r}\nmodules:\n- MOD-a\n{flag_lines}"
     )
 
 

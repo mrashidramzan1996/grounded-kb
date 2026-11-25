@@ -185,7 +185,7 @@ def test_clean_repo_is_clean(tmp_path):
     t = build_todo(root)
     assert t.do == () and [a.id for a in t.ask] == ["freeze:v1"]  # optional: it does not make the KB unclean
     assert t.state == {
-        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": None, "clean": True,
+        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 1, "baseline": None, "clean": True,  # warnings: implied_unconfirmed
         "blocking_asks": 0,
     }
     ok(root, "baseline", "freeze", "v1")
@@ -193,7 +193,7 @@ def test_clean_repo_is_clean(tmp_path):
     t = build_todo(root)
     assert t.do == () and t.ask == ()
     assert t.state == {
-        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": "v1", "clean": True,
+        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 1, "baseline": "v1", "clean": True,
         "blocking_asks": 0,
     }
     r = ok(root, "todo")

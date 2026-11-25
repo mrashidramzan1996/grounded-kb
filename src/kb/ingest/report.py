@@ -199,6 +199,12 @@ def gate_drafts(root: Path, config: KbConfig, config_at_base: KbConfig | None, h
         if i.code in ("statement.number_not_in_quote", "quote.too_short") and getattr(head.records.get(i.record), "drafted_by", None) else i
         for i in mine
     ]
+    # a requirement drafted in this range must carry its classification, and the modality must match its quote
+    mine = [
+        Issue(i.code, i.message, "error", i.path, i.record)
+        if i.code in ("requirement.fields_missing", "requirement.modality_mismatch") and i.record in ids else i
+        for i in mine
+    ]
     caused = new_since([i for i in issues if i.severity == "error" and i not in mine and not i.code.startswith("source.")], at_base)
     return DraftGates(issues, drafted, ids, mine, caused)
 
