@@ -72,7 +72,7 @@ def test_clarify_refuses_headings_and_blank_lines(tmp_path, kwargs):
 
 @pytest.mark.parametrize("kwargs", [
     {"by": "alice"}, {"by": "@"}, {"by": "@a b"}, {"by": "@a/b/c"}, {"by": "@a\n"},
-    {"date": "25-11-2026"}, {"date": "2026-11-25 "}, {"date": "2026-1-5"}, {"date": "today"},
+    {"date": "2026-13-45"}, {"date": "2026-02-30"}, {"date": "\u0662026-11-25"}, {"date": "25-11-2026"}, {"date": "2026-11-25 "}, {"date": "2026-1-5"}, {"date": "today"},
 ])
 def test_clarify_refuses_bad_handle_and_date(tmp_path, kwargs):
     root = repo(tmp_path)
@@ -112,8 +112,8 @@ def test_clarified_target_clears_vague_via_redraft(tmp_path):
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-NF-001]\n")
     commit(root, "drafts")
-    ok(root, "clarify", "--topic", "Checkout speed", "--text", ANSWER, "--by", "@alice", "--date", "2026-11-25")
-    ref = [s.id for s in KbRepo.load(root).segments("SRC-clarifications")][-1]
+    ref = ok(root, "clarify", "--topic", "Checkout speed", "--text", ANSWER, "--by", "@alice", "--date", "2026-11-25") \
+        .stdout.strip().rsplit("#", 1)[1]
     ok(root, "redraft", "REQ-NF-001", "--new")
     put(root, "kb/requirements/REQ-NF-001.yaml", req_yaml("REQ-NF-001", ANSWER).replace("SRC-n#seg-01", f"SRC-clarifications#{ref}"))
     put(root, "kb/sources/SRC-clarifications/triage.yaml", f"segments:\n  {ref}: [REQ-NF-001]\n")
@@ -125,3 +125,69 @@ def test_clarify_cli_joins_wrapped_text(tmp_path):
     root = repo(tmp_path)
     ok(root, "clarify", "--topic", "Speed", "--text", "Under 2 seconds\nfor most\n  visits.", "--by", "@alice", "--date", "2026-11-25")
     assert "\n\nUnder 2 seconds for most visits.\n" in (root / CLARIFICATIONS).read_text()
+
+
+def test_text_of_1500_characters_stays_one_segment(tmp_path):
+    root = repo(tmp_path)
+    do(root)
+    sid, ref = do(root, topic="Long", text=("word " * 300).strip())
+    segs = KbRepo.load(root).segments(sid)
+    assert segs[-1].id == ref.split("#")[1] and sum(s.heading.endswith("Long") for s in segs) == 1
+
+
+def test_ref_is_found_by_position_not_heading_text(tmp_path):
+    root = repo(tmp_path)
+    sid, _ = do(root, topic="*Bold* topic")  # the stored heading may differ from the topic text
+    segs = KbRepo.load(root).segments(sid)
+    assert do(root, topic="[link](x) topic", text="Fine.")[1] == f"{sid}#{KbRepo.load(root).segments(sid)[-1].id}"
+    assert len(KbRepo.load(root).segments(sid)) > len(segs)
+
+
+def test_topic_with_email_is_refused_and_nothing_written(tmp_path):
+    root = repo(tmp_path)
+    r = invoke(root, "clarify", "--topic", "Contact billing@example.com", "--text", "x", "--by", "@a", "--date", "2026-11-25")
+    assert r.exit_code == 2 and "masked" in r.output
+    assert not (root / CLARIFICATIONS).exists() and not (root / "kb/sources/SRC-clarifications").exists()
+
+
+def test_negation_in_another_sources_entry_is_not_a_match(tmp_path):
+    cfg = 'version: 1\nsources:\n  - paths: ["docs/**"]\n  - paths: ["!docs/clarifications.md"]\nmodules:\n  - id: MOD-a\n    owner: "@alice"\n'
+    root = repo(tmp_path, cfg)
+    assert do(root)[0] == "SRC-clarifications"  # the first entry matches on its own, as add_source sees it
+    cfg2 = 'version: 1\nsources:\n  - paths: ["docs/**", "!docs/clarifications.md"]\nmodules:\n  - id: MOD-a\n    owner: "@alice"\n'
+    (tmp_path / "b").mkdir()
+    root2 = repo(tmp_path / "b", cfg2)
+    with pytest.raises(ClarifyError, match="config.sources"):
+        do(root2)
+
+
+def test_crlf_file_keeps_its_line_endings(tmp_path):
+    root = repo(tmp_path)
+    do(root)
+    path = root / CLARIFICATIONS
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    do(root, topic="Seat price", text="A seat costs 5 EUR.")
+    data = path.read_bytes()
+    assert data.count(b"\n") == data.count(b"\r\n") and data.endswith(b"5 EUR.\r\n")
+
+
+def test_failed_sync_restores_exact_original_bytes(tmp_path):
+    root = repo(tmp_path)
+    sid, _ = do(root)
+    path = root / CLARIFICATIONS
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    before = path.read_bytes()
+    (root / "kb/sources" / sid / "triage.yaml").unlink(missing_ok=True)
+    (root / "kb/sources" / sid / "triage.yaml").mkdir()
+    r = invoke(root, "clarify", "--topic", "More", "--text", "x", "--by", "@a", "--date", "2026-11-25")
+    assert r.exit_code == 2
+    assert path.read_bytes() == before
+
+
+def test_failed_first_sync_removes_the_new_file(tmp_path):
+    root = repo(tmp_path)
+    (root / "kb/sources").mkdir(parents=True)
+    (root / "kb/sources/SRC-clarifications").mkdir()  # exists but holds no valid source
+    with pytest.raises(Exception):
+        do(root)
+    assert not (root / CLARIFICATIONS).exists()
