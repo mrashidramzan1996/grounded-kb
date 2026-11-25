@@ -1,6 +1,7 @@
 """`kb eval extract`: the blind second-extraction brief, and run B validated as untrusted input."""
 
 import os
+import re
 from pathlib import Path
 
 from helpers import git, invoke, make_git_repo, stored_repo
@@ -22,8 +23,11 @@ SPEC = (
     "# Accounts\n\nAn account is a customer of Acme. Each account owns its invoices.\n"
 )
 LIVE_STATEMENT = "Seat pricing is a flat monthly fee of 5 EUR."
-LIVE_REQ = f"""\
-id: REQ-F-001
+
+
+def live_req(rid: str) -> str:
+    return f"""\
+id: {rid}
 statement: {LIVE_STATEMENT}
 evidence:
   quotes:
@@ -33,6 +37,8 @@ modules: [MOD-billing]
 modality: must
 actor: the billing system
 """
+
+
 HEADER = (
     "Work in a fresh session or subagent. Do not read kb/requirements, kb/decisions, kb/invariants, kb/exclusions or "
     "kb/features; extract from the segments below only. Work segment by segment, bottom-up. Also record entities as "
@@ -45,7 +51,7 @@ def ingested(tmp_path: Path, *, records: bool = True) -> Path:
     assert invoke(root, "ingest").exit_code == 0
     if records:
         (root / "kb/requirements").mkdir(parents=True)
-        (root / "kb/requirements/REQ-F-001.yaml").write_text(LIVE_REQ)
+        (root / "kb/requirements/REQ-F-007.yaml").write_text(live_req("REQ-F-007"))
     git(root, "add", "-A")
     git(root, "commit", "-m", "ingest")
     return root
@@ -63,12 +69,25 @@ def test_extract_brief_is_blind_and_complete(tmp_path):
     assert len(refs) == 2 and all(f"### {ref} · page" in brief for ref in refs)
     assert HEADER in flat(brief)
     # blind: no live statement and no live record id; run B numbers past the live ids, with the B- prefix
-    assert LIVE_STATEMENT not in brief and "REQ-F-001" not in brief
-    assert "B-REQ-F-002" in brief and "B-REQ-NF-001" in brief and "B-EXCL-001" in brief
+    # B- ids are their own namespace, numbered from 001: kb's next free ids (REQ-F-008) are never shown
+    assert LIVE_STATEMENT not in brief and not re.search(r"(?<!B-)REQ-F-\d", brief) and "008" not in brief
+    for nid in ("B-REQ-F-001", "B-REQ-NF-001", "B-EXCL-001", "B-ADR-0001", "B-INV-001"):
+        assert f"- {nid}" in brief or f": {nid}" in brief, nid
+    assert "start each numbered type at 001" in flat(brief)
+    # nor the first extraction's entities, triage or ingest brief
+    assert "Do not read kb/glossary/, kb/sources/*/triage.yaml or .kb/cache/ingest/ either" in flat(brief)
     # the ingest rules, reused, with run B's own drafted_by and destination
     assert "Quote word for word from the cited segment." in brief and "relations" in brief
     assert 'drafted_by: "agent:<your name> via kb eval extract"' in brief and "via kb ingest brief" not in brief
     assert f"{RUN_B}/requirements/B-REQ-F-" in brief and f"{RUN_B}/glossary/B-TERM-" in brief
+    # the rules themselves name the run B paths and ids, never kb/'s
+    rules = brief.split("## The rules")[1].split("## Next free IDs")[0]
+    for path in ("requirements/B-REQ-*.yaml", "decisions/B-ADR-*.md", "invariants/B-INV-*.md", "exclusions/B-EXCL-*.yaml",
+                 "glossary/B-TERM-<name>.yaml", "sources/SRC-…/triage.yaml"):
+        assert f"`{RUN_B}/{path}" in rules, path
+    assert "`kb/" not in rules
+    # Task 8 adds `kb eval judge`; the template's note about that is not part of the brief
+    assert "run `kb eval judge`" in brief and "<!--" not in brief
     assert "Never write, edit or delete anything under `kb/`" in brief
     # the examples are run B files: B- ids, run-b paths, no triage, feature or component
     assert f"#### {RUN_B}/requirements/B-REQ-F-034.yaml" in brief and "id: B-REQ-F-034" in brief
@@ -184,16 +203,13 @@ def test_run_b_items_are_validated_not_trusted(tmp_path):
     assert [(r.type, r.target) for r in account.relations] == [("owns", "B-TERM-invoice")]
 
 
-def test_run_b_id_that_is_a_live_kb_id_is_invalid(tmp_path):
+def test_run_b_ids_are_their_own_namespace(tmp_path):
     run_b(tmp_path, {
         "requirements/B-REQ-F-001.yaml": b_req("B-REQ-F-001", "A seat costs 5 EUR per month."),
         "requirements/B-REQ-F-002.yaml": b_req("B-REQ-F-002", "Refunds are never given for a removed seat."),
     })
-    items, issues = load_run_b(tmp_path, kb_repo(("kb/requirements/REQ-F-001.yaml", LIVE_REQ)))
-    assert [i.id for i in items] == ["B-REQ-F-002"]
-    (issue,) = issues
-    assert issue.code == "eval.run_b_invalid" and issue.path == f"{RUN_B}/requirements/B-REQ-F-001.yaml"
-    assert "live kb record" in issue.message
+    items, issues = load_run_b(tmp_path, kb_repo(("kb/requirements/REQ-F-001.yaml", live_req("REQ-F-001"))))
+    assert [i.id for i in items] == ["B-REQ-F-001", "B-REQ-F-002"] and issues == []
 
 
 def test_run_b_numbers_sources_and_relations_are_checked(tmp_path):
@@ -242,6 +258,27 @@ def test_run_b_garbage_is_reported_not_raised(tmp_path):
     assert "symlink" in msg["requirements/B-REQ-F-009.yaml"]
     assert "quotes no source" in msg["decisions/B-ADR-0001.md"]
     assert "not a run B record file" in msg["features/B-FEAT-001.md"]
+
+
+def test_oversized_run_b_file_is_invalid(tmp_path):
+    big = b_req("B-REQ-F-001", "A seat costs 5 EUR per month.") + "# " + "x" * (2 * 1024 * 1024) + "\n"
+    run_b(tmp_path, {"requirements/B-REQ-F-001.yaml": big})
+    items, issues = load_run_b(tmp_path, kb_repo())
+    assert items == []
+    (issue,) = issues
+    assert issue.code == "eval.run_b_invalid" and "too large" in issue.message
+
+
+def test_run_b_reads_at_most_2000_files(tmp_path):
+    base = tmp_path / RUN_B
+    base.mkdir(parents=True)
+    for n in range(2001):
+        (base / f"f{n:04d}.txt").write_text("")
+    items, issues = load_run_b(tmp_path, kb_repo())
+    assert items == []
+    capped = [i for i in issues if "too many files" in i.message]
+    assert len(capped) == 1 and capped[0].code == "eval.run_b_invalid" and capped[0].path == RUN_B
+    assert len(issues) == 2001  # the cap, and one per file read (none is a record file)
 
 
 def test_missing_run_b_is_empty(tmp_path):

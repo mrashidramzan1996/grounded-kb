@@ -158,10 +158,11 @@ def _template(name: str) -> Template:
     return Template(files("kb.ingest").joinpath("templates", name).read_text(encoding="utf-8"))
 
 
-def rules(drafted_by: str) -> str:
-    """The numbered drafting rules (templates/rules.md), shared by the ingest brief and the `kb eval extract` brief;
-    `drafted_by` is the value rule 8 asks for."""
-    return _template("rules.md").substitute(drafted_by=drafted_by).rstrip("\n")
+def rules(drafted_by: str, kb_dir: str = "kb", id_prefix: str = "") -> str:
+    """The numbered drafting rules (templates/rules.md), shared by the ingest brief and the `kb eval extract` brief:
+    `drafted_by` is the value rule 8 asks for, `kb_dir` the directory the record paths are under and `id_prefix` what
+    the drafted ids start with (".kb/cache/eval/run-b" and "B-" for run B)."""
+    return _template("rules.md").substitute(drafted_by=drafted_by, kb_dir=kb_dir, id_prefix=id_prefix).rstrip("\n")
 
 
 def _example_records(by: str = DRAFTED_BY) -> list[tuple[str, bytes]]:

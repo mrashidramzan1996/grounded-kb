@@ -62,19 +62,18 @@ class Alignment:
     only_b_entities: list[Item] = field(default_factory=list)
     matched_relations: list[tuple[str, str]] = field(default_factory=list)  # ("TERM-a:owns:TERM-b", "B-TERM-x:owns:B-TERM-y")
     only_kb_relations: list[str] = field(default_factory=list)  # "TERM-a:owns:TERM-b"
-    only_b_relations: list[tuple[str, str, str]] = field(default_factory=list)  # (source name, type, target name)
+    # (source name, type, target name), one per distinct unmatched relation: two can show the same names
+    only_b_relations: list[tuple[str, str, str]] = field(default_factory=list)
+    unlocated: list[str] = field(default_factory=list)  # kb records none of whose quotes is found: not aligned at all
 
 
 # --- items -------------------------------------------------------------------------------------------------------
 
 def entity_names(term: Term) -> tuple[str, ...]:
-    """The names a term aligns by: graph.entity_key (usable name and aliases, the name first). When none is usable,
-    the folded raw name alone; when that is empty too, nothing, and the term never aligns."""
+    """The names a term aligns by: graph.entity_key (usable name and aliases), the name first. When none is usable the
+    result is empty and the term never aligns: an unusable name ("it", ".") is never matched on."""
     key = entity_key(term)
-    if key:
-        return tuple(n for n in dict.fromkeys(normalise_name(x) for x in (term.name, *term.aliases)) if n in key)
-    raw = normalise_name(term.name)
-    return (raw,) if raw else ()
+    return tuple(n for n in dict.fromkeys(normalise_name(x) for x in (term.name, *term.aliases)) if n in key)
 
 
 def found_spans(repo: KbRepo, ev: Evidence | None) -> tuple[Span, ...]:
@@ -95,7 +94,8 @@ def entity_item(iid: str, term: Term, spans: tuple[Span, ...], target_prefix: st
 
 def kb_items(repo: KbRepo) -> list[Item]:
     """Live requirements, exclusions, decisions and invariants with evidence (spans from coverage.quote_spans), and
-    live glossary terms as entities, sorted by id."""
+    live glossary terms as entities, sorted by id. A record none of whose quotes is found has no spans; align() lists
+    it as unlocated."""
     live = live_ids(repo)
     spans: dict[str, list[Span]] = {}
     for src, found in quote_spans(repo).items():
@@ -171,9 +171,11 @@ def _relations(items: list[Item]) -> list[tuple[str, frozenset[str], str, frozen
 
 def align(kb_items: list[Item], b_items: list[Item]) -> Alignment:
     """Records match when, in some shared source, their found quotes overlap by at least MIN_OVERLAP of the shorter
-    one; every such pair is matched (one record may match several). Entities match when their names share one;
-    relations when the type is the same and both ends' names share one."""
-    kb_recs = [i for i in kb_items if i.kind != "entity"]
+    one; every such pair is matched (one record may match several). A kb record without spans is unlocated, not
+    aligned. Entities match when their names share one; relations when the type is the same and both ends' names
+    share one."""
+    unlocated = sorted(i.id for i in kb_items if i.kind != "entity" and not i.spans)
+    kb_recs = [i for i in kb_items if i.kind != "entity" and i.spans]
     b_recs = [i for i in b_items if i.kind != "entity"]
     kb_spans = [(k.id, _merged(k.spans)) for k in kb_recs]
     b_spans = [(b.id, _merged(b.spans)) for b in b_recs]
@@ -192,6 +194,7 @@ def align(kb_items: list[Item], b_items: list[Item]) -> Alignment:
     kb_rels, b_rels = _relations(kb_ents), _relations(b_ents)
     matched_r = sorted({(k[0], b[0]) for k in kb_rels for b in b_rels if k[2] == b[2] and k[1] & b[1] and k[3] & b[3]})
     kb_r_hit, b_r_hit = {k for k, _ in matched_r}, {b for _, b in matched_r}
+    only_b_r = {b[0]: (b[4], b[2], b[5]) for b in b_rels if b[0] not in b_r_hit}  # by id label: names may repeat
 
     return Alignment(
         matched=matched,
@@ -204,7 +207,8 @@ def align(kb_items: list[Item], b_items: list[Item]) -> Alignment:
         only_b_entities=sorted((b for b in b_ents if b.id not in b_e_hit), key=lambda i: i.id),
         matched_relations=matched_r,
         only_kb_relations=sorted({k[0] for k in kb_rels if k[0] not in kb_r_hit}),
-        only_b_relations=sorted({(b[4], b[2], b[5]) for b in b_rels if b[0] not in b_r_hit}),
+        only_b_relations=[names for _, names in sorted(only_b_r.items(), key=lambda kv: (kv[1], kv[0]))],
+        unlocated=unlocated,
     )
 
 
@@ -232,17 +236,27 @@ def _side_f1(pairs: list[tuple[str, str]], only_kb: list, only_b: list) -> float
     return (kb + b) / total if total else None
 
 
+def _round_half_up(x: float) -> int:
+    return int(x + 0.5)
+
+
 def agreement(al: Alignment, n_kb: int, n_b: int) -> dict:
-    """Agreement of the two runs over `n_kb` kb records and `n_b` run B records. `matched` counts facts both runs
-    found (a split or a merge counts once). `estimated_total` is the capture–recapture (Lincoln–Petersen) estimate of
-    how many there are; both runs tend to miss the same ones, so n_kb / estimated_total is an upper bound on recall."""
+    """Agreement of the two runs, counted in facts: `matched` facts both runs found (a split or a merge is one fact),
+    plus each run's unmatched items, so a pure split is full agreement. `kb_items` and `b_items` are the raw item counts
+    `n_kb` and `n_b`; `unlocated` kb records (no quote found) take no part. `estimated_total` is the capture–recapture
+    (Lincoln–Petersen) estimate of how many facts there are, rounded half up; both runs tend to miss the same ones, so
+    the kb's facts / estimated_total is an upper bound on recall."""
     m = _facts(al.matched)
+    kb_facts, b_facts = m + len(al.only_kb), m + len(al.only_b)
     return {
         "matched": m,
         "only_kb": len(al.only_kb),
         "only_b": len(al.only_b),
-        "span_f1": 2 * m / (n_kb + n_b) if n_kb + n_b else None,
-        "estimated_total": round(n_kb * n_b / m) if m else None,
+        "kb_items": n_kb,
+        "b_items": n_b,
+        "unlocated": len(al.unlocated),
+        "span_f1": 2 * m / (kb_facts + b_facts) if kb_facts + b_facts else None,
+        "estimated_total": _round_half_up(kb_facts * b_facts / m) if m else None,
         "entity_f1": _side_f1(al.matched_entities, al.only_kb_entities, al.only_b_entities),
         "relation_f1": _side_f1(al.matched_relations, al.only_kb_relations, al.only_b_relations),
     }
@@ -252,14 +266,15 @@ def _ratio(x: float | None) -> str:
     return "n/a" if x is None else f"{x:.2f}"
 
 
-def render_agreement(agr: dict, n_kb: int) -> str:
+def render_agreement(agr: dict) -> str:
     """Markdown lines for an agreement dict; the capture–recapture estimate is always shown as an upper bound."""
+    kb_facts = agr["matched"] + agr["only_kb"]
     lines = [
         f"- matched: {agr['matched']}; only in kb: {agr['only_kb']}; only in run B: {agr['only_b']}",
         f"- span F1: {_ratio(agr['span_f1'])}; entity F1: {_ratio(agr['entity_f1'])}; relation F1: {_ratio(agr['relation_f1'])}",
     ]
     est = agr["estimated_total"]
     if est:
-        lines.append(f"- capture–recapture estimate: about {est} in all, so kb holds at most {n_kb} of {est} "
-                     f"({round(100 * n_kb / est)}%). This is an upper bound on recall: both runs tend to miss the same rules.")
+        lines.append(f"- capture–recapture estimate: about {est} in all, so kb holds at most {kb_facts} of {est} "
+                     f"({_round_half_up(100 * kb_facts / est)}%). This is an upper bound on recall: both runs tend to miss the same rules.")
     return "\n".join(lines) + "\n"

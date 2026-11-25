@@ -1,3 +1,5 @@
+<!-- `kb eval judge`, named below, is added by Task 8 of the 0.4.0 plan. Lines like this one are template notes:
+kb strips them, so they never reach the brief. -->
 # kb eval extract brief $version
 
 Work in a fresh session or subagent. Do not read kb/requirements, kb/decisions, kb/invariants, kb/exclusions or
@@ -12,17 +14,21 @@ write against the documents and sets aside any it cannot verify. When you are do
 
 These come first: where the rules below say otherwise, follow these.
 
+- Do not read kb/glossary/, kb/sources/*/triage.yaml or .kb/cache/ingest/ either: they hold the first extraction's
+  entities, triage and brief. Read only this brief and, for module names, `kb.config.yaml`.
 - Write every file under `$run_b/`, laid out like `kb/`: requirements in `$run_b/requirements/B-REQ-F-….yaml`
   and `$run_b/requirements/B-REQ-NF-….yaml`, exclusions in `$run_b/exclusions/B-EXCL-….yaml`, decisions in
   `$run_b/decisions/B-ADR-….md`, invariants in `$run_b/invariants/B-INV-….md` and entities in
   `$run_b/glossary/B-TERM-<name>.yaml`.
 - Prefix every ID with `B-`: in the file name, in `id:`, and wherever one of your records names another
-  (`target: B-TERM-invoice`, `entities: [B-TERM-seat]`, `actor: B-TERM-account`). Count up from the next free IDs below.
+  (`target: B-TERM-invoice`, `entities: [B-TERM-seat]`, `actor: B-TERM-account`). B- IDs are a namespace of their own:
+  start each numbered type at 001 (`B-REQ-F-001`, `B-ADR-0001`, …) and count up.
 - Never write, edit or delete anything under `kb/`, and do not change `kb.config.yaml`. Do not run `kb module add`,
   `kb ingest`, `kb redraft` or any other command that writes.
 - Skip rule 6 (modules) and rule 7 (triage): draft no features, components or triage files. Link each requirement and
   exclusion to one of these modules: $modules.
-- In rule 9, the next free IDs are the `B-` IDs below. There are no existing records to supersede.
+- In rule 9, the next free IDs are the `B-` IDs below, each the first of its type. There are no existing records to
+  supersede.
 
 ## The rules
 

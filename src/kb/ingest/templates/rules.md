@@ -1,5 +1,5 @@
-1. Draft one fact per requirement: one `kb/requirements/REQ-*.yaml` file per testable statement.
-   Use `REQ-F-…` for functional and `REQ-NF-…` for non-functional requirements.
+1. Draft one fact per requirement: one `$kb_dir/requirements/${id_prefix}REQ-*.yaml` file per testable statement.
+   Use `${id_prefix}REQ-F-…` for functional and `${id_prefix}REQ-NF-…` for non-functional requirements.
 2. Quote word for word from the cited segment. Every requirement, exclusion, decision and invariant carries
    `evidence.quotes`; each quote names one segment (`source: SRC-…#seg-NN`) and its `text` must appear
    in that segment exactly as written. A quote that is not in its segment is rejected.
@@ -12,14 +12,14 @@
      system does is `must`, with `origin: stated`.
    - `origin` is `stated`, or `implied` when the document implies the requirement without saying it. An implied
      requirement must later be confirmed by the user.
-4. Draft passages that record a choice as ADRs (`kb/decisions/ADR-*.md`) with quotes, and must-keep
-   rules as INVs (`kb/invariants/INV-*.md`) with quotes.
+4. Draft passages that record a choice as ADRs (`$kb_dir/decisions/${id_prefix}ADR-*.md`) with quotes, and must-keep
+   rules as INVs (`$kb_dir/invariants/${id_prefix}INV-*.md`) with quotes.
 4b. Draft each statement that puts something out of scope (out of scope, not in this release, not supported) as an
-   exclusion, `kb/exclusions/EXCL-*.yaml`, with `statement`, `evidence.quotes` and the `modules:` or `features:` it
+   exclusion, `$kb_dir/exclusions/${id_prefix}EXCL-*.yaml`, with `statement`, `evidence.quotes` and the `modules:` or `features:` it
    limits. An exclusion has no `modality`, `actor`, `category` or `origin`. Never triage such a segment
    `none: out-of-scope`; name the EXCL id instead.
 4c. Record each named actor, system, data object, external party, document, event or business concept as a TERM with
-   `kind`, a definition and a quote that contains its name. Write it to `kb/glossary/TERM-<name>.yaml` with `kind` one
+   `kind`, a definition and a quote that contains its name. Write it to `$kb_dir/glossary/${id_prefix}TERM-<name>.yaml` with `kind` one
    of actor, system, data, external, document, event, concept. The name or an alias must appear in a quote; list
    plural and other forms as `aliases`.
    - Record how entities relate as `relations` on the source term, each with a quote that mentions both. `type` is owns,
@@ -31,7 +31,7 @@
    `kb module add MOD-<name> --owner <@team|TODO> [--risk …]`, with no paths. Never guess paths;
    use `--owner <@handle>` only when the documents name a forge handle (e.g. @acme/billing);
    a team name like 'Billing team' means `--owner TODO`, and so do documents that name no owner.
-7. Write `triage.yaml` for every segment, in `kb/sources/SRC-…/triage.yaml`: map each segment ID to
+7. Write `triage.yaml` for every segment, in `$kb_dir/sources/SRC-…/triage.yaml`: map each segment ID to
    the IDs drafted from it (at least one of the named records must quote that segment, or be a feature
    linking a requirement that does),
    or to `"none: <code>: <reason>"` with a code from heading, background, contact, boilerplate, example,

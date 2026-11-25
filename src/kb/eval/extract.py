@@ -24,11 +24,10 @@ from kb.gates.quotes import (
     quote_results,
     too_short,
 )
-from kb.ingest.brief import _example_records, _examples, _segments, next_ids, rules
+from kb.ingest.brief import _example_records, _examples, _segments, rules
 from kb.issues import Issue
 from kb.records.ids import ADR_ID, EXCL_ID, INV_ID, REQ_ID, TERM_ID, parse_id
 from kb.records.io import RecordError, parse_record
-from kb.records.lifecycle import live_ids
 from kb.records.models import Evidence, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
@@ -50,7 +49,17 @@ RUN_B_DIRS = {
     "invariants": ("INV-", ".md"),
     "glossary": ("TERM-", ".yaml"),
 }
-_NUMBERED = ("REQ-F", "REQ-NF", "EXCL", "ADR", "INV")
+# run B's ids are their own namespace: every numbered type starts at 001, whatever kb holds (the brief never shows kb's
+# next free ids)
+FIRST_IDS = (
+    ("Functional requirement", "B-REQ-F-001"),
+    ("Non-functional requirement", "B-REQ-NF-001"),
+    ("Exclusion", "B-EXCL-001"),
+    ("Decision", "B-ADR-0001"),
+    ("Invariant", "B-INV-001"),
+)
+MAX_RUN_B_FILES = 2000
+_TEMPLATE_NOTE = re.compile(r"<!--.*?-->\n", re.DOTALL)  # notes in the template, stripped before rendering
 # where an id of a record type run B drafts starts, to give it the B- prefix in the examples
 _DRAFTED_ID = re.compile(rf"(?<![\w-])(?=(?:{REQ_ID}|{EXCL_ID}|{ADR_ID}|{INV_ID}|{TERM_ID})(?![\w-]))")
 _REF_FIELDS = ("actor", "entities", "features", "requirements", "supersedes")
@@ -70,19 +79,20 @@ def _run_b_examples() -> list[tuple[str, bytes]]:
 
 
 def build_extract_brief(root: Path, config: KbConfig) -> str:
-    """The blind brief: the ingest rules, run B's destination and B- ids, and every segment of every stored source.
-    It holds no record of the knowledge base (no statement, no id); deterministic for the same repo state."""
+    """The blind brief: the ingest rules (naming run B's paths and B- ids), and every segment of every stored source.
+    It holds nothing of the knowledge base (no statement, no id, not even its next free ids); deterministic for the
+    same repo state."""
     repo = KbRepo.load(Path(root))
     if not repo.sources:
         raise EvalError("nothing ingested: run `kb ingest` first, then `kb eval extract`")
     modules = ", ".join(inline_code(m.id) for m in config.modules) or "`MOD-<name>`, named after the part of the product it concerns"
-    template = Template(files("kb.eval").joinpath("templates", "extract.md").read_text(encoding="utf-8"))
-    return template.substitute(
+    text = files("kb.eval").joinpath("templates", "extract.md").read_text(encoding="utf-8")
+    return Template(_TEMPLATE_NOTE.sub("", text)).substitute(
         version=EXTRACT_VERSION,
         run_b=RUN_B,
         modules=modules,
-        rules=rules(DRAFTED_BY),
-        next_ids="\n".join(f"- {label}: {B}{nid}" for label, nid in next_ids(repo) if nid.rsplit("-", 1)[0] in _NUMBERED),
+        rules=rules(DRAFTED_BY, kb_dir=RUN_B, id_prefix=B),
+        next_ids="\n".join(f"- {label}: {nid}" for label, nid in FIRST_IDS),
         examples=_examples(_run_b_examples()),
         segments=_segments(repo, list(repo.sources)),
     )
@@ -116,7 +126,8 @@ def _invalid(rel: str, why: str, record: str | None = None) -> Issue:
 
 
 def _run_b_files(root: Path) -> tuple[list[str], list[Issue]]:
-    """Paths under RUN_B (relative to it) of every file, and an issue per symlinked directory; dot files are skipped."""
+    """Paths under RUN_B (relative to it) of the files, in sorted walk order and at most MAX_RUN_B_FILES of them (an
+    issue says when there are more), and an issue per symlinked directory; dot files are skipped."""
     _refuse_symlinks(root, RUN_B)
     base = root / RUN_B
     if not base.is_dir():
@@ -129,7 +140,12 @@ def _run_b_files(root: Path) -> tuple[list[str], list[Issue]]:
             if (here / d).is_symlink():
                 issues.append(_invalid((here / d).relative_to(base).as_posix(), "a symlink; not read"))
         dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not (here / d).is_symlink())
-        found.extend((here / f).relative_to(base).as_posix() for f in filenames if not f.startswith("."))
+        found.extend((here / f).relative_to(base).as_posix() for f in sorted(filenames) if not f.startswith("."))
+        if len(found) > MAX_RUN_B_FILES:
+            issues.append(Issue("eval.run_b_invalid", f"too many files: more than {MAX_RUN_B_FILES}; only the first "
+                                f"{MAX_RUN_B_FILES} are read", "error", RUN_B))
+            found = found[:MAX_RUN_B_FILES]
+            break
     return sorted(found), issues
 
 
@@ -193,9 +209,7 @@ def _quote_problems(repo: KbRepo, ev: Evidence) -> list[str]:
     return out
 
 
-def _problems(repo: KbRepo, rec, live: set[str]) -> list[str]:
-    if not isinstance(rec, Term) and rec.id in live:
-        return [f"{B}{rec.id} is a live kb record's id with {B} taken off; number run B from the next free IDs in the brief"]
+def _problems(repo: KbRepo, rec) -> list[str]:
     if rec.evidence is None:
         return ["quotes no source; add evidence.quotes from the segment it comes from"]
     out = _quote_problems(repo, rec.evidence)
@@ -208,7 +222,7 @@ def _problems(repo: KbRepo, rec, live: set[str]) -> list[str]:
     return out
 
 
-def _parse(root: Path, rel: str, repo: KbRepo, live: set[str]):
+def _parse(root: Path, rel: str, repo: KbRepo):
     """(record, relation-target prefix flags) for one run B file, or an Issue."""
     parts = rel.split("/")
     if len(parts) != 2 or parts[0] not in RUN_B_DIRS:
@@ -230,7 +244,7 @@ def _parse(root: Path, rel: str, repo: KbRepo, live: set[str]):
         rec = parse_record(name[len(B):], data, transform=lambda f: _strip_prefix(f, flags))
     except RecordError as e:
         return _invalid(rel, f"does not parse: {inline_code(str(e))}")
-    if problems := _problems(repo, rec, live):
+    if problems := _problems(repo, rec):
         return _invalid(rel, "; ".join(problems), B + rec.id)  # type: ignore[union-attr]
     return rec, flags
 
@@ -254,10 +268,9 @@ def load_run_b(root: Path, repo: KbRepo) -> tuple[list[Item], list[Issue]]:
     symlink."""
     root = Path(root)
     rels, issues = _run_b_files(root)
-    live = live_ids(repo)
     parsed: dict[str, tuple[str, object, list[bool]]] = {}  # B id -> (path under RUN_B, record, target flags)
     for rel in rels:
-        got = _parse(root, rel, repo, live)
+        got = _parse(root, rel, repo)
         if isinstance(got, Issue):
             issues.append(got)
         else:
