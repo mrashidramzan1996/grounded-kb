@@ -322,3 +322,21 @@ def test_glossary_change_requires_intent_approvers(tmp_path):
 def test_component_change_requires_decision_approvers(tmp_path):
     head = _only("kb/components/COMP-001.md", b"---\nid: COMP-001\ntitle: C\nmodule: MOD-a\n---\nbody\n")
     assert required_owners(tmp_path, cfg(), head, None, changes(), []) == {"@arch": ["component COMP-001 changed"]}
+
+
+def test_unparsable_changed_record_still_needs_approvers(tmp_path):
+    files = {
+        "kb/features/FEAT-009.md": b"---\nnot: [valid\n---\n",
+        "kb/glossary/TERM-009.yaml": b"id: [\n",
+        "kb/components/COMP-009.md": b"---\n: :\n---\n",
+        "kb/features/FEAT-001.md": b"---\nid: FEAT-001\ntitle: T\nmodule: MOD-a\n---\nbody\n",
+    }
+    head = repo_of(files)
+    assert "kb/features/FEAT-009.md" not in head.paths.values()
+    got = required_owners(tmp_path, cfg(), head, repo_of({}), changes(*files), [])
+    assert got == {
+        "@arch": ["kb/components/COMP-009.md changed"],
+        "@pm": ["feature FEAT-001 changed", "kb/features/FEAT-009.md changed", "kb/glossary/TERM-009.yaml changed"],
+    }
+    assert required_owners(tmp_path, cfg(), head, None, changes(*files), []) == {
+        "@pm": ["feature FEAT-001 changed"]}  # no base: changed files are not consulted

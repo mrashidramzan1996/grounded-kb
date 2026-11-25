@@ -52,7 +52,8 @@ grant `pull-requests: write` for the comment (the template does).
 On a pull request, `kb verify` reports `missing_owner_approval` until the right people approve the head commit:
 CODEOWNERS (or, without one, the module owners) for the files changed, `policy.approvers.intent` for changed or stale
 requirements, features and glossary terms, and `policy.approvers.decisions` for changed decisions, invariants and
-components. The approval policy
+components. Numbers in a live feature's claims, title and body must appear in the statements or quotes of its linked
+requirements; otherwise `kb check` warns `claim.number_not_in_requirement`. The approval policy
 (`policy.approvers`, `teams`, `bots`, module owners, `fail_on` and `mode`) and CODEOWNERS are read from the current tip
 of the target branch (`--base`, else the default branch), not from the pull request and not from the merge-base, so a
 change cannot loosen the rules it is checked against, not even by branching from an old commit; the Approvals section

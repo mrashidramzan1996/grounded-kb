@@ -24,6 +24,8 @@ CodeownersRules = list[tuple[str, list[str]]]
 _READ_NOW = object()  # required_owners default: read CODEOWNERS from the working tree when called
 # required_owners' handle when the policy names no decision approvers: no login matches it, so it fails closed
 NO_DECISION_APPROVERS = "(no decision approvers)"
+_INTENT_DIRS = ("kb/requirements/", "kb/features/", "kb/glossary/")
+_DECISION_DIRS = ("kb/decisions/", "kb/invariants/", "kb/components/")
 
 
 def codeowners_rules(root: Path) -> CodeownersRules | None:
@@ -135,6 +137,17 @@ def required_owners(
         elif path.startswith("kb/invariants/"):
             for h in decisions:
                 need(h, f"invariant {rid} changed")
+    # a changed record file that does not parse is in no record map: route it by its path, so it cannot dodge approval
+    parsed = set(_changed_records(repo, base_repo).values())
+    for path in sorted(changes.files if changes and base_repo is not None else ()):
+        if path in parsed:
+            continue
+        if path.startswith(_INTENT_DIRS):
+            for h in intent:
+                need(h, f"{path} changed")
+        elif path.startswith(_DECISION_DIRS):
+            for h in decisions:
+                need(h, f"{path} changed")
     for v in verdicts:
         if v.kind == "requirement" and v.status == "stale":
             for h in intent:

@@ -1,7 +1,8 @@
-from helpers import add_adr, codes, req, set_field
+from helpers import add_adr, codes, load_dir, req, set_claim, set_field
 
-from kb.gates.base import run_gates
+from kb.gates.base import GateContext, run_gates
 from kb.gates.quotes import MAX_QUOTES_PER_CLAIM, quote_gate
+from kb.records.repo import KbRepo
 
 SPEC = "pricing-spec-v3"
 
@@ -82,8 +83,6 @@ def test_superseded_record_quote_not_found_is_warning(valid_ctx_with):
 
 # --- numbers in feature claims come from their requirements ----------------------------------
 
-from helpers import set_claim  # noqa: E402
-
 _REQ_500 = set_field(
     "REQ-F-001",
     statement="Seats can be removed until 500 seats.",
@@ -119,17 +118,11 @@ def test_claim_without_requirement_uses_the_feature_requirements(valid_ctx_with)
 def test_feature_body_numbers_checked(valid_ctx_with):
     ctx = valid_ctx_with(_REQ_500, set_field("FEAT-001", requirements=["REQ-F-001"]))
     assert _claim_issues(ctx) == []
-    path = ctx.root / "kb/features/FEAT-001.md"
-    from helpers import load_dir
-    from kb.gates.base import GateContext
-    from kb.records.repo import KbRepo
-
     files = load_dir(ctx.root)
     files["kb/features/FEAT-001.md"] = files["kb/features/FEAT-001.md"] + b"\nFree for the first 90 days.\n"
     ctx = GateContext(ctx.root, ctx.config, KbRepo.from_files(files))
     (issue,) = _claim_issues(ctx)
     assert issue.message == "FEAT-001: title and body numbers not in any linked requirement: 90"
-    assert path.exists()
 
 
 def test_ids_in_claims_are_not_numbers(valid_ctx_with):
