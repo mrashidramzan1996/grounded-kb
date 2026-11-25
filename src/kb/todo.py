@@ -340,6 +340,20 @@ def _owner_asks(issues: list[Issue], config: KbConfig) -> list[AskItem]:
     return list(out.values())
 
 
+_TEXT_SUFFIXES = {".md", ".txt"}  # documents an agent can edit; a PDF or Word file it must not touch
+
+
+def _remove_secret(document: str) -> str:
+    """What the agent does when the person says remove the secret: edit a text document itself, never a PDF or
+    Word document (the person removes it there)."""
+    if Path(document).suffix.lower() in _TEXT_SUFFIXES:
+        how = f"delete that paragraph (or line) from {inline_code(document)} yourself"
+    else:
+        how = (f"do not edit {inline_code(document)} yourself (a PDF or Word document): ask the person to remove the "
+               "secret from it and tell you when it is done")
+    return f"{how}, then `kb source sync`; tell the person to rotate the key"
+
+
 def _secret_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
     out: dict[str, AskItem] = {}
     for i in issues:
@@ -352,9 +366,7 @@ def _secret_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
         out[i.record] = AskItem(
             f"secret:{i.record}", "secret", question[0], {"document": document, "source": i.record},
             (
-                Option("remove", "Remove it from the document",
-                       f"delete that paragraph from {inline_code(document)} (or ask the person to, for PDF or Word), then "
-                       "`kb source sync`; tell the person to rotate the key"),
+                Option("remove", "Remove it from the document", _remove_secret(document)),
                 Option("self", "I will handle it", "leave it; kb check keeps reporting it"),
             ),
             question[1],
@@ -492,7 +504,9 @@ def render_todo_text(t: Todo) -> str:
         lines.append(f"{n}. {_line(a.question_text)}")
         if a.evidence:
             lines.append(f"   evidence: {_evidence_text(a.evidence)}")
-        lines.extend(f"   ({chr(ord('a') + k)}) {_line(o.label)}" for k, o in enumerate(a.options))
+        for k, o in enumerate(a.options):
+            # `then` is kb's own template; the values it embeds are inline code already
+            lines += [f"   ({chr(ord('a') + k)}) {_line(o.label)}", f"       then: {_line(o.then)}"]
     if not t.ask:
         lines.append("- nothing")
     return "\n".join(lines) + "\n"

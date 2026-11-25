@@ -7,6 +7,7 @@ from helpers import (
     TODO_CONFIG,
     TODO_TRIAGE,
     commit,
+    docx_bytes,
     git,
     ok,
     put,
@@ -14,6 +15,7 @@ from helpers import (
     todo_drafted,
     todo_ingested,
     todo_json,
+    todo_repo,
 )
 
 from kb.todo import build_todo
@@ -136,8 +138,8 @@ def test_secret_ask_names_document(tmp_path):
         "evidence": {"document": "docs/keys.md", "source": "SRC-keys"},
         "options": [
             {"key": "remove", "label": "Remove it from the document",
-             "then": "delete that paragraph from `docs/keys.md` (or ask the person to, for PDF or Word), then "
-                     "`kb source sync`; tell the person to rotate the key"},
+             "then": "delete that paragraph (or line) from `docs/keys.md` yourself, then `kb source sync`; tell the "
+                     "person to rotate the key"},
             {"key": "self", "label": "I will handle it", "then": "leave it; kb check keeps reporting it"},
         ],
     }
@@ -149,13 +151,16 @@ def test_secret_ask_escapes_document_path(tmp_path):
     item = asks(root)["secret:SRC-k-e-y-x"]
     assert item["question"] == f"{document} contains a secret (the stored copy is masked). Remove it from the original?"
     assert item["evidence"] == {"document": document, "source": "SRC-k-e-y-x"}  # JSON keeps raw values
-    assert item["options"][0]["then"].startswith("delete that paragraph from ``docs/k`e`y *x*.md`` (or ask")
+    assert item["options"][0]["then"].startswith("delete that paragraph (or line) from ``docs/k`e`y *x*.md`` yourself")
     text = ok(root, "todo").stdout.split("Ask the user:\n", 1)[1]
     assert text == (
         "1. ``docs/k`e`y *x*.md`` contains a secret (the stored copy is masked). Remove it from the original?\n"
         "   evidence: ``docs/k`e`y *x*.md``\n"
         "   (a) Remove it from the document\n"
+        "       then: delete that paragraph (or line) from ``docs/k`e`y *x*.md`` yourself, then `kb source sync`; "
+        "tell the person to rotate the key\n"
         "   (b) I will handle it\n"
+        "       then: leave it; kb check keeps reporting it\n"
     )
 
 
@@ -333,8 +338,13 @@ def test_todo_text_escapes_evidence(tmp_path):
         " What should it be?\n"
         "   evidence: `docs/k.md`, page 1, `` Seats `x` ``: ``A seat costs `5` EUR.``\n"
         "   (a) Give a measurable target (a number and a unit)\n"
+        "       then: record the answer with `kb clarify`; once every answer is recorded, run one "
+        "`kb redraft REQ-NF-001 … --new` naming every answered ID, quote the new sentence, run `kb redraft --report`, "
+        "then commit\n"
         "   (b) Keep it flagged for now\n"
+        "       then: leave it; it stays a warning\n"
         "   (c) It is not a real requirement\n"
+        "       then: set `status: rejected` on REQ-NF-001; never delete the file\n"
     )
     item = asks(root)["vague:REQ-NF-001"]  # JSON carries the raw strings
     assert item["question"] == f'REQ-NF-001 says "{statement}" but gives no measurable target. What should it be?'
@@ -365,3 +375,62 @@ def test_ask_ids_stable_across_runs(tmp_path):
     assert first.stderr.strip().endswith(", 4 questions for the user")
     text = ok(root, "todo").stdout
     assert [line.split(".", 1)[0] for line in text.splitlines() if line[:1].isdigit()] == ["1", "2", "3", "4"]
+
+
+def test_todo_text_shows_each_options_then(tmp_path):
+    """An agent reading plain `kb todo` must see what each option tells it to do (agent evaluation, 0.3.0)."""
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
+    found = asks(root)
+    assert list(found) == ["freeze:v1", "vague:REQ-NF-001"]
+    text = ok(root, "todo").stdout.split("Ask the user:\n", 1)[1]
+    assert text == "".join(
+        f"{line}\n" for line in [
+            "1. The knowledge base has no errors. Freeze baseline v1?",
+            "   (a) Freeze it",
+            f"       then: {found['freeze:v1']['options'][0]['then']}",
+            "   (b) Not yet",
+            "       then: leave it",
+            "2. REQ-NF-001 says `A seat costs 5 EUR.` but gives no measurable target. What should it be?",
+            "   evidence: `docs/n.md`, page 1, `Seats`: `A seat costs 5 EUR.`",
+            "   (a) Give a measurable target (a number and a unit)",
+            f"       then: {found['vague:REQ-NF-001']['options'][0]['then']}",
+            "   (b) Keep it flagged for now",
+            "       then: leave it; it stays a warning",
+            "   (c) It is not a real requirement",
+            "       then: set `status: rejected` on REQ-NF-001; never delete the file",
+        ]
+    )
+    assert "then:" not in json.dumps(todo_json(root))  # JSON keeps `then` as a field, unchanged
+
+
+SECRET_LINE = "The staging key is AKIAIOSFODNN7EXAMPLE."
+
+
+def test_secret_remove_then_for_markdown_edits_the_file(tmp_path):
+    root = todo_ingested(tmp_path, **{"docs/keys.md": f"# Keys\n\n{SECRET_LINE}\n", "docs/notes.TXT": f"{SECRET_LINE}\n"})
+    found = asks(root)
+    for source, document in (("SRC-keys", "docs/keys.md"), ("SRC-notes", "docs/notes.TXT")):
+        remove = found[f"secret:{source}"]["options"][0]
+        assert remove["key"] == "remove" and remove["then"] == (
+            f"delete that paragraph (or line) from `{document}` yourself, then `kb source sync`; tell the person to "
+            "rotate the key"
+        )
+
+
+def test_secret_remove_then_for_docx_asks_the_person(tmp_path):
+    """An agent tried to unzip and edit a Word file itself (agent evaluation, 0.3.0)."""
+    from docx import Document
+
+    root = todo_repo(tmp_path)
+    doc = Document()
+    doc.add_heading("Notes", 1)
+    doc.add_paragraph(SECRET_LINE)
+    (root / "docs/notes.docx").write_bytes(docx_bytes(doc))
+    ok(root, "ingest")
+    commit(root, "ingest")
+    remove = asks(root)["secret:SRC-notes"]["options"][0]
+    assert remove["then"] == (
+        "do not edit `docs/notes.docx` yourself (a PDF or Word document): ask the person to remove the secret from "
+        "it and tell you when it is done, then `kb source sync`; tell the person to rotate the key"
+    )
+    assert f"       then: {remove['then']}\n" in ok(root, "todo").stdout
