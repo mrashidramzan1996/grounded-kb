@@ -1,6 +1,7 @@
 from pathlib import Path, PurePosixPath
 from typing import Annotated
 
+import datetime
 import json
 import sys
 
@@ -10,6 +11,7 @@ import kb
 from kb.config.edit import add_module, set_paths
 from kb.config.load import ConfigError, load_config
 from kb.check import run_check
+from kb.clarify import ClarifyError, clarify as record_clarification
 from kb.context import ContextError, governing, render_pack, session_brief
 from kb.agents.registry import agent_names, get_agent
 from kb.hooks import run_hook
@@ -294,6 +296,24 @@ def redraft(
         raise _fail(e) from e
     typer.echo(f"Brief: {REDRAFT_BRIEF}")
     typer.echo(f"Ask your coding agent: *follow {REDRAFT_BRIEF}*")
+
+
+@app.command()
+def clarify(
+    ctx: typer.Context,
+    topic: Annotated[str, typer.Option("--topic", help="What the question was about; becomes the section heading.")],
+    text: Annotated[str, typer.Option("--text", help="The person's answer, as one plain paragraph.")],
+    by: Annotated[str, typer.Option("--by", help="Who decided: @handle or @org/team.")],
+    date: Annotated[str | None, typer.Option("--date", help="When they decided, YYYY-MM-DD (default: today).")] = None,
+) -> None:
+    """Record a person's answer in docs/clarifications.md as a source an agent can quote."""
+    root = Path(ctx.obj["root"])
+    try:
+        _, ref = record_clarification(root, topic, " ".join(text.split()) if "\n" in text.strip() else text, by,
+                                      date or datetime.date.today().isoformat())
+    except (ClarifyError, *TOOL_ERRORS) as e:
+        raise _fail(e) from e
+    typer.echo(f"recorded in docs/clarifications.md; quote it as {ref}")
 
 
 module_app = typer.Typer(help="Manage modules; paths come later, from evidence.", no_args_is_help=True)
