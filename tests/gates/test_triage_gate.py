@@ -162,7 +162,7 @@ def test_ingest_report_rejects_triage_naming_non_quoting_record(md_repo_ingested
 def test_briefs_name_every_reason_code():
     from importlib.resources import files
 
-    for name in ("brief.md", "redraft_new.md"):
+    for name in ("rules.md", "redraft_new.md"):  # rules.md: the ingest brief's rules (shared with kb eval extract)
         text = " ".join(files("kb.ingest").joinpath("templates", name).read_text(encoding="utf-8").split())
         assert all(code in text for code in NONE_CODES), name
         assert '"none: <code>: <reason>"' in text, name

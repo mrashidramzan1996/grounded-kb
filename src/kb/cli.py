@@ -37,6 +37,8 @@ from kb.status import requirement_status, summarize, verified_ids
 from kb.todo import build_todo, render_todo_json, render_todo_text, summary_line as todo_summary
 from kb.trace import TraceError, trace_chain
 from kb.forge import ForgeError, forge_from_option
+from kb.eval import EvalError
+from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, build_extract_brief, clear_run_b
 from kb.graph import build_graph, render_mermaid
 from kb.testrun import TestRunError
 from kb.verify.report import render_json, render_markdown, render_text, summary_line, write_outputs
@@ -641,6 +643,26 @@ def hook(
     typer.echo(out, nl=False)
     if code:
         raise typer.Exit(code)
+
+
+eval_app = typer.Typer(help="Measure the extraction: a blind second run, aligned with the knowledge base.", no_args_is_help=True)
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command("extract")
+def eval_extract(ctx: typer.Context) -> None:
+    """Write a blind brief for a second, independent extraction into .kb/cache/eval/run-b/ (cleared)."""
+    root = Path(ctx.obj["root"])
+    try:
+        brief = build_extract_brief(root, load_config(root / "kb.config.yaml"))
+        commit = head_commit(root)
+        clear_run_b(root)
+        write_cache(root, EXTRACT_BRIEF, brief)
+        write_cache(root, EVAL_BASE, commit + "\n")
+    except (EvalError, *TOOL_ERRORS) as e:
+        raise _fail(e) from e
+    typer.echo(f"Brief: {EXTRACT_BRIEF}")
+    typer.echo(f"Ask a fresh session or subagent of your coding agent: *follow {EXTRACT_BRIEF}*")
 
 
 agents_app = typer.Typer(help="Wire kb into coding agents.", no_args_is_help=True)

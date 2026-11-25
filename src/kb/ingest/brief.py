@@ -151,8 +151,20 @@ def next_ids(repo: KbRepo) -> list[tuple[str, str]]:
     return out
 
 
-def _example_records() -> list[tuple[str, bytes]]:
-    by = f"agent:<your name> via kb ingest brief {BRIEF_VERSION}"
+DRAFTED_BY = f"agent:<your name> via kb ingest brief {BRIEF_VERSION}"
+
+
+def _template(name: str) -> Template:
+    return Template(files("kb.ingest").joinpath("templates", name).read_text(encoding="utf-8"))
+
+
+def rules(drafted_by: str) -> str:
+    """The numbered drafting rules (templates/rules.md), shared by the ingest brief and the `kb eval extract` brief;
+    `drafted_by` is the value rule 8 asks for."""
+    return _template("rules.md").substitute(drafted_by=drafted_by).rstrip("\n")
+
+
+def _example_records(by: str = DRAFTED_BY) -> list[tuple[str, bytes]]:
     src = "SRC-example-spec"
 
     def quote(seg: str, text: str) -> dict:
@@ -205,9 +217,10 @@ def _example_records() -> list[tuple[str, bytes]]:
     return out
 
 
-def _examples() -> str:
+def _examples(records: list[tuple[str, bytes]] | None = None) -> str:
+    """The example files as Markdown blocks: `records` ((path, data) pairs), by default _example_records()."""
     blocks = []
-    for path, data in _example_records():
+    for path, data in _example_records() if records is None else records:
         lang = "markdown" if path.endswith(".md") else "yaml"
         blocks.append(f"#### {path}\n\n```{lang}\n{data.decode()}```")
     return "\n\n".join(blocks)
@@ -248,9 +261,9 @@ def build_brief(root: Path, config: KbConfig, src_ids: list[str], base: str | No
     """The brief for the stored sources `src_ids`, naming `base` (default HEAD's commit) as what
     `kb ingest --report` compares against; deterministic for the same repo state."""
     repo = KbRepo.load(Path(root))
-    template = Template(files("kb.ingest").joinpath("templates", "brief.md").read_text(encoding="utf-8"))
-    return template.substitute(
+    return _template("brief.md").substitute(
         version=BRIEF_VERSION,
+        rules=rules(DRAFTED_BY),
         base=base or head_commit(Path(root)),
         next_ids="\n".join(f"- {label}: {nid}" for label, nid in next_ids(repo)),
         examples=_examples(),

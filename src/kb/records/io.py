@@ -1,6 +1,7 @@
 """Record files: parse and canonical render. Records hold only human-owned fields."""
 
 import re
+from collections.abc import Callable
 
 from pydantic import BaseModel, ValidationError
 
@@ -53,7 +54,9 @@ def _split_front_matter(name: str, text: str) -> tuple[str, str]:
     raise RecordError(f"{name}: unterminated front matter")
 
 
-def parse_record(path: str, data: bytes, *, check_name: bool = True) -> Record:
+def parse_record(path: str, data: bytes, *, check_name: bool = True, transform: Callable[[dict], dict] | None = None) -> Record:
+    """The record in `data`; `transform`, when given, rewrites the parsed fields before validation (run B strips its
+    B- id prefix this way) and may raise RecordError."""
     name = re.split(r"[\\/]", path)[-1]
     model, ext = _model_for(name)
     try:
@@ -73,6 +76,8 @@ def parse_record(path: str, data: bytes, *, check_name: bool = True) -> Record:
         if "body" in fields:
             raise RecordError(f"{name}: 'body' is the text after the front matter, not a field")
         fields["body"] = body
+    if transform is not None:
+        fields = transform(fields)
     try:
         record = model.model_validate(fields)
     except ValidationError as e:
