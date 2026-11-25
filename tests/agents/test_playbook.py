@@ -11,7 +11,8 @@ SKILL = ".claude/skills/kb/SKILL.md"
 MARKER = "<!-- written by kb -->"
 RULE_6 = (
     "6. Drive the knowledge base yourself: run `kb todo`, do every item under Do, and ask the user every item under "
-    "Ask the user, offering its options. Record each answer with `kb clarify`, then follow up as the option says. "
+    "Ask the user, offering its options. Record each new fact the user gives (a target, a handle, which document "
+    "is right) with `kb clarify`, then follow up as the option says. "
     "Never invent a target, quote or approval."
 )
 
@@ -80,12 +81,15 @@ def test_skill_refuses_a_symlink(acme_repo, tmp_path):
     path.symlink_to(elsewhere)
     assert invoke(acme_repo, "agents", "install", "claude-code").exit_code == 2
     assert elsewhere.read_text() == MARKER
+    assert not (acme_repo / ".claude/settings.json").exists()  # the skill is refused before the hooks are merged
 
 
 def test_skill_has_an_example_exchange(acme_repo):
     get_agent("claude-code").install(acme_repo)
     text = (acme_repo / SKILL).read_text()
     assert "1a, 2a" in text and "{{" not in text
+    assert "evidence: `docs/requirements.md`, page 2, `Performance`: `The page should load quickly.`" in text
+    assert "--by <the user's handle>" in text
 
 
 def test_playbook_single_source(tmp_path, acme_repo):

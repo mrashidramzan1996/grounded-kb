@@ -29,17 +29,19 @@ class ClaudeCode:
     name = "claude-code"
 
     def install(self, root: Path) -> list[str]:
-        """The hooks in .claude/settings.json and the kb skill. Raises WriteRefused, with nothing written, when the
-        skill exists without kb's marker (it is the user's own) or either target is unsafe."""
+        """The kb skill, then the hooks in .claude/settings.json. Raises WriteRefused, with nothing written, when the
+        skill exists without kb's marker (it is the user's own) or is unsafe to write; a failed skill write leaves
+        settings.json untouched."""
         text = render((resources.files("kb.init") / "templates" / "skill_kb.md").read_text(encoding="utf-8"))
         current = read_text(root, SKILL) if check_target(root, SKILL, "file") else None
         if current is not None and SKILL_MARKER not in current:
             raise WriteRefused(f"{SKILL} exists and was not written by kb (no {SKILL_MARKER} line); move it away to install the kb skill")
-        lines = merge_hooks(root, ".claude/settings.json", self.name)
         if current == text:
-            return [*lines, f"{SKILL} already up to date"]
-        write_atomic(root, SKILL, text)
-        return [*lines, f"wrote {SKILL}"]
+            skill = f"{SKILL} already up to date"
+        else:
+            write_atomic(root, SKILL, text)
+            skill = f"wrote {SKILL}"
+        return [*merge_hooks(root, ".claude/settings.json", self.name), skill]
 
     def parse(self, event: EventKind, payload: dict) -> HookEvent:
         return HookEvent(event, self.name, stop_active=payload.get("stop_hook_active") is True)

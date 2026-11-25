@@ -115,7 +115,7 @@ These come out of three independent reviews of the implementation plan: simplici
   - **IDs are kept.** A redrafted requirement keeps its ID and is edited in place. A record whose text is gone gets `status: rejected`; it is never deleted or renamed.
   - **`vague` clears only with a measurable quote.** The flag may be removed only when a quote of the record states a measurable target (it contains a number). Removing any other flag is flagged for the reviewer.
   - **ADRs and INVs change only by superseding** (§2.4). A new record with `supersedes: <old ID>` takes the next free ID; the accepted one stays byte-identical.
-- **A-18 · Agent-driven mode** (§2.2, §6, §8, §16).
+- **A-18 · Agent-driven mode** (§2.2, §6, §16, §17).
   - **The user talks to their coding agent.** They do not run kb commands themselves. `kb init` puts a playbook in the kb block of `AGENTS.md`, and `kb agents install claude-code` also writes it as the `kb` skill (`.claude/skills/kb/SKILL.md`). The session-start hook says when there is kb work (`## kb to-do`).
   - **`kb todo` separates agent work from human decisions.** `do` items are for the agent, most with the command to run. `ask` items are for the person; each carries its evidence and lettered options, and each option says what the agent does next. `--format json` is deterministic and its ids are stable.
   - **`kb clarify` turns an answer into a quotable source.** It appends the person's answer to `docs/clarifications.md` and stores it as a source, so a redrafted requirement can quote it. Its trust is whatever `config.sources` gives that path.

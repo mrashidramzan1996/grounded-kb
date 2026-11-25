@@ -26,17 +26,22 @@ def _payload(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
 def _todo_summary(root: Path) -> str:
     """A short note on the open kb work (`kb todo`), or "" when there is none. Never raises: the brief must always
-    print."""
+    print, so a failing `kb todo` leaves only a note on stderr."""
     try:
         todo = build_todo(root)
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"kb: note todo.failed: {type(e).__name__}: {' '.join(str(e).split())}\n")
         return ""
     if not (todo.do or todo.ask):
         return ""
     return (
-        f"## kb to-do\n{len(todo.do)} things to do, {len(todo.ask)} questions for the user. "
+        f"## kb to-do\n{_plural(len(todo.do), 'thing')} to do, {_plural(len(todo.ask), 'question')} for the user. "
         "Run `kb todo` and follow the playbook in AGENTS.md.\n"
     )
 

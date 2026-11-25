@@ -6,7 +6,7 @@ AGENT_RULES: list[str] = [
     "3. Never act against a live ADR or INV. To change one, add a superseding record in your PR and stop for review.",
     "4. When implementing a requirement, put `r[impl <ID>]` in the code and `r[verify <ID>]` in its test, using the requirement's ID.",
     "5. Finish with `kb check --changed`; the task is not done until it passes.",
-    "6. Drive the knowledge base yourself: run `kb todo`, do every item under Do, and ask the user every item under Ask the user, offering its options. Record each answer with `kb clarify`, then follow up as the option says. Never invent a target, quote or approval.",
+    "6. Drive the knowledge base yourself: run `kb todo`, do every item under Do, and ask the user every item under Ask the user, offering its options. Record each new fact the user gives (a target, a handle, which document is right) with `kb clarify`, then follow up as the option says. Never invent a target, quote or approval.",
 ]
 
 # How an agent works through `kb todo` (A-18). The one source for the AGENTS.md block and the kb skill.

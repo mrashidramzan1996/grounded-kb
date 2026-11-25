@@ -18,7 +18,7 @@ After doing the `do` items, the agent asks every `ask` item in one message:
 > Two decisions for the knowledge base:
 >
 > 1. REQ-NF-001 says "The page should load quickly." but gives no measurable target. What should it be?
->    Evidence: SRC-requirements#seg-04, "The page should load quickly."
+>    evidence: `docs/requirements.md`, page 2, `Performance`: `The page should load quickly.`
 >    a. Give a measurable target (a number and a unit)
 >    b. Keep it flagged for now
 >    c. It is not a real requirement
@@ -27,7 +27,7 @@ After doing the `do` items, the agent asks every `ask` item in one message:
 
 User: "1a, 2a: under 2 seconds, @org/product"
 
-The agent records both facts first (`kb clarify --topic "page load target" --text "The page loads in under 2 seconds." --by @user`, and the same for the approver), does what each chosen option's `then` says, and runs `kb todo` again. It does not ask either question again in this session.
+The agent records both facts first (`kb clarify --topic "page load target" --text "The page loads in under 2 seconds." --by <the user's handle>`, and the same for the approver), does what each chosen option's `then` says, and runs `kb todo` again. It does not ask either question again in this session.
 
 ## Rules
 

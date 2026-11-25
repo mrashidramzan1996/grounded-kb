@@ -239,7 +239,11 @@ def test_base_snapshot_leaves_no_worktree_behind(valid_git_repo):
 
 # --- agent-driven mode: the to-do summary at session start ---------------------------------------
 
-SUMMARY = "## kb to-do\n{n} things to do, {m} questions for the user. Run `kb todo` and follow the playbook in AGENTS.md.\n"
+SUMMARY = "## kb to-do\n{n} to do, {m} for the user. Run `kb todo` and follow the playbook in AGENTS.md.\n"
+
+
+def _count(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
 def test_session_start_prepends_todo_summary(acme_repo, fixtures):
@@ -248,7 +252,7 @@ def test_session_start_prepends_todo_summary(acme_repo, fixtures):
     todo = build_todo(acme_repo)
     assert todo.do  # the documents are not ingested yet
     out, code = run_hook(acme_repo, "session-start", "claude-code", payload(fixtures, "claude_code/session_start"))
-    assert code == 0 and out.startswith(SUMMARY.format(n=len(todo.do), m=len(todo.ask)))
+    assert code == 0 and out.startswith(SUMMARY.format(n=_count(len(todo.do), "thing"), m=_count(len(todo.ask), "question")))
     assert "# KB rules\n" in out
 
 
@@ -270,7 +274,7 @@ def test_session_start_survives_todo_error(valid_git_repo, monkeypatch, capsys):
     monkeypatch.setattr(kb.hooks, "build_todo", broken)
     out, code = run_hook(valid_git_repo, "session-start", "claude-code", "")
     assert code == 0 and "## kb to-do" not in out and "# KB rules\n" in out
-    assert "todo exploded" not in capsys.readouterr().err
+    assert capsys.readouterr().err == "kb: note todo.failed: RuntimeError: todo exploded\n"
 
 
 def test_session_start_summary_follows_the_load_warning(valid_git_repo, monkeypatch):
@@ -283,4 +287,16 @@ def test_session_start_summary_follows_the_load_warning(valid_git_repo, monkeypa
     out, _ = run_hook(valid_git_repo, "session-start", "codex", "")
     lines = out.splitlines()
     assert lines[0].startswith("⚠ 1 KB files failed to load") and lines[1] == "## kb to-do"
-    assert lines[2].startswith("1 things to do, 0 questions for the user.")
+    assert lines[2].startswith("1 thing to do, 0 questions for the user.")
+
+
+@pytest.mark.parametrize("n_do, n_ask, text", [(2, 1, "2 things to do, 1 question for the user."), (0, 3, "0 things to do, 3 questions for the user.")])
+def test_session_start_summary_is_pluralised(valid_git_repo, monkeypatch, n_do, n_ask, text):
+    import kb.hooks
+    from kb.todo import AskItem, DoItem, Todo
+
+    do = tuple(DoItem(f"fix:{i}", "x", "fix it", None, None, None) for i in range(n_do))
+    ask = tuple(AskItem(f"freeze:v{i}", "freeze", "q", {}, (), "q") for i in range(n_ask))
+    monkeypatch.setattr(kb.hooks, "build_todo", lambda root: Todo(do, ask, {}))
+    out, _ = run_hook(valid_git_repo, "session-start", "claude-code", "")
+    assert out.splitlines()[1].startswith(text)
