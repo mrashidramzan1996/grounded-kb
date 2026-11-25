@@ -9,16 +9,20 @@ import shlex
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from kb.baseline import requirement_hashes
 from kb.check import run_check
 from kb.config.load import load_config
 from kb.config.schema import KbConfig
 from kb.gates.base import GateContext
 from kb.gates.sources import STORE_NAMES, changed_message, differs_prefix, source_gate
-from kb.gitfiles import has_commits, head_commit
+from kb.gitfiles import find_default_branch, has_commits, head_commit, rev_parse
 from kb.ingest.redraft import changed_segments, citing, new_text, unfound
 from kb.issues import Issue
+from kb.records.lifecycle import live_ids
+from kb.records.models import Requirement
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
+from kb.yamlio import YamlError, load_yaml_strict
 
 
 @dataclass(frozen=True)
@@ -165,6 +169,124 @@ def _triage_items(issues: list[Issue]) -> list[DoItem]:
     ]
 
 
+_KEEP = Option("keep", "Keep it flagged for now", "leave it; it stays a warning")
+_APPROVER_QUESTIONS = {
+    "policy.approvers.intent": "Who approves changes to requirements? Give a forge handle such as @org/team or @user.",
+    "policy.approvers.decisions":
+        "Who approves decisions and invariants? Give a forge handle such as @org/team or @user.",
+}
+_OWNER_TODO_SUFFIX = ": owner is still TODO"  # kb.config.validate: f"{where}: owner is still TODO"
+
+
+def _evidence(rid: str, rec: Requirement, repo: KbRepo) -> dict:
+    """Where the requirement's first quote comes from; a missing source or segment gives empty values."""
+    q = rec.evidence.quotes[0]
+    src_id, _, seg_id = q.source.partition("#")
+    src = repo.sources.get(src_id)
+    seg = next((s for s in repo.segments(src_id) if s.id == seg_id), None)
+    return {
+        "record": rid, "statement": rec.statement, "source": q.source, "quote": q.text,
+        "document": src.original if src else "", "page": seg.page if seg else None, "heading": seg.heading if seg else "",
+    }
+
+
+def _flag_ask(flag: str, rid: str, rec: Requirement, repo: KbRepo) -> AskItem:
+    if flag == "vague":
+        question = f'{rid} says "{rec.statement}" but gives no measurable target. What should it be?'
+        answer = Option("target", "Give a measurable target (a number and a unit)",
+                        f"record the answer with `kb clarify`, then `kb redraft {rid} --new` and quote the new sentence")
+    elif flag == "conflicting":
+        question = f"{rid} contradicts another requirement. Which document is right?"
+        answer = Option("decide", "Say which is right",
+                        "record it with `kb clarify`, update or retire the other requirement with `kb redraft`")
+    else:  # untestable
+        question = f"{rid} cannot be tested as written. How should it be checked?"
+        answer = Option("define", "Describe how to check it", f"record it with `kb clarify`, then `kb redraft {rid} --new`")
+    retire = Option("retire", "It is not a real requirement", f"set `status: rejected` on {rid}; never delete the file")
+    return AskItem(f"{flag}:{rid}", flag, question, _evidence(rid, rec, repo), (answer, _KEEP, retire))
+
+
+def _flag_asks(repo: KbRepo) -> list[AskItem]:
+    """One item per flag of every live requirement."""
+    live = live_ids(repo)
+    return [
+        _flag_ask(flag, rid, rec, repo)
+        for rid, rec in sorted(repo.records.items())
+        if rid in live and isinstance(rec, Requirement)
+        for flag in dict.fromkeys(rec.flags)
+    ]
+
+
+def _owner_asks(issues: list[Issue], config: KbConfig) -> list[AskItem]:
+    """One item per config location whose owner is still TODO."""
+    titles = {m.id: m.title for m in config.modules}
+    out: dict[str, AskItem] = {}
+    for i in issues:
+        if i.code != "config.owner_todo":
+            continue
+        if i.record:  # a module
+            where = f"modules.{i.record}.owner"
+            title = titles.get(i.record)
+            question = f"Who owns {i.record}{f' ({title})' if title else ''}? Give a forge handle."
+        else:
+            where = i.message.removesuffix(_OWNER_TODO_SUFFIX)
+            question = _APPROVER_QUESTIONS.get(where, f"Who should be the owner at {where}? Give a forge handle.")
+        handle = Option("handle", "Give a handle", f"write it into kb.config.yaml at {where}")
+        out[f"owner:{where}"] = AskItem(f"owner:{where}", "owner", question, {}, (handle,))
+    return list(out.values())
+
+
+def _secret_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
+    out: dict[str, AskItem] = {}
+    for i in issues:
+        if i.code != "source.secret_in_original" or not i.record:
+            continue
+        src = repo.sources.get(i.record)
+        document = src.original if src else i.record
+        out[i.record] = AskItem(
+            f"secret:{i.record}", "secret",
+            f"{document} contains a secret (the stored copy is masked). Remove it from the original?",
+            {"document": document, "source": i.record},
+            (
+                Option("remove", "Remove it from the document",
+                       f"delete that paragraph from {document} (or ask the person to, for PDF or Word), then "
+                       "`kb source sync`; tell the person to rotate the key"),
+                Option("self", "I will handle it", "leave it; kb check keeps reporting it"),
+            ),
+        )
+    return list(out.values())
+
+
+def _baseline_requirements(root: Path, version: str) -> object:
+    """What kb/baseline/<version>.yaml records under `requirements`, or None when it cannot be read."""
+    try:
+        data = load_yaml_strict((root / f"kb/baseline/{version}.yaml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, YamlError):
+        return None
+    return data.get("requirements") if isinstance(data, dict) else None
+
+
+def _freeze_asks(root: Path, repo: KbRepo, errors: int, pending: bool) -> list[AskItem]:
+    """Offer the next baseline when nothing else is left (no error, no do or other ask item), HEAD is the tip of
+    the default branch, and the live requirements differ from the latest baseline (or there is none)."""
+    if errors or pending or not has_commits(root):
+        return []
+    branch = find_default_branch(root)
+    if branch is None or rev_parse(root, branch) != head_commit(root):
+        return []
+    latest = _baseline(root)
+    if latest is not None and _baseline_requirements(root, latest) == requirement_hashes(repo):
+        return []
+    version = f"v{int(latest[1:]) + 1}" if latest else "v1"
+    return [AskItem(
+        f"freeze:{version}", "freeze", f"The knowledge base has no errors. Freeze baseline {version}?", {},
+        (
+            Option("freeze", "Freeze it", f"`kb baseline freeze {version}`, commit, and open a PR for review"),
+            Option("later", "Not yet", "leave it"),
+        ),
+    )]
+
+
 def build_todo(root: Path) -> Todo:
     """Raises ConfigError / GitError (and the other tool errors of `kb check`); the caller maps them to exit 2."""
     root = Path(root)
@@ -181,8 +303,9 @@ def build_todo(root: Path) -> Todo:
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head) + _fix_items(issues, repo, outdated, broken) + _triage_items(issues)
-    ask: list[AskItem] = []
+    ask = _flag_asks(repo) + _owner_asks(issues, config) + _secret_asks(issues, repo)
     errors = sum(i.severity == "error" for i in issues)
+    ask += _freeze_asks(root, repo, errors, bool(do or ask))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
         "warnings": len(issues) - errors, "baseline": _baseline(root), "clean": not errors and not do and not ask,
@@ -194,6 +317,25 @@ def _line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _question_text(a: AskItem) -> str:
+    """The question with the statement it quotes as inline code."""
+    statement = a.evidence.get("statement")
+    return a.question.replace(f'"{statement}"', inline_code(statement), 1) if statement is not None else a.question
+
+
+def _evidence_text(ev: dict) -> str:
+    """`<document>, page <page>, <heading>: <quote>`, leaving out what is empty; untrusted text as inline code."""
+    parts = [
+        inline_code(ev["document"]) if ev.get("document") else "",
+        f"page {ev['page']}" if ev.get("page") is not None else "",
+        inline_code(ev["heading"]) if ev.get("heading") else "",
+    ]
+    where = ", ".join(p for p in parts if p)
+    if "quote" not in ev:
+        return where
+    return f"{where}: {inline_code(ev['quote'])}" if where else inline_code(ev["quote"])
+
+
 def render_todo_text(t: Todo) -> str:
     lines = ["Do:"]
     for d in t.do:
@@ -203,9 +345,11 @@ def render_todo_text(t: Todo) -> str:
     if not t.do:
         lines.append("- nothing")
     lines += ["", "Ask the user:"]
-    for a in t.ask:
-        lines.append(f"- {_line(a.question)}")
-        lines.extend(f"  {o.key}: {_line(o.label)}" for o in a.options)
+    for n, a in enumerate(t.ask, 1):
+        lines.append(f"{n}. {_line(_question_text(a))}")
+        if a.evidence:
+            lines.append(f"   evidence: {_evidence_text(a.evidence)}")
+        lines.extend(f"   ({chr(ord('a') + k)}) {_line(o.label)}" for k, o in enumerate(a.options))
     if not t.ask:
         lines.append("- nothing")
     return "\n".join(lines) + "\n"

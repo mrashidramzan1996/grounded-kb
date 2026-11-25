@@ -34,6 +34,15 @@ def _load_problems(repo: KbRepo) -> list[str]:
 _SHOWN_ERRORS = 5
 
 
+def requirement_hashes(repo: KbRepo) -> list[dict[str, str]]:
+    """What a baseline records: the id and file hash of every live requirement, sorted by id."""
+    return [
+        {"id": rid, "hash": hashlib.sha256(repo.raw[repo.paths[rid]]).hexdigest()}
+        for rid in sorted(live_ids(repo))
+        if isinstance(repo.records[rid], Requirement)
+    ]
+
+
 def _on_default_branch_tip(root: Path) -> None:
     branch = find_default_branch(root)
     if branch is None or rev_parse(root, branch) != head_commit(root):
@@ -81,12 +90,7 @@ def freeze_baseline(root: Path, version: str, *, allow_branch: bool = False) -> 
     if problems := _load_problems(repo):
         raise BaselineError("KB files have problems (run `kb check`):\n" + "\n".join(problems))
     _gate_errors(root)
-    live = live_ids(repo)
-    reqs = [
-        {"id": rid, "hash": hashlib.sha256(repo.raw[repo.paths[rid]]).hexdigest()}
-        for rid in sorted(live)
-        if isinstance(repo.records[rid], Requirement)
-    ]
+    reqs = requirement_hashes(repo)
     frozen_at = datetime.fromtimestamp(commit_time(root, "HEAD"), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     text = dump_yaml({"version": version, "commit": head_commit(root), "frozen_at": frozen_at, "requirements": reqs})
 

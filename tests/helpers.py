@@ -403,3 +403,42 @@ def adr_md(rid: str, supersedes: str | None = None) -> str:
 def put(root, rel: str, text: str) -> None:
     (root / rel).parent.mkdir(parents=True, exist_ok=True)
     (root / rel).write_text(text)
+
+
+# --- kb todo helpers ---------------------------------------------------------------------------
+
+TODO_CONFIG = 'version: 1\nsources:\n  - paths: ["docs/**"]\nmodules:\n  - id: MOD-a\n    owner: "@alice"\n'
+TODO_DOC = "# Seats\n\nA seat costs 5 EUR.\n"
+TODO_TRIAGE = "kb/sources/SRC-n/triage.yaml"
+
+
+def ok(root: Path, *args: str):
+    r = invoke(root, *args)
+    assert r.exit_code == 0, r.output
+    return r
+
+
+def todo_json(root: Path) -> dict:
+    return json.loads(ok(root, "todo", "--format", "json").stdout)
+
+
+def todo_repo(tmp_path: Path, config: str = TODO_CONFIG, **docs: str) -> Path:
+    """A committed repo with kb.config.yaml and docs/n.md (plus `docs`), nothing ingested."""
+    return make_git_repo(None, tmp_path, extra={"kb.config.yaml": config, "docs/n.md": TODO_DOC, **docs})
+
+
+def todo_ingested(tmp_path: Path, config: str = TODO_CONFIG, **docs: str) -> Path:
+    """todo_repo() with every document ingested and committed."""
+    root = todo_repo(tmp_path, config, **docs)
+    ok(root, "ingest")
+    commit(root, "ingest")
+    return root
+
+
+def todo_drafted(tmp_path: Path, config: str = TODO_CONFIG) -> Path:
+    """todo_ingested() with REQ-F-001 quoting seg-01 and seg-01 triaged, committed: a clean KB."""
+    root = todo_ingested(tmp_path, config)
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
+    commit(root, "drafts")
+    return root

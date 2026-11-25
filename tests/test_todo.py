@@ -1,55 +1,20 @@
-"""`kb todo`: what the agent does next (`do`) and what it asks the person (`ask`, filled in later)."""
+"""`kb todo`: what the agent does next (`do`) and what it asks the person (`ask`, see test_todo_ask.py)."""
 
 import json
 
-from helpers import git, invoke, make_git_repo, put, req_yaml
+from helpers import TODO_CONFIG as CONFIG
+from helpers import TODO_DOC as DOC
+from helpers import commit, git, invoke, make_git_repo, ok, put, req_yaml
+from helpers import todo_drafted as drafted
+from helpers import todo_ingested as ingested
+from helpers import todo_json as todo
+from helpers import todo_repo as repo
 
 from kb.todo import build_todo
-
-CONFIG = 'version: 1\nsources:\n  - paths: ["docs/**"]\nmodules:\n  - id: MOD-a\n    owner: "@alice"\n'
-DOC = "# Seats\n\nA seat costs 5 EUR.\n"
-TRIAGE = "kb/sources/SRC-n/triage.yaml"
-
-
-def commit(root, message: str = "change") -> None:
-    git(root, "add", "-A")
-    git(root, "commit", "-qm", message)
-
-
-def ok(root, *args: str):
-    r = invoke(root, *args)
-    assert r.exit_code == 0, r.output
-    return r
-
-
-def todo(root) -> dict:
-    return json.loads(ok(root, "todo", "--format", "json").stdout)
 
 
 def items(root) -> dict[str, dict]:
     return {d["id"]: d for d in todo(root)["do"]}
-
-
-def repo(tmp_path, config: str = CONFIG, **docs: str):
-    """A committed repo with kb.config.yaml and docs/n.md (plus `docs`), nothing ingested."""
-    return make_git_repo(None, tmp_path, extra={"kb.config.yaml": config, "docs/n.md": DOC, **docs})
-
-
-def ingested(tmp_path, **docs: str):
-    """repo() with every document ingested and committed."""
-    root = repo(tmp_path, **docs)
-    ok(root, "ingest")
-    commit(root, "ingest")
-    return root
-
-
-def drafted(tmp_path):
-    """ingested() with REQ-F-001 quoting seg-01 and seg-01 triaged, committed: a clean KB."""
-    root = ingested(tmp_path)
-    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
-    put(root, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
-    commit(root, "drafts")
-    return root
 
 
 def test_todo_without_config_suggests_init(tmp_path):
@@ -214,12 +179,16 @@ def test_todo_bad_config_exits_2(tmp_path):
 def test_clean_repo_is_clean(tmp_path):
     root = drafted(tmp_path)
     t = build_todo(root)
+    assert t.do == () and [a.id for a in t.ask] == ["freeze:v1"]  # the one thing left: freezing a baseline
+    assert t.state == {
+        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": None, "clean": False,
+    }
+    ok(root, "baseline", "freeze", "v1")
+    commit(root, "baseline v1")
+    t = build_todo(root)
     assert t.do == () and t.ask == ()
     assert t.state == {
-        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": None, "clean": True,
+        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": "v1", "clean": True,
     }
     r = ok(root, "todo")
     assert r.stderr.strip() == "0 to do, 0 questions for the user"
-    ok(root, "baseline", "freeze", "v1")
-    commit(root, "baseline v1")
-    assert build_todo(root).state["baseline"] == "v1"
