@@ -270,6 +270,13 @@ def test_branch_item_first_on_default_branch_after_baseline(tmp_path):
     assert list(items(root)) == ["commit"]
 
 
+def test_branch_item_when_the_baseline_is_frozen_but_not_merged(tmp_path):
+    root = drafted(tmp_path)
+    git(root, "tag", "kb-baseline-v1")  # frozen on a pull-request branch: the tag exists, its file is not on main yet
+    put(root, "docs/b.md", "# B\n\nText.\n")
+    assert list(items(root)) == ["branch", "ingest:docs/b.md"]
+
+
 def test_no_branch_item_before_baseline(tmp_path):
     root = drafted(tmp_path)
     put(root, "docs/b.md", "# B\n\nText.\n")

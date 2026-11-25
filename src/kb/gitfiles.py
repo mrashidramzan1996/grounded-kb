@@ -166,6 +166,11 @@ def tag_exists(root: Path, name: str) -> bool:
     return _git(root, "rev-parse", "--verify", "--quiet", f"refs/tags/{name}", check=False).returncode == 0
 
 
+def has_tag_matching(root: Path, pattern: str) -> bool:
+    """Whether any tag matches the glob `pattern` (git tag -l)."""
+    return bool(_git(root, "tag", "-l", pattern, check=False).stdout.strip())
+
+
 def create_tag(root: Path, name: str) -> None:
     """Lightweight tag at HEAD; fails if it exists."""
     _git(root, "tag", name, "HEAD")

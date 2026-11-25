@@ -20,6 +20,7 @@ from kb.gitfiles import (
     current_branch,
     find_default_branch,
     has_commits,
+    has_tag_matching,
     head_commit,
     is_dirty,
     rev_parse,
@@ -498,7 +499,9 @@ def build_todo(root: Path) -> Todo:
     do.sort(key=lambda d: d.id)
     # after the baseline, work on the default branch goes to a pull-request branch first; only alongside other work,
     # so it never makes a KB unclean on its own
-    if do and latest is not None and (branch := _on_default_branch(root)) is not None:
+    # a baseline frozen on a pull-request branch counts too: its tag exists before its file reaches the default branch
+    frozen = latest is not None or has_tag_matching(root, "kb-baseline-*")
+    if do and frozen and (branch := _on_default_branch(root)) is not None:
         do.insert(0, _branch_item(root, branch))
     ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, latest, errors, bool(do or blocking))
     state = {
