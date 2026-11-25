@@ -28,7 +28,7 @@ def test_todo_without_config_suggests_init(tmp_path):
     assert t["state"]["initialized"] is False and t["state"]["clean"] is False
     r = ok(root, "todo")
     assert "- kb.config.yaml not found; set up the knowledge base\n  run: kb init\n" in r.stdout
-    assert r.stderr.strip() == "1 to do, 0 questions for the user"
+    assert r.stderr.strip() == "1 thing to do, 0 questions for the user"
 
 
 def test_todo_without_commits(tmp_path):
@@ -99,7 +99,7 @@ def test_quote_not_found_suggests_redraft_changed(tmp_path):
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", "A seat costs 9 EUR."))
     found = items(root)
     assert found["redraft:changed"]["command"] == "kb redraft --changed"
-    assert found["fix:quote.not_found:REQ-F-001"]["code"] == "quote.not_found"
+    assert "fix:quote.not_found:REQ-F-001" not in found  # the redraft covers it
 
 
 def test_new_text_suggests_redraft_new(tmp_path):
@@ -121,9 +121,11 @@ def test_check_errors_become_fix_items(tmp_path):
     errors = [i for i in check["issues"] if i["severity"] == "error"]
     assert {i["code"] for i in errors} >= {"quote.not_found", "ref.missing", "config.owner_todo"}
     fixes = {k: v for k, v in items(root).items() if k.startswith("fix:")}
-    expected = {
-        f"fix:{i['code']}:{i['record'] or i['path']}": i for i in errors if i["code"] != "config.owner_todo"
+    expected = {  # a quote not found is the redraft:changed item's (REQ-F-002 is selected by `kb redraft --changed`)
+        f"fix:{i['code']}:{i['record'] or i['path']}": i for i in errors
+        if i["code"] not in ("config.owner_todo", "quote.not_found")
     }
+    assert "REQ-F-002" in items(root)["redraft:changed"]["message"]
     assert set(fixes) == set(expected)
     for key, item in fixes.items():
         issue = expected[key]
@@ -161,7 +163,7 @@ def test_todo_json_is_deterministic_and_sorted(tmp_path):
     ids = [d["id"] for d in data["do"]]
     assert ids == sorted(ids) and len(ids) == len(set(ids))
     assert {"ingest:docs/c.md", "sync", "triage:SRC-b", "triage:SRC-n"} <= set(ids)
-    assert first.stderr.strip() == f"{len(ids)} to do, 0 questions for the user"
+    assert first.stderr.strip() == f"{len(ids)} things to do, 0 questions for the user"
     assert set(data["state"]) == {
         "initialized", "sources", "records", "errors", "warnings", "baseline", "clean", "blocking_asks",
     }
@@ -195,4 +197,4 @@ def test_clean_repo_is_clean(tmp_path):
         "blocking_asks": 0,
     }
     r = ok(root, "todo")
-    assert r.stderr.strip() == "0 to do, 0 questions for the user"
+    assert r.stderr.strip() == "0 things to do, 0 questions for the user"

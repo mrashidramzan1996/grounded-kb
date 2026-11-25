@@ -38,7 +38,7 @@ def test_not_ingested_document_listed_and_warned(tmp_path):
         "severity": "warning",
         "path": "docs/refund-policy.md",
         "record": None,
-        "message": "docs/refund-policy.md is a document under config.sources that was never ingested; "
+        "message": "`docs/refund-policy.md` is a document under config.sources that was never ingested; "
         "run `kb ingest docs/refund-policy.md`",
     }]
     r = invoke(root, "todo", "--format", "json")

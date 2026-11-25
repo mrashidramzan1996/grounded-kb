@@ -12,7 +12,7 @@ from kb.gitfiles import resolve_base
 from kb.issues import Issue, new_since
 from kb.ports.agents import EventKind, HookResult
 from kb.records.repo import KbRepo
-from kb.todo import build_todo
+from kb.todo import build_todo, summary_line
 
 EVENTS: dict[str, EventKind] = {"session-start": "session_start", "stop": "stop", "pre-commit": "pre_commit"}
 OWNER_TODO, SECRET = "config.owner_todo", "source.secret_in_original"
@@ -26,10 +26,6 @@ def _payload(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _plural(n: int, word: str) -> str:
-    return f"{n} {word}" if n == 1 else f"{n} {word}s"
-
-
 def _todo_summary(root: Path) -> str:
     """A short note on the open kb work (`kb todo`), or "" when there is none. Never raises: the brief must always
     print, so a failing `kb todo` leaves only a note on stderr."""
@@ -41,8 +37,7 @@ def _todo_summary(root: Path) -> str:
     if not (todo.do or todo.ask):
         return ""
     return (
-        f"## kb to-do\n{_plural(len(todo.do), 'thing')} to do, {_plural(len(todo.ask), 'question')} for the user. "
-        "Run `kb todo` and follow the playbook in AGENTS.md.\n"
+        f"## kb to-do\n{summary_line(todo)}. Run `kb todo` and follow the playbook in AGENTS.md.\n"
     )
 
 

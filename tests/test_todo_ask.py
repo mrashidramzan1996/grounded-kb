@@ -58,7 +58,9 @@ def test_vague_requirement_becomes_ask_with_three_options(tmp_path):
         "evidence": evidence("REQ-NF-001"),
         "options": [
             {"key": "target", "label": "Give a measurable target (a number and a unit)",
-             "then": "record the answer with `kb clarify`, then `kb redraft REQ-NF-001 --new` and quote the new sentence"},
+             "then": "record the answer with `kb clarify`; once every answer is recorded, run one "
+                     "`kb redraft REQ-NF-001 … --new` naming every answered ID, quote the new sentence, run "
+                     "`kb redraft --report`, then commit"},
             KEEP,
             retire("REQ-NF-001"),
         ],
@@ -75,7 +77,9 @@ def test_conflicting_and_untestable_asks(tmp_path):
     assert conflicting["evidence"] == evidence("REQ-F-002")
     assert conflicting["options"] == [
         {"key": "decide", "label": "Say which is right",
-         "then": "record it with `kb clarify`, update or retire the other requirement with `kb redraft`"},
+         "then": "record it with `kb clarify`; once every answer is recorded, run one `kb redraft REQ-F-002 … --new` "
+                 "naming every answered ID and the other requirement, update or retire the other requirement, run "
+                 "`kb redraft --report`, then commit"},
         KEEP,
         retire("REQ-F-002"),
     ]
@@ -85,7 +89,8 @@ def test_conflicting_and_untestable_asks(tmp_path):
     assert untestable["evidence"] == evidence("REQ-F-003")
     assert untestable["options"] == [
         {"key": "define", "label": "Describe how to check it",
-         "then": "record it with `kb clarify`, then `kb redraft REQ-F-003 --new`"},
+         "then": "record it with `kb clarify`; once every answer is recorded, run one `kb redraft REQ-F-003 … --new` "
+                 "naming every answered ID, run `kb redraft --report`, then commit"},
         KEEP,
         retire("REQ-F-003"),
     ]
@@ -166,7 +171,9 @@ FREEZE_V1 = {
     "id": "freeze:v1", "kind": "freeze", "question": "The knowledge base has no errors. Freeze baseline v1?",
     "evidence": {},
     "options": [
-        {"key": "freeze", "label": "Freeze it", "then": "`kb baseline freeze v1`, commit, and open a PR for review"},
+        {"key": "freeze", "label": "Freeze it",
+         "then": "`kb baseline freeze v1`, then commit `kb/baseline/v1.yaml` on a new branch (not named kb-baseline-v1) "
+                 "and open a pull request for review; never merge it yourself"},
         {"key": "later", "label": "Not yet", "then": "leave it"},
     ],
 }
@@ -272,7 +279,7 @@ def test_no_freeze_with_uncommitted_kb_changes(tmp_path):
     reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
     put(root, "kb/requirements/REQ-F-001.yaml", reworded)
     t = todo_json(root)
-    assert (t["do"], t["ask"], t["state"]["errors"]) == ([], [], 0)
+    assert ([d["id"] for d in t["do"]], t["ask"], t["state"]["errors"]) == (["commit"], [], 0)
     commit(root, "reword")
     assert list(asks(root)) == ["freeze:v1"]
 
@@ -288,7 +295,7 @@ def test_freeze_needs_a_commit(tmp_path):
     shutil.copytree(drafted, root, ignore=shutil.ignore_patterns(".git"))
     git(root, "init", "-qb", "main")
     t = todo_json(root)
-    assert (t["do"], t["ask"], t["state"]["errors"]) == ([], [], 0)
+    assert ([d["id"] for d in t["do"]], t["ask"], t["state"]["errors"]) == (["commit"], [], 0)
 
 
 def test_freeze_next_version_after_v1(tmp_path):
@@ -303,7 +310,10 @@ def test_freeze_next_version_after_v1(tmp_path):
     commit(root, "edit REQ-F-001")
     item = asks(root)["freeze:v2"]
     assert item["question"] == "The knowledge base has no errors. Freeze baseline v2?"
-    assert item["options"][0]["then"] == "`kb baseline freeze v2`, commit, and open a PR for review"
+    assert item["options"][0]["then"] == (
+        "`kb baseline freeze v2`, then commit `kb/baseline/v2.yaml` on a new branch (not named kb-baseline-v2) "
+        "and open a pull request for review; never merge it yourself"
+    )
 
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))  # back to what v1 recorded
     commit(root, "revert REQ-F-001")

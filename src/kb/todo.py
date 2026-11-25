@@ -23,11 +23,14 @@ from kb.gitfiles import (
     rev_parse,
     tag_exists,
 )
-from kb.ingest.redraft import changed_segments, citing, new_text, unfound
+from kb.ingest.brief import BASE_PATH, recorded_base
+from kb.ingest.redraft import REDRAFT_BASE, changed_segments, citing, new_text, unfound
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement
 from kb.records.repo import KbRepo
+from kb.sources.readers import SourceError
+from kb.sources.store import derive_store
 from kb.textfmt import inline_code
 from kb.yamlio import YamlError, load_yaml_strict
 
@@ -52,7 +55,7 @@ class Option:
 @dataclass(frozen=True)
 class AskItem:
     id: str  # stable, e.g. "vague:REQ-NF-001", "owner:policy.approvers.intent", "freeze:v1"
-    kind: str  # vague | conflicting | untestable | owner | secret | freeze
+    kind: str  # vague | conflicting | untestable | owner | secret | unreadable | freeze
     question: str  # raw, for JSON
     evidence: dict  # {} or {"record": id, "statement": ..., "source": "SRC-x#seg-NN", "quote": ..., ...}
     options: tuple[Option, ...]
@@ -72,6 +75,15 @@ ASK_CODES = {"config.owner_todo", "source.secret_in_original"}
 COVERED_CODES = {"source.outdated"}
 _BASELINE = re.compile(r"v(\d+)\.yaml")
 _SHOWN_REFS = 10
+_REASON_CHARS = 120
+# what the agent commits; while any of it is uncommitted there is no freeze (see _freeze_asks)
+KB_PATHS = ("kb/", "kb.config.yaml", "docs/clarifications.md")
+COMMIT = DoItem(
+    "commit", "kb.commit",
+    "commit the knowledge-base changes: kb/, kb.config.yaml, docs/clarifications.md — before the baseline on the "
+    "current branch, after it on a pull-request branch",
+    None, None, None,
+)
 
 
 def _baseline(root: Path) -> str | None:
@@ -86,17 +98,54 @@ def _refs(refs: list[str]) -> str:
     return ", ".join(refs[:_SHOWN_REFS]) + more
 
 
-def _ingest_items(repo: KbRepo, issues: list[Issue]) -> list[DoItem]:
-    missing = [i.path for i in issues if i.code == "source.not_ingested" and i.path]
-    if not missing:
+def _not_ingested(issues: list[Issue]) -> list[str]:
+    return [i.path for i in issues if i.code == "source.not_ingested" and i.path]
+
+
+def _unreadable(root: Path, config: KbConfig, paths: list[str]) -> dict[str, str]:
+    """{path: short reason} for each of `paths` that `kb ingest` cannot read: each is read, guarded and segmented
+    in memory as `kb ingest` would, nothing is written."""
+    out = {}
+    for path in paths:
+        try:
+            derive_store(root, path, config, [], 1)
+        except (SourceError, OSError, ValueError) as e:
+            reason = (str(e).splitlines() or [""])[0].removeprefix(f"{path}: ").strip() or type(e).__name__
+            out[path] = reason if len(reason) <= _REASON_CHARS else reason[: _REASON_CHARS - 1] + "…"
+    return out
+
+
+def _ingest_items(repo: KbRepo, missing: list[str], unreadable: dict[str, str]) -> list[DoItem]:
+    """`kb ingest` for every document never ingested; one item for all of them when nothing is stored yet, unless
+    one cannot be read (`kb ingest` would refuse the whole set): then one per readable document."""
+    readable = [p for p in missing if p not in unreadable]
+    if not readable:
         return []
-    if not repo.sources:  # nothing stored yet: ingest everything at once
+    if not repo.sources and not unreadable:  # nothing stored yet: ingest everything at once
         return [DoItem("ingest:all", "kb.ingest", "documents under config.sources were never ingested", "kb ingest", None, None)]
     return [
         DoItem(f"ingest:{p}", "kb.ingest", f"{inline_code(p)} is a document under config.sources that was never ingested",
                f"kb ingest {shlex.quote(p)}", p, None)
-        for p in missing
+        for p in readable
     ]
+
+
+def _report_items(root: Path) -> list[DoItem]:
+    """`kb ingest --report` / `kb redraft --report` while that flow's brief was written at HEAD: its result is not
+    committed yet. The base files are read as the reports read them (no symlinks, a commit that exists)."""
+    if not has_commits(root):
+        return []
+    head = head_commit(root)
+    out = []
+    for flow, path, what in (("ingest", BASE_PATH, "drafts"), ("redraft", REDRAFT_BASE, "redraft")):
+        if recorded_base(root, path) == head:
+            out.append(DoItem(
+                f"report:{flow}", f"kb.{flow}",
+                f"a `kb {flow}` brief was written at this commit; check the {what} with `kb {flow} --report`, "
+                "fix what it rejects, then commit",
+                f"kb {flow} --report", None, None,
+            ))
+    return out
 
 
 def _changed(i: Issue, repo: KbRepo, head: KbRepo | None) -> bool:
@@ -130,10 +179,14 @@ def _rebuilt_by_sync(i: Issue, repo: KbRepo, outdated: set[str]) -> bool:
     )
 
 
-def _redraft_items(repo: KbRepo, head: KbRepo | None) -> list[DoItem]:
-    """Records citing text changed since HEAD or with a quote not found; untriaged text no record cites.
+def _stale(repo: KbRepo, head: KbRepo | None) -> set[str]:
+    """Records citing text changed since HEAD or with a quote not found: what `kb redraft --changed` selects.
     With no commits there is no HEAD to compare with: only the quotes not found count."""
-    stale = set(unfound(repo)) | (set(citing(repo, changed_segments(head, repo))) if head else set())
+    return set(unfound(repo)) | (set(citing(repo, changed_segments(head, repo))) if head else set())
+
+
+def _redraft_items(repo: KbRepo, head: KbRepo | None, stale: set[str]) -> list[DoItem]:
+    """The `stale` records; untriaged text no record cites."""
     fresh = new_text(repo, head) if head else []
     out = []
     if stale:
@@ -146,14 +199,15 @@ def _redraft_items(repo: KbRepo, head: KbRepo | None) -> list[DoItem]:
     return out
 
 
-def _fix_items(issues: list[Issue], repo: KbRepo, outdated: set[str], broken: list[Issue]) -> list[DoItem]:
-    """One item per (code, record or path) for every error but those of ASK_CODES, COVERED_CODES and the store
-    files the sync rewrites, for each source.bad_filename warning, and for each `broken` source; messages of
-    the same item are joined."""
+def _fix_items(issues: list[Issue], repo: KbRepo, outdated: set[str], broken: list[Issue], stale: set[str]) -> list[DoItem]:
+    """One item per (code, record or path) for every error but those of ASK_CODES, COVERED_CODES, the store
+    files the sync rewrites and the quotes not found of records `kb redraft --changed` takes (`stale`), for each
+    source.bad_filename warning, and for each `broken` source; messages of the same item are joined."""
     by_id: dict[str, list[Issue]] = {}
     wanted = [
         i for i in issues
-        if (i.severity == "error" and i.code not in ASK_CODES | COVERED_CODES and not _rebuilt_by_sync(i, repo, outdated))
+        if (i.severity == "error" and i.code not in ASK_CODES | COVERED_CODES and not _rebuilt_by_sync(i, repo, outdated)
+            and not (i.code == "quote.not_found" and i.record in stale))
         or i.code == "source.bad_filename"
     ]
     for i in wanted + broken:
@@ -205,19 +259,30 @@ def _evidence(rid: str, rec: Requirement, repo: KbRepo) -> dict:
     }
 
 
+_REPORT_COMMIT = "run `kb redraft --report`, then commit"
+
+
+def _redraft_all(rid: str) -> str:
+    """Every answer goes into one redraft: a second brief would be gated against the first one's uncommitted work."""
+    return f"once every answer is recorded, run one `kb redraft {rid} … --new` naming every answered ID"
+
+
 def _flag_ask(flag: str, rid: str, rec: Requirement, repo: KbRepo) -> AskItem:
     if flag == "vague":
         question = _question(f"{rid} says {{statement}} but gives no measurable target. What should it be?",
                              quoted=True, statement=rec.statement)
         answer = Option("target", "Give a measurable target (a number and a unit)",
-                        f"record the answer with `kb clarify`, then `kb redraft {rid} --new` and quote the new sentence")
+                        f"record the answer with `kb clarify`; {_redraft_all(rid)}, quote the new sentence, "
+                        f"{_REPORT_COMMIT}")
     elif flag == "conflicting":
         question = _question(f"{rid} contradicts another requirement. Which document is right?")
         answer = Option("decide", "Say which is right",
-                        "record it with `kb clarify`, update or retire the other requirement with `kb redraft`")
+                        f"record it with `kb clarify`; {_redraft_all(rid)} and the other requirement, update or retire "
+                        f"the other requirement, {_REPORT_COMMIT}")
     else:  # untestable
         question = _question(f"{rid} cannot be tested as written. How should it be checked?")
-        answer = Option("define", "Describe how to check it", f"record it with `kb clarify`, then `kb redraft {rid} --new`")
+        answer = Option("define", "Describe how to check it",
+                        f"record it with `kb clarify`; {_redraft_all(rid)}, {_REPORT_COMMIT}")
     retire = Option("retire", "It is not a real requirement", f"set `status: rejected` on {rid}; never delete the file")
     return AskItem(f"{flag}:{rid}", flag, question[0], _evidence(rid, rec, repo), (answer, _KEEP, retire), question[1])
 
@@ -278,6 +343,24 @@ def _secret_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
     return list(out.values())
 
 
+def _unreadable_asks(unreadable: dict[str, str]) -> list[AskItem]:
+    out = []
+    for path, reason in unreadable.items():
+        question = _question("{path} could not be read ({reason}). What should I do?", path=path, reason=reason)
+        out.append(AskItem(
+            f"unreadable:{path}", "unreadable", question[0], {},
+            (
+                Option("fix", "I will replace it with a readable file", "wait; run kb todo again after the file is replaced"),
+                Option("remove", "Remove it from docs/", "git rm the file"),
+                Option("exclude", "Keep it but leave it out of the knowledge base",
+                       f"add a {inline_code('!' + path)} line to that config.sources entry's paths and commit "
+                       "kb.config.yaml on its own"),
+            ),
+            question[1],
+        ))
+    return out
+
+
 def _baseline_requirements(root: Path, version: str) -> object:
     """What kb/baseline/<version>.yaml records under `requirements`, or None when it cannot be read."""
     try:
@@ -312,7 +395,9 @@ def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pend
     return [AskItem(
         f"freeze:{version}", "freeze", question[0], {},
         (
-            Option("freeze", "Freeze it", f"`kb baseline freeze {version}`, commit, and open a PR for review"),
+            Option("freeze", "Freeze it", f"`kb baseline freeze {version}`, then commit `kb/baseline/{version}.yaml` on "
+                   f"a new branch (not named kb-baseline-{version}) and open a pull request for review; never merge it "
+                   "yourself"),
             Option("later", "Not yet", "leave it"),
         ),
         question[1],
@@ -334,13 +419,18 @@ def build_todo(root: Path) -> Todo:
     repo = KbRepo.load(root)
     head = KbRepo.at_ref(root, "HEAD") if has_commits(root) else None
     outdated, broken = _source_state(root, config, repo, head, issues)
-    do = _ingest_items(repo, issues)
+    missing = _not_ingested(issues)
+    unreadable = _unreadable(root, config, missing)
+    stale = _stale(repo, head)
+    do = _ingest_items(repo, missing, unreadable) + _report_items(root)
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
-    do += _redraft_items(repo, head) + _fix_items(issues, repo, outdated, broken) + _triage_items(issues)
-    # owners and secrets block; flag and freeze asks are optional decisions ("keep it flagged" and "not yet" are
-    # answers), so they never make the KB unclean
-    blocking = _owner_asks(issues, config) + _secret_asks(issues, repo)
+    do += _redraft_items(repo, head, stale) + _fix_items(issues, repo, outdated, broken, stale) + _triage_items(issues)
+    if not do and any(is_dirty(root, p) for p in KB_PATHS):
+        do.append(COMMIT)
+    # owners, secrets and unreadable documents block; flag and freeze asks are optional decisions ("keep it
+    # flagged" and "not yet" are answers), so they never make the KB unclean
+    blocking = _owner_asks(issues, config) + _secret_asks(issues, repo) + _unreadable_asks(unreadable)
     errors = sum(i.severity == "error" for i in issues)
     latest = _baseline(root)
     ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, latest, errors, bool(do or blocking))
@@ -394,5 +484,10 @@ def render_todo_json(t: Todo) -> str:
     return json.dumps(data, sort_keys=True, indent=2) + "\n"
 
 
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
 def summary_line(t: Todo) -> str:
-    return f"{len(t.do)} to do, {len(t.ask)} questions for the user"
+    """e.g. "1 thing to do, 2 questions for the user"."""
+    return f"{plural(len(t.do), 'thing')} to do, {plural(len(t.ask), 'question')} for the user"

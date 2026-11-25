@@ -19,6 +19,7 @@ from kb.records.ids import valid_segment_id
 from kb.records.repo import KbRepo
 from kb.sources.readers import SourceError
 from kb.sources.store import MAX_SOURCE_BYTES, derive_store, source_ids
+from kb.textfmt import inline_code
 
 STORE_NAMES = ("source.yaml", "text.md", "segments.jsonl")
 # the files `kb source add` / `kb ingest` write; triage.yaml is the agent's
@@ -174,18 +175,18 @@ def _as_at_base(ctx: GateContext, src_id: str, original: bytes) -> list[Issue]:
 
 def not_ingested(ctx: GateContext) -> list[Issue]:
     """A warning per document `kb ingest` would read that is the original of no stored source. Symlinks are
-    skipped (ingest stores the target, or refuses one outside the repo); a name with control characters is
-    source.bad_filename instead, so it never ends up in a command."""
+    skipped (ingest stores the target, or refuses one outside the repo), and so are files deleted but still in
+    git's index; a name with control characters is source.bad_filename instead, so it never ends up in a command."""
     stored = {src.original for src in ctx.repo.sources.values()}
     issues = []
     for path in documents(ctx.root, ctx.config):
-        if path in stored or not _contained(ctx.root, path):
+        if path in stored or not _contained(ctx.root, path) or not (ctx.root / path).exists():
             continue
         if _CONTROL.search(path):
             issues.append(Issue("source.bad_filename", f"{path!r} has control characters in its name; rename it",
                                 "warning", path=path))
         else:
-            issues.append(Issue("source.not_ingested", f"{path} is a document under config.sources that was never "
+            issues.append(Issue("source.not_ingested", f"{inline_code(path)} is a document under config.sources that was never "
                                 f"ingested; run `kb ingest {shlex.quote(path)}`", "warning", path=path))
     return issues
 
