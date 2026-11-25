@@ -30,7 +30,7 @@ from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement
 from kb.records.repo import KbRepo
 from kb.sources.readers import SourceError
-from kb.sources.store import derive_store
+from kb.sources.store import MAX_SOURCE_BYTES, derive_store
 from kb.textfmt import inline_code
 from kb.yamlio import YamlError, load_yaml_strict
 
@@ -75,7 +75,6 @@ ASK_CODES = {"config.owner_todo", "source.secret_in_original"}
 COVERED_CODES = {"source.outdated"}
 _BASELINE = re.compile(r"v(\d+)\.yaml")
 _SHOWN_REFS = 10
-_REASON_CHARS = 120
 # what the agent commits; while any of it is uncommitted there is no freeze (see _freeze_asks)
 KB_PATHS = ("kb/", "kb.config.yaml", "docs/clarifications.md")
 COMMIT = DoItem(
@@ -102,16 +101,34 @@ def _not_ingested(issues: list[Issue]) -> list[str]:
     return [i.path for i in issues if i.code == "source.not_ingested" and i.path]
 
 
+_READER_REASONS = {".pdf": "not a readable PDF", ".docx": "not a readable Word document"}
+
+
+def _reason(root: Path, path: str, error: Exception) -> str:
+    """A fixed reason for a document `kb ingest` cannot read, chosen from the error's class and the file itself.
+    Never the error's text: a reader's message can carry strings from the document."""
+    try:
+        size = (root / path).stat().st_size
+    except OSError:
+        return "could not be read"
+    if size > MAX_SOURCE_BYTES:
+        return "too large"
+    if size == 0:
+        return "empty or unsupported file"
+    if isinstance(error, SourceError):
+        return _READER_REASONS.get(Path(path).suffix.lower(), "could not be read")
+    return "could not be read"
+
+
 def _unreadable(root: Path, config: KbConfig, paths: list[str]) -> dict[str, str]:
-    """{path: short reason} for each of `paths` that `kb ingest` cannot read: each is read, guarded and segmented
+    """{path: fixed reason} for each of `paths` that `kb ingest` cannot read: each is read, guarded and segmented
     in memory as `kb ingest` would, nothing is written."""
     out = {}
     for path in paths:
         try:
             derive_store(root, path, config, [], 1)
         except (SourceError, OSError, ValueError) as e:
-            reason = (str(e).splitlines() or [""])[0].removeprefix(f"{path}: ").strip() or type(e).__name__
-            out[path] = reason if len(reason) <= _REASON_CHARS else reason[: _REASON_CHARS - 1] + "…"
+            out[path] = _reason(root, path, e)
     return out
 
 
@@ -130,10 +147,12 @@ def _ingest_items(repo: KbRepo, missing: list[str], unreadable: dict[str, str]) 
     ]
 
 
-def _report_items(root: Path) -> list[DoItem]:
-    """`kb ingest --report` / `kb redraft --report` while that flow's brief was written at HEAD: its result is not
-    committed yet. The base files are read as the reports read them (no symlinks, a commit that exists)."""
-    if not has_commits(root):
+def _report_items(root: Path, dirty: bool) -> list[DoItem]:
+    """`kb ingest --report` / `kb redraft --report` while that flow's brief was written at HEAD and the knowledge
+    base has uncommitted changes: its result is not committed yet. (A brief that changed nothing leaves nothing to
+    commit, so HEAD would never move: no item then.) The base files are read as the reports read them (no
+    symlinks, a commit that exists)."""
+    if not dirty or not has_commits(root):
         return []
     head = head_commit(root)
     out = []
@@ -422,11 +441,12 @@ def build_todo(root: Path) -> Todo:
     missing = _not_ingested(issues)
     unreadable = _unreadable(root, config, missing)
     stale = _stale(repo, head)
-    do = _ingest_items(repo, missing, unreadable) + _report_items(root)
+    dirty = any(is_dirty(root, p) for p in KB_PATHS)
+    do = _ingest_items(repo, missing, unreadable) + _report_items(root, dirty)
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head, stale) + _fix_items(issues, repo, outdated, broken, stale) + _triage_items(issues)
-    if not do and any(is_dirty(root, p) for p in KB_PATHS):
+    if not do and dirty:
         do.append(COMMIT)
     # owners, secrets and unreadable documents block; flag and freeze asks are optional decisions ("keep it
     # flagged" and "not yet" are answers), so they never make the KB unclean
