@@ -47,3 +47,10 @@ def test_quote_must_align_to_word_and_number_boundaries():
     hay = "a 2 and a 25"
     assert find_quote(hay, "a 2") == (0, 3)
     assert find_quote("a 25 and a 2", "a 2") == (9, 12)  # skips the earlier non-aligned occurrence
+
+
+def test_end_boundary_with_punctuation_last_char():
+    # the quote ends in punctuation, so only its start is checked
+    assert find_quote("xNo refund.", "No refund.") is None
+    assert find_quote("No refund. Next", "No refund.") == (0, 10)
+    assert find_quote("No refund.s", "No refund.") == (0, 10)

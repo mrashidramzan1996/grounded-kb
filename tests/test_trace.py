@@ -66,3 +66,14 @@ def test_trace_unknown_ids_exit_2(acme_repo_drafted):
     for bad in ["REQ-F-999", "SRC-pricing-spec-v3#seg-99", "SRC-nope#seg-01", "not-an-id"]:
         r = invoke(acme_repo_drafted, "trace", bad)
         assert r.exit_code == 2 and r.stdout == "", bad
+
+
+def test_trace_mode_any_marks_quote_but_record_is_found(acme_repo_drafted):
+    path = acme_repo_drafted / "kb/requirements/REQ-F-002.yaml"
+    text = path.read_text().replace("evidence:\n", "evidence:\n  mode: any\n", 1)
+    text = text.replace("  quotes:\n", '  quotes:\n  - source: SRC-pricing-spec-v3#seg-10\n    text: "Nothing like this is in the document."\n', 1)
+    path.write_text(text)
+    lines, ok = trace_chain(acme_repo_drafted, "REQ-F-002")
+    assert ok and any("QUOTE NOT FOUND" in l for l in lines)
+    path.write_text(text.replace('text: "No refund is given."', 'text: "Also not in the document."'))
+    assert not trace_chain(acme_repo_drafted, "REQ-F-002")[1]

@@ -17,8 +17,8 @@ from kb.code.registry import (
 )
 from kb.config.schema import KbConfig
 from kb.config.validate import modules_for
+from kb.gates.quotes import quote_results
 from kb.ports.tests import Outcome
-from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Feature, FeatureClaim, Invariant, Requirement
 from kb.records.repo import KbRepo
@@ -177,14 +177,17 @@ class _Engine:
         repo, changes = self.inp.repo, self.inp.changes
         broken: list[str] = []
         stale: list[str] = []
-        for q in req.evidence.quotes:
+        found, unfound = quote_results(repo, req.evidence)
+        for q in unfound:
             src, _, seg_id = q.source.partition("#")
-            seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
-            if src not in repo.sources or seg is None:
+            if src not in repo.sources or not any(s.id == seg_id for s in repo.segments(src)):
                 broken.append(f"cited segment {q.source} is missing")
-            elif find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is None:
+            else:
                 broken.append(f"quote not found in {q.source}")
-            elif changes is not None and changes.segments.get(q.source) == "changed":
+        if req.evidence.mode == "any" and found:
+            broken = []  # one found quote is enough
+        for q in found:
+            if changes is not None and changes.segments.get(q.source) == "changed":
                 stale.append(f"cited segment {q.source} changed; needs intent approvers' review")
         if broken:
             return "broken", _unique(broken)

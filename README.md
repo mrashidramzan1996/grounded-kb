@@ -99,6 +99,12 @@ teams:
 Set `policy.unreadable_teams: defer` to restore the old behaviour (any approval is accepted with an
 `owner_approval.deferred` warning, leaving the check to branch protection's required code-owner review).
 
+## Upgrading to 0.4.0
+
+Quotes must now align to word and number boundaries: a quote that cuts a word or number in half (for example `seat` inside
+`seats`, or `2` inside `25`) now counts as not found. Quotes shorter than 12 non-space characters are reported as
+`quote.too_short` (a warning, and an error for records drafted in the current ingest or redraft range).
+
 ## Upgrading to 0.3.1
 
 `kb verify` now reads the approval policy from the target branch's tip, and team approvals fail closed: when the forge

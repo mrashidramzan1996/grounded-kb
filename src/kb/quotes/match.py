@@ -1,6 +1,5 @@
 """Whitespace- and typography-tolerant quote matching (case-sensitive)."""
 
-import re
 import unicodedata
 
 _CHAR_MAP = {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-", "…": "..."}

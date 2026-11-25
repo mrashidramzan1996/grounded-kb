@@ -409,3 +409,26 @@ def test_triage_widened_by_new_quote_cannot_drop_mappings(kb):
 def test_triage_new_citation_may_add_ids(kb):
     r = widened(kb, "[REQ-F-001, REQ-NF-001]")
     assert (r.rejected, r.redrafted) == ([], ["REQ-NF-001"])
+
+
+def _redrafted_nf(statement: str, quote: str) -> str:
+    return (
+        f"id: REQ-NF-001\ndrafted_by: agent:test\nstatement: {statement!r}\nevidence:\n  quotes:\n"
+        f"  - source: SRC-n#seg-02\n    text: {quote!r}\nmodules:\n- MOD-a\n"
+    )
+
+
+def test_redraft_number_mismatch_is_rejected(kb):
+    triaged(kb)
+    sync(kb, DOC.replace(VAGUE, TARGET))
+    redraft(kb, "--changed")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", _redrafted_nf("Pages load in 3 seconds.", TARGET))
+    assert ("REQ-NF-001", "statement.number_not_in_quote") in rejected(redraft_report(kb, None))
+
+
+def test_redraft_too_short_quote_is_rejected(kb):
+    triaged(kb)
+    sync(kb, DOC.replace(VAGUE, TARGET))
+    redraft(kb, "--changed")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", _redrafted_nf("Pages load quickly.", "Pages load"))
+    assert ("REQ-NF-001", "quote.too_short") in rejected(redraft_report(kb, None))

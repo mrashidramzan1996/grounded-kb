@@ -407,3 +407,36 @@ def test_drafted_number_mismatch_is_rejected_in_report(acme_repo_ingested, fixtu
     p.write_text(p.read_text().replace("A session expires after 30 minutes without activity.\n", "A session expires after 45 minutes without activity.\n", 1))
     r = ingest_report(acme_repo_ingested, base="HEAD")
     assert ("INV-001", "statement.number_not_in_quote") in _pairs(r.rejected) and "INV-001" not in r.accepted
+
+
+def _strip_drafted_by(path):
+    path.write_text("\n".join(l for l in path.read_text().splitlines() if not l.startswith("drafted_by")) + "\n")
+
+
+def test_number_mismatch_without_drafted_by_stays_warning(acme_repo_ingested, fixtures):
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    p = acme_repo_ingested / "kb/invariants/INV-001.md"
+    p.write_text(p.read_text().replace("A session expires after 30 minutes without activity.\n", "A session expires after 45 minutes without activity.\n", 1))
+    _strip_drafted_by(p)
+    r = ingest_report(acme_repo_ingested, base="HEAD")
+    assert ("INV-001", "statement.number_not_in_quote") in _pairs(r.flagged) and "INV-001" in r.accepted
+
+
+def _shorten_req_f_002(root):
+    p = root / "kb/requirements/REQ-F-002.yaml"
+    p.write_text(p.read_text().replace('text: "No refund is given."', 'text: "No refund."'))
+    return p
+
+
+def test_drafted_too_short_quote_is_rejected_in_report(acme_repo_ingested, fixtures):
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    _shorten_req_f_002(acme_repo_ingested)
+    r = ingest_report(acme_repo_ingested, base="HEAD")
+    assert ("REQ-F-002", "quote.too_short") in _pairs(r.rejected)
+
+
+def test_too_short_quote_without_drafted_by_stays_warning(acme_repo_ingested, fixtures):
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    _strip_drafted_by(_shorten_req_f_002(acme_repo_ingested))
+    r = ingest_report(acme_repo_ingested, base="HEAD")
+    assert ("REQ-F-002", "quote.too_short") in _pairs(r.flagged)

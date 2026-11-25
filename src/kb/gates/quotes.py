@@ -5,7 +5,7 @@ from kb.gates.base import GateContext
 from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
-from kb.records.models import Decision, Feature, Invariant, Requirement
+from kb.records.models import Decision, Evidence, Feature, Invariant, Quote, Requirement
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
 
@@ -67,6 +67,25 @@ def missing_evidence(rid: str, rec: Decision | Invariant, severity: str, path: s
                  severity, path, rid)
 
 
+def too_short(text: str) -> bool:
+    return len("".join(text.split())) < MIN_QUOTE_CHARS
+
+
+def quote_results(repo: KbRepo, evidence: Evidence) -> tuple[list[Quote], list[Quote]]:
+    """(found, unfound) quotes: found means long enough and verbatim, aligned to word and number boundaries, in its segment.
+
+    A quote whose source or segment is missing is unfound. Under `mode: any` a record is unfound only when `found` is empty.
+    """
+    found: list[Quote] = []
+    unfound: list[Quote] = []
+    for q in evidence.quotes:
+        src, _, seg_id = q.source.partition("#")
+        seg = next((s for s in repo.segments(src) if s.id == seg_id), None) if src in repo.sources else None
+        ok = seg is not None and not too_short(q.text) and find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is not None
+        (found if ok else unfound).append(q)
+    return found, unfound
+
+
 def quote_gate(ctx: GateContext) -> list[Issue]:
     repo, issues = ctx.repo, []
     live = live_ids(repo)
@@ -86,19 +105,19 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
             continue
         if len(ev.quotes) > MAX_QUOTES_PER_CLAIM:
             issues.append(Issue("quote.too_many", f"{rid} has {len(ev.quotes)} quotes; at most {MAX_QUOTES_PER_CLAIM} are allowed", path=path, record=rid))
+        found, _ = quote_results(repo, ev)
         unfound: list[Issue] = []
-        found = 0
         for q in ev.quotes:
-            if len("".join(q.text.split())) < MIN_QUOTE_CHARS:
-                issues.append(Issue("quote.too_short", f"{rid}: quote shorter than {MIN_QUOTE_CHARS} characters: {inline_code(q.text)}", path=path, record=rid))
-                continue
             src, _, seg_id = q.source.partition("#")
             seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
+            if too_short(q.text):
+                issues.append(Issue("quote.too_short", f"{rid}: quote shorter than {MIN_QUOTE_CHARS} characters: {inline_code(q.text)}", "warning", path, rid))
+                continue
             if src not in repo.sources or seg is None:
                 continue  # id_gate reports the missing source or segment
-            if find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is not None:
-                found += 1
-            elif rid in live:
+            if q in found:
+                continue
+            if rid in live:
                 unfound.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
             else:  # a superseded or rejected record stays as it was, even when its document moved on
                 issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
@@ -106,7 +125,7 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
         if unfound and ev.mode == "any" and found:  # one grounded quote is enough; the others are only noted
             unfound = [Issue(i.code, i.message, "warning", i.path, i.record) for i in unfound]
         issues.extend(unfound)
-        grounded = set().union(*(numbers(q.text) for q in ev.quotes))
+        grounded = set().union(*(numbers(q.text) for q in found))  # only quotes that exist ground a number
         missing = sorted(numbers(_claimed_text(rec)) - grounded)
         if missing:
             what = "title and body" if isinstance(rec, Decision) else "statement"

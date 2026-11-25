@@ -467,3 +467,12 @@ def test_snapshot_parses_head_files_before_the_test_run(tmp_path):
     inp = snapshot(make_input(tmp_path, records), all_of(records))
     (tmp_path / "tests/test_seats.py").unlink()
     assert derive(replace(inp, outcomes={TEST: "passed"}), all_of(records))[0].status == "verified"
+
+
+def test_mode_any_broken_only_when_no_quote_found(tmp_path):
+    fake = Quote(source=SEG, text="Nothing like this appears.")
+    real = Quote(source=SEG, text=QUOTE)
+    ok = one(tmp_path, [feature(), requirement(evidence=Evidence(mode="any", quotes=[real, fake]))], "REQ-F-001", outcomes={TEST: "passed"})
+    assert ok.status != "broken"
+    bad = one(tmp_path, [feature(), requirement(evidence=Evidence(mode="any", quotes=[fake]))], "REQ-F-001", outcomes={TEST: "passed"})
+    assert bad.status == "broken"

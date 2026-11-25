@@ -4,9 +4,9 @@ from importlib.resources import files
 from pathlib import Path
 from string import Template
 
+from kb.gates.quotes import quote_results
 from kb.ingest.brief import BRIEF_VERSION, INJECTION_FLAG, _fence, _segments, next_ids
 from kb.issues import Issue
-from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
@@ -98,15 +98,16 @@ def flagged(repo: KbRepo) -> list[str]:
     return [rid for rid, rec in _live_cited(repo) if isinstance(rec, Requirement) and rec.flags]
 
 
-def _quote_found(repo: KbRepo, ref: str, text: str) -> bool:
-    src, _, seg_id = ref.partition("#")
-    seg = next((s for s in repo.segments(src) if s.id == seg_id), None) if src in repo.sources else None
-    return seg is not None and find_quote(repo.source_text(src)[seg.start : seg.end], text) is not None
-
-
 def unfound(repo: KbRepo) -> list[str]:
-    """Live REQ/ADR/INV ids with a quote not found in its segment (or whose segment is missing)."""
-    return [rid for rid, rec in _live_cited(repo) if rec.evidence and not all(_quote_found(repo, q.source, q.text) for q in rec.evidence.quotes)]
+    """Live REQ/ADR/INV ids with a quote not found in its segment (or whose segment is missing); under mode any, with none found."""
+    out = []
+    for rid, rec in _live_cited(repo):
+        if rec.evidence is None:
+            continue
+        found, missing = quote_results(repo, rec.evidence)
+        if missing and (rec.evidence.mode == "all" or not found):
+            out.append(rid)
+    return out
 
 
 def check_named(repo: KbRepo, rid: str) -> None:
@@ -144,9 +145,8 @@ def select(repo: KbRepo, ids: list[str], *, flagged_: bool, changed: bool, befor
                 for rid in citing(repo, {ref}):
                     add(rid, f"cites changed text {ref}")
         for rid in unfound(repo):
-            for q in cited[rid].evidence.quotes:
-                if not _quote_found(repo, q.source, q.text):
-                    add(rid, f"quote not found {q.source}")
+            for q in quote_results(repo, cited[rid].evidence)[1]:
+                add(rid, f"quote not found {q.source}")
     return {rid: sorted(reasons[rid]) for rid in sorted(reasons)}
 
 

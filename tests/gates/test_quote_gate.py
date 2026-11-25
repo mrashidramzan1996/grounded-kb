@@ -136,7 +136,8 @@ def _quotes(*texts):
 
 def test_short_quote_rejected(valid_ctx_with):
     ctx = valid_ctx_with(set_field("REQ-F-001", evidence=_quotes("s")))
-    assert "quote.too_short" in codes(run_gates(ctx, [quote_gate]))
+    short = [i for i in run_gates(ctx, [quote_gate]) if i.code == "quote.too_short"]
+    assert [i.severity for i in short] == ["warning"]  # an error only for drafted records, via the reports
 
 
 def test_iso_number_checked(acme_kb_with):
@@ -144,21 +145,35 @@ def test_iso_number_checked(acme_kb_with):
     assert "statement.number_not_in_quote" in codes(run_gates(ctx, [quote_gate]))
 
 
+REAL = {"source": "SRC-pricing-spec-v3#seg-03", "text": "A removed seat stays active until the end of the billing cycle."}
+FAKE = {"source": "SRC-pricing-spec-v3#seg-03", "text": "Refunds are always given within 45 days."}
+
+
 def test_mode_any_allows_one_unfound_quote(valid_ctx_with):
-    ev = _quotes("Refunds are always given.")
-    ev["quotes"].append({"source": "SRC-pricing-spec-v3#seg-03", "text": "Refunds are always given, never."})
-    ctx = valid_ctx_with(set_field("REQ-F-001", evidence=ev))
-    assert [i.severity for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"] == ["error", "error"]
-    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"mode": "any", "quotes": [*_orig_quote(valid_ctx_with), *ev["quotes"]]}))
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"quotes": [REAL, FAKE]}))
+    assert [i.severity for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"] == ["error"]
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"mode": "any", "quotes": [REAL, FAKE]}))
     found = [i for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"]
-    assert found and all(i.severity == "warning" for i in found)
+    assert [i.severity for i in found] == ["warning"]
 
 
 def test_mode_any_none_found_is_error(valid_ctx_with):
-    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"mode": "any", **_quotes("Refunds are always given.")}))
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"mode": "any", "quotes": [FAKE]}))
     assert [i.severity for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"] == ["error"]
 
 
-def _orig_quote(valid_ctx_with):
-    rec = valid_ctx_with().repo.records["REQ-F-001"]
-    return [q.model_dump() for q in rec.evidence.quotes]
+def test_unfound_quote_cannot_ground_numbers(valid_ctx_with):
+    ctx = valid_ctx_with(set_field("REQ-F-001", statement="A removed seat stays active for 45 days.", evidence={"mode": "any", "quotes": [REAL, FAKE]}))
+    assert "statement.number_not_in_quote" in codes(run_gates(ctx, [quote_gate]))
+
+
+def test_too_short_quote_cannot_ground_numbers(valid_ctx_with):
+    short = {"source": "SRC-pricing-spec-v3#seg-03", "text": "cycle 45"}
+    ctx = valid_ctx_with(set_field("REQ-F-001", statement="A removed seat stays active for 45 days.", evidence={"quotes": [REAL, short]}))
+    assert "statement.number_not_in_quote" in codes(run_gates(ctx, [quote_gate]))
+
+
+def test_too_short_on_superseded_record_stays_warning(valid_ctx_with):
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"quotes": [REAL, {**REAL, "text": "seat"}]}, status="rejected"))
+    short = [i for i in run_gates(ctx, [quote_gate]) if i.code == "quote.too_short"]
+    assert [i.severity for i in short] == ["warning"]

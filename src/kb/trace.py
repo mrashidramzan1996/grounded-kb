@@ -5,9 +5,18 @@
 
 from pathlib import Path
 
+from kb.gates.quotes import quote_results, too_short
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import superseded_by
-from kb.records.models import Component, Decision, Feature, Invariant, Quote, Requirement, Term
+from kb.records.models import (
+    Component,
+    Decision,
+    Feature,
+    Invariant,
+    Quote,
+    Requirement,
+    Term,
+)
 from kb.records.repo import KbRepo
 from kb.sources.segment import Segment
 from kb.textfmt import inline_code
@@ -59,7 +68,7 @@ def _quote_line(repo: KbRepo, rid: str, q: Quote) -> tuple[str, bool]:
     if seg is None:
         return f"[{rid}] {NOT_FOUND}: {q.source} does not exist: {inline_code(q.text)}", False
     at = find_quote(repo.source_text(q.source.partition("#")[0])[seg.start : seg.end], q.text)
-    if at is None:
+    if at is None or too_short(q.text):
         return f"[{rid}] {NOT_FOUND} in {q.source}: {inline_code(q.text)}", False
     return f"[{rid}] quote {inline_code(q.text)} found in {q.source} at chars {seg.start + at[0]}-{seg.start + at[1]}", True
 
@@ -71,10 +80,10 @@ def _record_chain(repo: KbRepo, rid: str) -> tuple[list[str], bool]:
     evidence = getattr(rec, "evidence", None)
     if evidence is None:
         return lines + [f"[{rid}] no quotes"], True
-    ok = True
+    found_quotes, _ = quote_results(repo, evidence)
+    ok = bool(found_quotes) if evidence.mode == "any" else len(found_quotes) == len(evidence.quotes)
     for q in evidence.quotes:
-        line, found = _quote_line(repo, rid, q)
-        ok &= found
+        line, _found = _quote_line(repo, rid, q)
         lines.append(line)
         if (seg := _segment(repo, q.source)) is not None:
             lines += _segment_lines(repo, q.source, seg)

@@ -44,3 +44,14 @@ def test_unfound_lists_records_whose_quote_vanished(md_repo_ingested):
 
 def test_req_yaml_writes_every_flag():
     assert load_yaml_strict(req_yaml("REQ-F-001", flags=("vague", "conflicting")))["flags"] == ["vague", "conflicting"]
+
+
+def test_unfound_under_mode_any_needs_no_quote_found(md_repo_ingested):
+    good = "{'source': 'SRC-n#seg-01', 'text': 'A seat costs 5 EUR.'}"
+    bad = "{'source': 'SRC-n#seg-01', 'text': 'A seat is free for everyone.'}"
+    def rec(rid, mode, quotes):
+        return f"id: {rid}\nstatement: A seat costs 5 EUR.\nevidence:\n  mode: {mode}\n  quotes: [{', '.join(quotes)}]\nmodules:\n- MOD-a\n"
+    put(md_repo_ingested, "kb/requirements/REQ-F-001.yaml", rec("REQ-F-001", "any", [good, bad]))
+    put(md_repo_ingested, "kb/requirements/REQ-F-002.yaml", rec("REQ-F-002", "all", [good, bad]))
+    put(md_repo_ingested, "kb/requirements/REQ-F-003.yaml", rec("REQ-F-003", "any", [bad]))
+    assert unfound(KbRepo.load(md_repo_ingested)) == ["REQ-F-002", "REQ-F-003"]
