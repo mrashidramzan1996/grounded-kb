@@ -84,13 +84,21 @@ def test_codeowners_location_order_first_found(tmp_path):
     assert not (repo / "CODEOWNERS").exists()
 
 
+def test_codeowners_block_covers_every_record_dir(tmp_path):
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo)
+    text = (repo / "CODEOWNERS").read_text()
+    for p in ("/kb/requirements/", "/kb/features/", "/kb/glossary/", "/kb/decisions/", "/kb/invariants/", "/kb/components/", "/kb.config.yaml"):
+        assert f"# {p} " in text
+
+
 def test_codeowners_block_is_commented_and_user_content_kept(tmp_path):
     original = "# mine\n* @a/all\n"
     repo = make_git_repo(None, tmp_path, extra={"CODEOWNERS": original})
     init_repo(repo)
     text = (repo / "CODEOWNERS").read_text()
     assert text.startswith(original)
-    for p in ("/kb/requirements/", "/kb/decisions/", "/kb/invariants/", "/kb.config.yaml"):
+    for p in ("/kb/requirements/", "/kb/features/", "/kb/glossary/", "/kb/decisions/", "/kb/invariants/", "/kb/components/", "/kb.config.yaml"):
         assert f"# {p} " in text
     live = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
     assert live == ["* @a/all"]

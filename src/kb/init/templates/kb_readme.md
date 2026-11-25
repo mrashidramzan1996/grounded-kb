@@ -100,6 +100,8 @@ Invariant (`INV-001.md`): front matter with `id`, `statement`, `governs`, `evide
 
 A decision or invariant drafted from documents (`drafted_by` set) must quote them in `evidence`; without it `kb check` reports the error `evidence.missing`. One a person records without a document is a warning. Every number in a statement, or in a decision's title and body, must appear in one of its quotes.
 
+Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/features/` and `kb/glossary/`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
+
 Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`.
 
 Every record may also carry `status` (`live` or `rejected`), `owner`, `visibility` and `drafted_by`.

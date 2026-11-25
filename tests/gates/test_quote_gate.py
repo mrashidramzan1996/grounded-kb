@@ -78,3 +78,60 @@ def test_superseded_record_quote_not_found_is_warning(valid_ctx_with):
     )
     live = valid_ctx_with(add_adr("ADR-0901", evidence=GONE))
     assert [i.severity for i in run_gates(live, [quote_gate]) if i.code == "quote.not_found"] == ["error"]
+
+
+# --- numbers in feature claims come from their requirements ----------------------------------
+
+from helpers import set_claim  # noqa: E402
+
+_REQ_500 = set_field(
+    "REQ-F-001",
+    statement="Seats can be removed until 500 seats.",
+    evidence={"quotes": [{"source": "SRC-pricing-spec-v3#seg-03", "text": "Seats can be removed until 500 seats."}]},
+)
+
+
+def _claim_issues(ctx):
+    return [i for i in run_gates(ctx, [quote_gate]) if i.code == "claim.number_not_in_requirement"]
+
+
+def test_claim_number_must_come_from_its_requirement(valid_ctx_with):
+    ctx = valid_ctx_with(_REQ_500, set_claim("FEAT-001", 0, claim="Seats are free for the first 90 days.", requirement="REQ-F-001"))
+    (issue,) = _claim_issues(ctx)
+    assert (issue.severity, issue.message) == ("warning", "FEAT-001.C1: claim numbers not in REQ-F-001: 90")
+
+
+def test_claim_number_found_in_requirement_quote_passes(valid_ctx_with):
+    ctx = valid_ctx_with(_REQ_500, set_claim("FEAT-001", 0, claim="Up to 500 seats.", requirement="REQ-F-001"))
+    assert _claim_issues(ctx) == []
+
+
+def test_claim_without_requirement_uses_the_feature_requirements(valid_ctx_with):
+    ctx = valid_ctx_with(_REQ_500, set_field("FEAT-001", requirements=["REQ-F-001"]),
+                         set_claim("FEAT-001", 0, claim="Free for 90 days.", requirement=None))
+    (issue,) = _claim_issues(ctx)
+    assert issue.message == "FEAT-001.C1: claim numbers not in REQ-F-001: 90"
+    ctx = valid_ctx_with(set_field("FEAT-001", requirements=[]), set_claim("FEAT-001", 0, claim="Free for 90 days.", requirement=None))
+    (issue,) = _claim_issues(ctx)
+    assert issue.message == "FEAT-001.C1: claim numbers not in any linked requirement: 90"
+
+
+def test_feature_body_numbers_checked(valid_ctx_with):
+    ctx = valid_ctx_with(_REQ_500, set_field("FEAT-001", requirements=["REQ-F-001"]))
+    assert _claim_issues(ctx) == []
+    path = ctx.root / "kb/features/FEAT-001.md"
+    from helpers import load_dir
+    from kb.gates.base import GateContext
+    from kb.records.repo import KbRepo
+
+    files = load_dir(ctx.root)
+    files["kb/features/FEAT-001.md"] = files["kb/features/FEAT-001.md"] + b"\nFree for the first 90 days.\n"
+    ctx = GateContext(ctx.root, ctx.config, KbRepo.from_files(files))
+    (issue,) = _claim_issues(ctx)
+    assert issue.message == "FEAT-001: title and body numbers not in any linked requirement: 90"
+    assert path.exists()
+
+
+def test_ids_in_claims_are_not_numbers(valid_ctx_with):
+    ctx = valid_ctx_with(set_claim("FEAT-001", 0, claim="Implements REQ-F-001 in seg-03."))
+    assert _claim_issues(ctx) == []

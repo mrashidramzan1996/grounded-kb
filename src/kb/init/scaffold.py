@@ -19,7 +19,15 @@ from kb.textblocks import upsert_block
 
 CODEOWNERS_LOCATIONS = ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]
 CODEOWNERS_DEFAULT = "CODEOWNERS"
-_APPROVAL_PATHS = ["/kb/requirements/", "/kb/decisions/", "/kb/invariants/", "/kb.config.yaml"]
+_APPROVAL_PATHS = [
+    "/kb/requirements/",
+    "/kb/features/",
+    "/kb/glossary/",
+    "/kb/decisions/",
+    "/kb/invariants/",
+    "/kb/components/",
+    "/kb.config.yaml",
+]
 _SAFE_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+=<>!~,\[\]-]*$")
 _SAFE_BASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _WILDCARDS = set("*?[]\\!")

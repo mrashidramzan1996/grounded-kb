@@ -120,6 +120,15 @@ def required_owners(
         if path.startswith("kb/requirements/"):
             for h in intent:
                 need(h, f"requirement {rid} changed")
+        elif path.startswith("kb/features/"):
+            for h in intent:
+                need(h, f"feature {rid} changed")
+        elif path.startswith("kb/glossary/"):
+            for h in intent:
+                need(h, f"glossary term {rid} changed")
+        elif path.startswith("kb/components/"):
+            for h in decisions:
+                need(h, f"component {rid} changed")
         elif path.startswith("kb/decisions/"):
             for h in decisions:
                 need(h, f"decision {rid} changed")

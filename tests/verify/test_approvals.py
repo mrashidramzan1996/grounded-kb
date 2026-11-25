@@ -142,7 +142,10 @@ def test_stale_requirement_requires_intent_approvers(tmp_path):
     ok = required_owners(tmp_path, cfg(), head, head, changes(), [verdict(rid, "requirement", "verified")])
     assert ok == {}
     new = required_owners(tmp_path, cfg(), head, None, changes(), [])
-    assert new["@pm"] == sorted(f"requirement {r} changed" for r in head.records if r.startswith("REQ-"))
+    expected = [f"requirement {r} changed" for r in head.records if r.startswith("REQ-")]
+    expected += [f"feature {r} changed" for r in head.records if r.startswith("FEAT-")]
+    expected += [f"glossary term {r} changed" for r in head.records if r.startswith("TERM-")]
+    assert new["@pm"] == sorted(expected)
 
 
 def test_team_key_resolves_and_unresolvable_skipped(tmp_path):
@@ -300,3 +303,22 @@ def test_empty_members_list_still_fails_closed():
     issues = owner_approval(FakeForge([review("erin")]), PR, c, {"@acme/product": ["x"]})
     assert [(i.code, i.severity) for i in issues] == [("missing_owner_approval", "error")]
     assert "cannot read the members of @acme/product" in issues[0].message
+
+
+def _only(path, data=b"x: 1\n"):
+    return repo_of({path: data})
+
+
+def test_feature_change_requires_intent_approvers(tmp_path):
+    head = _only("kb/features/FEAT-001.md", b"---\nid: FEAT-001\ntitle: T\nmodule: MOD-a\n---\nbody\n")
+    assert required_owners(tmp_path, cfg(), head, None, changes(), []) == {"@pm": ["feature FEAT-001 changed"]}
+
+
+def test_glossary_change_requires_intent_approvers(tmp_path):
+    head = _only("kb/glossary/TERM-001.yaml", b"id: TERM-001\nname: Seat\ndefinition: A seat.\n")
+    assert required_owners(tmp_path, cfg(), head, None, changes(), []) == {"@pm": ["glossary term TERM-001 changed"]}
+
+
+def test_component_change_requires_decision_approvers(tmp_path):
+    head = _only("kb/components/COMP-001.md", b"---\nid: COMP-001\ntitle: C\nmodule: MOD-a\n---\nbody\n")
+    assert required_owners(tmp_path, cfg(), head, None, changes(), []) == {"@arch": ["component COMP-001 changed"]}

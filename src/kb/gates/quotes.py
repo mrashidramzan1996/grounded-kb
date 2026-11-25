@@ -1,10 +1,12 @@
 import re
+from collections.abc import Iterable
 
 from kb.gates.base import GateContext
 from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
-from kb.records.models import Decision, Invariant, Requirement
+from kb.records.models import Decision, Feature, Invariant, Requirement
+from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
 
 MAX_QUOTES_PER_CLAIM = 5
@@ -22,6 +24,41 @@ def _claimed_text(rec: Requirement | Decision | Invariant) -> str:
     return f"{rec.title}\n{rec.body}" if isinstance(rec, Decision) else rec.statement
 
 
+def _grounded(repo: KbRepo, rids: Iterable[str]) -> set[str]:
+    """Numbers in the linked requirements' statements and quote texts."""
+    out: set[str] = set()
+    for rid in rids:
+        rec = repo.records.get(rid)
+        if isinstance(rec, Requirement):
+            out |= numbers(rec.statement)
+            for q in rec.evidence.quotes:
+                out |= numbers(q.text)
+    return out
+
+
+def feature_number_issues(repo: KbRepo) -> list[Issue]:
+    """Numbers in a live feature's claims, title and body must appear in the requirements it links."""
+    issues: list[Issue] = []
+    live = live_ids(repo)
+    for fid, rec in sorted(repo.records.items()):
+        if not isinstance(rec, Feature) or fid not in live:
+            continue
+        path = repo.paths[fid]
+        for claim in rec.claims:
+            linked = [claim.requirement] if claim.requirement else list(rec.requirements)
+            missing = sorted(numbers(claim.claim) - _grounded(repo, linked))
+            if missing:
+                where = ", ".join(linked) if linked else "any linked requirement"
+                issues.append(Issue("claim.number_not_in_requirement", f"{claim.id}: claim numbers not in {where}: {', '.join(missing)}",
+                                    "warning", path, fid))
+        linked = list(dict.fromkeys([*rec.requirements, *(c.requirement for c in rec.claims if c.requirement)]))
+        missing = sorted(numbers(f"{rec.title}\n{rec.body}") - _grounded(repo, linked))
+        if missing:
+            issues.append(Issue("claim.number_not_in_requirement",
+                                f"{fid}: title and body numbers not in any linked requirement: {', '.join(missing)}", "warning", path, fid))
+    return issues
+
+
 def missing_evidence(rid: str, rec: Decision | Invariant, severity: str, path: str) -> Issue:
     kind = "decision" if isinstance(rec, Decision) else "invariant"
     return Issue("evidence.missing", f"{rid}: this {kind} quotes no source; add evidence.quotes from the document it comes from",
@@ -31,6 +68,7 @@ def missing_evidence(rid: str, rec: Decision | Invariant, severity: str, path: s
 def quote_gate(ctx: GateContext) -> list[Issue]:
     repo, issues = ctx.repo, []
     live = live_ids(repo)
+    issues.extend(feature_number_issues(repo))
     for rid, rec in sorted(repo.records.items()):
         if not isinstance(rec, (Requirement, Decision, Invariant)):
             continue
