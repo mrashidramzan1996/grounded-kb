@@ -102,11 +102,28 @@ A decision or invariant drafted from documents (`drafted_by` set) must quote the
 
 Quotes must be verbatim and aligned to word and number boundaries: `seat` does not match inside `seats`, nor `2` inside `25`. A quote shorter than 12 non-space characters is rejected (`quote.too_short`). `evidence.mode` is `all` by default (every quote must be found); with `mode: any` an unfound quote is only a warning (`quote.not_found`) while at least one quote is found, and an error when none is.
 
-Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/features/` and `kb/glossary/`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
+Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/features/`, `kb/glossary/` and every `kb/sources/SRC-<name>/triage.yaml`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
 
 Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`.
 
 Every record may also carry `status` (`live` or `rejected`), `owner`, `visibility` and `drafted_by`.
+
+## Triage and coverage
+
+Every segment of a stored document gets an entry in its source's `triage.yaml`: the ids of the records drafted from it, or `none:` with a reason code and optional free text.
+
+```yaml
+segments:
+  seg-01: "none: heading: document title"
+  seg-02: [REQ-F-001, REQ-F-002]
+  seg-03: "none: background"
+```
+
+- The reason codes are `heading`, `background`, `contact`, `boilerplate`, `example`, `duplicate`, `out-of-scope` and `other`, written `none: <code>[: free text]`. A `none:` reason without a code is the warning `triage.none_uncoded`; in a triage entry written in the current ingest or redraft range it is an error. `out-of-scope` is the warning `triage.use_exclusion`: record the exclusion as an `EXCL` record instead.
+- A list must name at least one record that quotes the segment: a requirement, decision or invariant whose evidence cites `SRC-<name>#seg-NN`, or a feature (or claim) whose linked requirement does. Otherwise `kb check` warns `triage.not_quoted`, and the ingest and redraft reports reject a new or changed entry.
+- A change to a `triage.yaml` needs the intent approvers (`triage of SRC-<name> changed`): a `none:` entry says that a part of a document holds no product intent.
+
+kb splits each segment into sentences and marks the rule-like ones (must, shall, should, may, limits, numbers). `kb check` warns `sentence.uncovered` for a rule-like sentence that no live requirement, decision or invariant quotes, `triage.none_has_rules` for a segment triaged `none:` that holds one, and `quote.multiple_rules` for a quote that spans two or more rule-like sentences (split it into one record per rule).
 
 ## Code markers
 

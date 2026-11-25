@@ -344,7 +344,7 @@ def clean_drafted_acme(repo: Path) -> None:
     """Resolve what kb check reports on the drafted acme repo: drop the invented REQ-F-005 and the secret."""
     (repo / "kb/requirements/REQ-F-005.yaml").unlink()
     triage = repo / "kb/sources/SRC-pricing-spec-v3/triage.yaml"
-    triage.write_text(triage.read_text().replace("[REQ-F-005]", '"none: annual pricing is drafted elsewhere"'))
+    triage.write_text(triage.read_text().replace("[REQ-F-005]", '"none: other: annual pricing is drafted elsewhere"'))
     remove_secret_paragraph(repo / "docs/architecture-notes.docx")
     assert invoke(repo, "source", "sync").exit_code == 0
 

@@ -173,7 +173,7 @@ def _example_records() -> list[tuple[str, bytes]]:
         )),
     ]
     out = [(path, render_record(rec)) for path, rec in records]
-    triage = {"segments": {"seg-01": "none: document title", "seg-08": ["REQ-F-034"]}}
+    triage = {"segments": {"seg-01": "none: heading: document title", "seg-08": ["REQ-F-034"]}}
     out.append((f"kb/sources/{src}/triage.yaml", dump_yaml(triage).encode()))
     return out
 

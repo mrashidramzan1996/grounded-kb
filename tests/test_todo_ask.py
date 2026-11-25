@@ -223,7 +223,7 @@ def test_freeze_offered_alongside_flag_asks(tmp_path):
 
     put(root, "docs/keys.md", "# Keys\n\nThe staging key is AKIAIOSFODNN7EXAMPLE.\n")  # a secret ask blocks it
     ok(root, "ingest")
-    put(root, "kb/sources/SRC-keys/triage.yaml", 'segments:\n  seg-01: "none: not a requirement"\n')
+    put(root, "kb/sources/SRC-keys/triage.yaml", 'segments:\n  seg-01: "none: other: not a requirement"\n')
     commit(root, "keys")
     t = todo_json(root)
     assert t["do"] == []
@@ -266,7 +266,7 @@ def test_no_freeze_when_baseline_folder_is_not_a_directory(tmp_path):
 
 def test_no_freeze_without_requirements(tmp_path):
     root = todo_ingested(tmp_path)
-    put(root, TODO_TRIAGE, 'segments:\n  seg-01: "none: no requirement here"\n')
+    put(root, TODO_TRIAGE, 'segments:\n  seg-01: "none: other: no requirement here"\n')
     commit(root, "triage")
     t = todo_json(root)
     assert (t["do"], t["ask"], t["state"]["errors"]) == ([], [], 0)

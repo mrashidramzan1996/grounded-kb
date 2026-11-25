@@ -132,6 +132,20 @@ class Source(_Model):
         return v
 
 
+# why a segment has no record: `none: <code>[: free text]`. A reason without one of these codes still parses (0.3 triage
+# files have none); the triage gate warns `triage.none_uncoded`, an error for triage drafted in an ingest or redraft range.
+NONE_CODES = ("heading", "background", "contact", "boilerplate", "example", "duplicate", "out-of-scope", "other")
+_NONE = "none: "
+
+
+def none_code(value: str) -> str | None:
+    """The reason code of a `none: <code>[: free text]` triage value, or None when it starts with no known code."""
+    if not value.startswith(_NONE):
+        return None
+    code = value[len(_NONE) :].partition(":")[0].strip()
+    return code if code in NONE_CODES else None
+
+
 class Triage(_Model):
     segments: dict[str, list[str] | str]
 
@@ -140,8 +154,8 @@ class Triage(_Model):
     def _valid_triage_values(cls, v):
         for seg, val in v.items():
             if isinstance(val, str):
-                if not val.startswith("none: ") or not val[len("none: ") :].strip():
-                    raise ValueError(f"{seg}: a string value must be 'none: <reason>' with a reason (got {val!r})")
+                if not val.startswith(_NONE) or not val[len(_NONE) :].strip():
+                    raise ValueError(f"{seg}: a string value must be 'none: <code>[: reason]' with a reason (got {val!r})")
                 continue
             if not val:
                 raise ValueError(f"{seg}: a list value must not be empty; use 'none: <reason>'")

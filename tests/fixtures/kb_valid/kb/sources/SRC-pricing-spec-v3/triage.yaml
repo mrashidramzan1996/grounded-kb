@@ -1,5 +1,5 @@
 segments:
-  seg-01: 'none: document title'
+  seg-01: 'none: heading: document title'
   seg-02:
   - REQ-F-003
   seg-03:

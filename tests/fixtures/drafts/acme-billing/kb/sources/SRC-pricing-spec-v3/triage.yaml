@@ -1,13 +1,13 @@
 segments:
-  seg-01: "none: document title and status"
-  seg-02: "none: overview and definition of a seat"
-  seg-03: "none: section heading only"
-  seg-04: "none: plan price, not drafted in this fixture"
-  seg-05: "none: plan price, not drafted in this fixture"
-  seg-06: "none: plan price, not drafted in this fixture"
+  seg-01: "none: heading: document title and status"
+  seg-02: "none: background: overview and definition of a seat"
+  seg-03: "none: heading: section heading only"
+  seg-04: "none: other: plan price, not drafted in this fixture"
+  seg-05: "none: other: plan price, not drafted in this fixture"
+  seg-06: "none: other: plan price, not drafted in this fixture"
   seg-07: [REQ-F-005]
-  seg-08: "none: section heading only"
+  seg-08: "none: heading: section heading only"
   seg-09: [REQ-F-003]
   seg-10: [REQ-F-001, REQ-F-002]
-  seg-11: "none: invoice schedule, not drafted in this fixture"
+  seg-11: "none: other: invoice schedule, not drafted in this fixture"
   seg-12: [REQ-NF-001, REQ-NF-002]

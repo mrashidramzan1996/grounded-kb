@@ -72,7 +72,7 @@ def test_cli_report_prints_markdown(acme_repo_ingested, fixtures):
 
 
 def test_cli_strict_passes_when_clean(md_repo_ingested):
-    (md_repo_ingested / "kb/sources/SRC-n/triage.yaml").write_text("segments:\n  seg-01: 'none: price only'\n")
+    (md_repo_ingested / "kb/sources/SRC-n/triage.yaml").write_text("segments:\n  seg-01: 'none: other: price only'\n")
     out = invoke(md_repo_ingested, "ingest", "--report", "--strict")
     assert out.exit_code == 0, out.output
 

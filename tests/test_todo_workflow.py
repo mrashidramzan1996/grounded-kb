@@ -93,7 +93,7 @@ def test_uncommitted_kb_changes_ask_for_commit(tmp_path):
     put(root, "docs/clarifications.md", TODO_DOC)  # not ingested: the ingest item comes first
     assert list(items(root)) == ["ingest:docs/clarifications.md"]
     ok(root, "ingest", "docs/clarifications.md")
-    put(root, "kb/sources/SRC-clarifications/triage.yaml", 'segments:\n  seg-01: "none: a copy"\n')
+    put(root, "kb/sources/SRC-clarifications/triage.yaml", 'segments:\n  seg-01: "none: duplicate: a copy"\n')
     assert list(items(root)) == ["report:ingest"]
     commit(root, "clarifications")
     put(root, "docs/clarifications.md", TODO_DOC + "\nMore.\n")
@@ -130,7 +130,7 @@ def test_unreadable_document_is_a_blocking_ask(tmp_path):
     assert "1. `docs/bad.pdf` could not be read (`not a readable PDF`). What should I do?\n" in text
 
     ok(root, "ingest", "docs/n.md")
-    put(root, TODO_TRIAGE, 'segments:\n  seg-01: "none: test"\n')
+    put(root, TODO_TRIAGE, 'segments:\n  seg-01: "none: other: test"\n')
     commit(root, "n")
     t = todo(root)
     assert t["do"] == [] and [a["id"] for a in t["ask"]] == [UNREADABLE]  # no freeze while it blocks

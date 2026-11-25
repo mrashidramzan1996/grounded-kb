@@ -1,0 +1,114 @@
+"""Sentence-level coverage: every rule-like sentence of a stored document should be quoted by a record (0.4.0)."""
+
+from kb.gates.base import GateContext
+from kb.gates.quotes import too_short
+from kb.gates.sources import bad_segment_ids
+from kb.issues import Issue
+from kb.quotes.match import find_quote
+from kb.records.lifecycle import live_ids
+from kb.records.models import Decision, Invariant, Requirement
+from kb.records.repo import KbRepo
+from kb.sources.sentences import Sentence, is_normative, sentence_key, sentences
+from kb.textfmt import inline_code
+
+# the record types whose quotes cover a sentence (Task 5 adds Exclusion); entity and relation quotes never do
+COVERING_TYPES: tuple[type, ...] = (Requirement, Decision, Invariant)
+Span = tuple[int, int, str]  # [start, end) in the source's text.md, and the record id
+
+
+def quote_spans(repo: KbRepo) -> dict[str, list[Span]]:
+    """{source id: (start, end, record id)} for each quote of a live covering record that is found in its segment
+    (by the quote gate's rules: long enough, verbatim, on word and number boundaries), sorted by position."""
+    live = live_ids(repo)
+    out: dict[str, list[Span]] = {}
+    for rid, rec in sorted(repo.records.items()):
+        if not isinstance(rec, COVERING_TYPES) or rid not in live or rec.evidence is None:
+            continue
+        for q in rec.evidence.quotes:
+            src, _, seg_id = q.source.partition("#")
+            seg = next((s for s in repo.segments(src) if s.id == seg_id), None) if src in repo.sources else None
+            if seg is None or too_short(q.text):
+                continue
+            at = find_quote(repo.source_text(src)[seg.start : seg.end], q.text)
+            if at is not None:
+                out.setdefault(src, []).append((seg.start + at[0], seg.start + at[1], rid))
+    return {src: sorted(spans) for src, spans in out.items()}
+
+
+def _overlaps(s: Sentence, start: int, end: int) -> bool:
+    return max(s.start, start) < min(s.end, end)
+
+
+def _normative(repo: KbRepo) -> dict[str, list[Sentence]]:
+    """Rule-like sentences by source; a source whose segment ids are invalid is skipped (the source gate reports it)."""
+    bad = set(bad_segment_ids(repo))
+    return {src: [s for s in sentences(repo, src) if is_normative(s)] for src in sorted(set(repo.sources) - bad)}
+
+
+def _uncovered(rules: dict[str, list[Sentence]], spans: dict[str, list[Span]], decided) -> list[Sentence]:
+    return [
+        s
+        for src, found in rules.items()
+        for s in found
+        if sentence_key(s) not in decided and not any(_overlaps(s, a, b) for a, b, _ in spans.get(src, ()))
+    ]
+
+
+def uncovered(repo: KbRepo, decided: set[str] | frozenset[str] = frozenset()) -> list[Sentence]:
+    """The rule-like sentences no quote span overlaps, minus those whose sentence_key is in `decided`."""
+    return _uncovered(_normative(repo), quote_spans(repo), decided)
+
+
+def _quoted_chars(spans: list[Span]) -> int:
+    """Characters inside at least one span (overlaps counted once)."""
+    total, reach = 0, -1
+    for a, b, _ in spans:
+        if b > reach:
+            total += b - max(a, reach)
+            reach = b
+    return total
+
+
+def coverage_stats(repo: KbRepo) -> dict:
+    """Coverage of rule-like sentences, next to the share of the text that is quoted at all: quoting whole
+    segments raises coverage but shows up as a high quoted share. With no rule-like sentence the ratio is 1.0."""
+    rules, spans = _normative(repo), quote_spans(repo)
+    normative = sum(len(v) for v in rules.values())
+    covered = normative - len(_uncovered(rules, spans, frozenset()))
+    return {
+        "normative": normative,
+        "covered": covered,
+        "ratio": covered / normative if normative else 1.0,
+        "quoted_chars": sum(_quoted_chars(v) for v in spans.values()),
+        "text_chars": sum(len(repo.source_text(src)) for src in repo.sources),
+    }
+
+
+def coverage_gate(ctx: GateContext) -> list[Issue]:
+    repo = ctx.repo
+    rules, spans = _normative(repo), quote_spans(repo)
+    issues: list[Issue] = []
+    for s in _uncovered(rules, spans, frozenset()):
+        src = s.ref.partition("#")[0]
+        issues.append(Issue("sentence.uncovered", f"{s.ref}: rule-like sentence no record quotes: {inline_code(s.text)}",
+                            "warning", f"kb/sources/{src}/triage.yaml", src))
+    merged: dict[str, int] = {}
+    for src, found in spans.items():
+        for a, b, rid in found:
+            n = sum(1 for s in rules.get(src, ()) if _overlaps(s, a, b))
+            if n >= 2:
+                merged[rid] = max(merged.get(rid, 0), n)
+    for rid, n in sorted(merged.items()):
+        issues.append(Issue("quote.multiple_rules", f"{rid}: its quote spans {n} rule-like sentences; split it into one record per rule",
+                            "warning", repo.paths[rid], rid))
+    for src, found in rules.items():
+        tri = repo.triage(src)
+        for seg_id, value in sorted(tri.segments.items()) if tri else ():
+            if not isinstance(value, str):
+                continue
+            ref = f"{src}#{seg_id}"
+            held = [s for s in found if s.ref == ref]
+            if held:
+                issues.append(Issue("triage.none_has_rules", f"{ref}: triaged {inline_code(value)} but holds {len(held)} rule-like "
+                                    f"sentence(s), such as {inline_code(held[0].text)}", "warning", f"kb/sources/{src}/triage.yaml", src))
+    return issues

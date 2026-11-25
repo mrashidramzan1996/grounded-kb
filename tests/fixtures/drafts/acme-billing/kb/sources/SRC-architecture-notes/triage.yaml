@@ -1,10 +1,10 @@
 segments:
-  seg-01: "none: document title and review date"
+  seg-01: "none: heading: document title and review date"
   seg-02: [ADR-0001]
   seg-03: [ADR-0002]
   seg-04: [INV-001]
-  seg-05: "none: section heading only"
-  seg-06: "none: service ownership; proposed as module MOD-billing"
-  seg-07: "none: service ownership; proposed as module MOD-sessions"
-  seg-08: "none: service ownership; proposed as module MOD-web"
-  seg-09: "none: pasted chat notes with instruction-like text; not product intent"
+  seg-05: "none: heading: section heading only"
+  seg-06: "none: other: service ownership; proposed as module MOD-billing"
+  seg-07: "none: other: service ownership; proposed as module MOD-sessions"
+  seg-08: "none: other: service ownership; proposed as module MOD-web"
+  seg-09: "none: other: pasted chat notes with instruction-like text; not product intent"

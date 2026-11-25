@@ -303,7 +303,7 @@ def test_triage_change_for_unselected_record_rejected(kb):
     put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n  seg-02: [REQ-NF-001]\n")
     commit(kb)
     redraft(kb, "REQ-NF-001")
-    put(kb, TRIAGE, "segments:\n  seg-01: 'none: not a requirement'\n  seg-02: [REQ-NF-001]\n")
+    put(kb, TRIAGE, "segments:\n  seg-01: 'none: other: not a requirement'\n  seg-02: [REQ-NF-001]\n")
     r = redraft_report(kb, None)
     assert [(i.code, i.path, i.message) for i in r.rejected] == [
         ("redraft.out_of_scope", TRIAGE, "SRC-n#seg-01: triage changed for a segment outside this redraft")

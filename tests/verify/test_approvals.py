@@ -145,6 +145,7 @@ def test_stale_requirement_requires_intent_approvers(tmp_path):
     expected = [f"requirement {r} changed" for r in head.records if r.startswith("REQ-")]
     expected += [f"feature {r} changed" for r in head.records if r.startswith("FEAT-")]
     expected += [f"glossary term {r} changed" for r in head.records if r.startswith("TERM-")]
+    expected += [f"triage of {s} changed" for s in head.sources]  # with no base, every triage file is new
     assert new["@pm"] == sorted(expected)
 
 
@@ -391,7 +392,7 @@ def test_empty_approver_groups_with_changed_records_warn_once(tmp_path):
     warnings = no_approver_warnings(empty, head, base, files, [])
     assert [(i.code, i.severity, i.message) for i in warnings] == [
         ("owner_approval.no_approvers", "warning", "intent approvers are empty in the approval policy; changes to "
-         "requirements, features and glossary terms need no approval"),
+         "requirements, features, glossary terms and triage need no approval"),
         ("owner_approval.no_approvers", "warning", "decisions approvers are empty in the approval policy; changes to "
          "decisions, invariants and components need no approval"),
     ]
@@ -399,3 +400,23 @@ def test_empty_approver_groups_with_changed_records_warn_once(tmp_path):
     assert no_approver_warnings(empty, head, repo_of(head.raw), changes(), []) == []  # no record changed
     stale = no_approver_warnings(empty, head, repo_of(head.raw), changes(), [verdict("REQ-F-001", "requirement", "stale")])
     assert [i.message.split(" ", 1)[0] for i in stale] == ["intent"]  # a stale requirement needs intent approval too
+
+
+def test_triage_change_needs_intent_approvers(tmp_path):
+    from kb.verify.approvals import no_approver_warnings
+
+    path = "kb/sources/SRC-spec/triage.yaml"
+    old, new = b"segments:\n  seg-01: [REQ-F-001]\n", b"segments:\n  seg-01: 'none: heading'\n"
+    head, base = repo_of({path: new}), repo_of({path: old})
+    assert required_owners(tmp_path, cfg(), head, base, changes(path), []) == {"@pm": ["triage of SRC-spec changed"]}
+    assert required_owners(tmp_path, cfg(), head, None, changes(), []) == {"@pm": ["triage of SRC-spec changed"]}
+    assert required_owners(tmp_path, cfg(), head, repo_of({path: new}), changes(), []) == {}
+    # deleted, or no longer parsing: still the intent approvers
+    assert required_owners(tmp_path, cfg(), repo_of({}), base, changes(path), []) == {"@pm": ["triage of SRC-spec changed"]}
+    broken = repo_of({path: b"segments: [oops\n"})
+    assert required_owners(tmp_path, cfg(), broken, base, changes(path), []) == {"@pm": ["triage of SRC-spec changed"]}
+    # other stored source files are written by kb, not approved
+    text = "kb/sources/SRC-spec/text.md"
+    assert required_owners(tmp_path, cfg(), repo_of({text: b"x"}), repo_of({}), changes(text), []) == {}
+    empty = cfg(policy={"approvers": {"intent": [], "decisions": ["@arch"]}})
+    assert [i.code for i in no_approver_warnings(empty, head, base, changes(path), [])] == ["owner_approval.no_approvers"]

@@ -72,9 +72,9 @@ def test_phase1_docs_only_story(story, fixtures):
     # 4. remove REQ-F-005, triage the Contact segment; the planted key in the original still fails the strict check
     (repo / "kb/requirements/REQ-F-005.yaml").unlink()
     pricing = repo / "kb/sources/SRC-pricing-spec-v3/triage.yaml"  # seg-07 named the rejected requirement
-    pricing.write_text(pricing.read_text().replace("seg-07: [REQ-F-005]", 'seg-07: "none: annual billing note, no requirement drafted"'))
+    pricing.write_text(pricing.read_text().replace("seg-07: [REQ-F-005]", 'seg-07: "none: other: annual billing note, no requirement drafted"'))
     triage = repo / "kb/sources/SRC-product-brief/triage.yaml"
-    triage.write_text(triage.read_text().rstrip("\n") + '\n  seg-06: "none: contact details"\n')
+    triage.write_text(triage.read_text().rstrip("\n") + '\n  seg-06: "none: contact: details"\n')
     commit(repo, "accept drafts")
     r, issues = check_json(repo, "--strict")
     assert r.exit_code == 1 and "source.secret_in_original" in {i["code"] for i in issues if i["severity"] == "error"}

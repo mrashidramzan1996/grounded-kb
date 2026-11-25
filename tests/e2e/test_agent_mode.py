@@ -136,7 +136,7 @@ def set_up_from_docs(tmp_path: Path) -> Path:
     seg = ref.split("#")[1]
     write(repo, "kb/sources/SRC-clarifications/triage.yaml",
           "segments:\n" + "".join(
-              f"  {s}:\n  - REQ-NF-001\n" if s == seg else f"  {s}: 'none: heading of the clarifications file'\n"
+              f"  {s}:\n  - REQ-NF-001\n" if s == seg else f"  {s}: 'none: heading: heading of the clarifications file'\n"
               for s in sorted(re.findall(r"### SRC-clarifications#(seg-\d+)", brief))
           ))
     out = kb(repo, "redraft", "--report", "--strict")
@@ -325,7 +325,7 @@ class LiteralAgent:
         cited = {ref.split("#")[1]: rid for rid, ref in refs.items()}
         segs = sorted(set(re.findall(r"### SRC-clarifications#(seg-\d+)", brief)))
         write(self.repo, "kb/sources/SRC-clarifications/triage.yaml", "segments:\n" + "".join(
-            f"  {s}:\n  - {cited[s]}\n" if s in cited else f"  {s}: 'none: heading of the clarifications file'\n"
+            f"  {s}:\n  - {cited[s]}\n" if s in cited else f"  {s}: 'none: heading: heading of the clarifications file'\n"
             for s in segs
         ))
 

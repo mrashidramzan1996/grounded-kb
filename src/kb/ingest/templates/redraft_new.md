@@ -10,11 +10,12 @@ record cites them.
 3. Quote word for word from the segment: its `text` must appear in that segment exactly as written.
 4. Start from the next free IDs above and count up. Never reuse an ID.
 5. Never duplicate an existing requirement: check the list under "Existing requirements". When a segment
-   only restates one, draft nothing from it and triage it `"none: restates <ID>"`.
+   only restates one, draft nothing from it and triage it `"none: duplicate: restates <ID>"`.
 6. Never invent numbers, targets or details. When a line is vague (for example "must be fast"), draft it
    as written and flag it `flags: [vague]` instead of making up a target.
 7. Write a triage entry for every segment below, in `kb/sources/SRC-…/triage.yaml`: the IDs drafted from
-   it, or `"none: <reason>"`. Update the entry a changed segment already has.
+   it (each must quote that segment), or `"none: <code>: <reason>"` with a code from heading, background,
+   contact, boilerplate, example, duplicate, out-of-scope, other. Update the entry a changed segment already has.
 8. Set `drafted_by: "agent:<your name> via kb redraft brief $version"` on every record you draft.
 
 ## Existing requirements

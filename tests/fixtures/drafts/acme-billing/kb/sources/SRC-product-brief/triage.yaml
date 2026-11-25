@@ -1,6 +1,6 @@
 segments:
-  seg-01: "none: document title"
-  seg-02: "none: problem statement, no testable requirement"
+  seg-01: "none: heading: document title"
+  seg-02: "none: background: problem statement, no testable requirement"
   seg-03: [REQ-F-004]
-  seg-04: "none: user roles"
-  seg-05: "none: release scope"
+  seg-04: "none: background: user roles"
+  seg-05: "none: background: release scope"

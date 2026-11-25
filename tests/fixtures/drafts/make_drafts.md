@@ -33,7 +33,7 @@ At the time of writing the segments were:
 | SRC-product-brief | seg-03 | 2. Goals | REQ-F-004 |
 | SRC-product-brief | seg-06 | 5. Contact | left untriaged on purpose |
 
-Every other segment is triaged as `none: <reason>`.
+Every other segment is triaged as `none: <code>: <reason>`, with a code from `NONE_CODES` (kb.records.models).
 
 ## Modules
 

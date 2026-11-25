@@ -9,6 +9,7 @@ from kb.config.schema import KbConfig
 from kb.config.validate import resolve_owner
 from kb.gates.anchors import anchor_gate
 from kb.gates.base import GateContext, run_gates
+from kb.gates.coverage import coverage_gate
 from kb.gates.decisions import decision_guard
 from kb.gates.ids import id_gate
 from kb.gates.quotes import missing_evidence, quote_gate
@@ -20,15 +21,17 @@ from kb.gates.sources import (
     source_gate,
     stored_ids,
 )
+from kb.gates.triage import triage_gate
 from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
-from kb.issues import Issue, new_since
+from kb.issues import Issue, issue_key, new_since
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
 
-GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]
+GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate, coverage_gate, triage_gate]
 BASE_GATES = [g for g in GATES if g is not source_gate]
+TRIAGE_ERRORS = ("triage.none_uncoded", "triage.not_quoted")
 ORIGINAL_CHANGED = (
     "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
 )
@@ -167,7 +170,17 @@ def gate_drafts(root: Path, config: KbConfig, config_at_base: KbConfig | None, h
     at_base = run_gates(GateContext(root, config_at_base or config, before), BASE_GATES)
     drafted = drafted_paths(head, before)
     ids = {rid for rid, path in head.id_paths if path in drafted}
-    mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")]
+    # a triage entry written in this range (its issue is new since base) must name a record quoting its segment and
+    # give a `none:` reason code; an entry committed before (a 0.3 triage file) stays a warning, as in `kb check`
+    known = {issue_key(i) for i in at_base}
+    issues = [
+        Issue(i.code, i.message, "error", i.path, i.record)
+        if i.code in TRIAGE_ERRORS and issue_key(i) not in known and (i.code == "triage.not_quoted" or i.path in drafted) else i
+        for i in issues
+    ]
+    # untriaged segments have their own section of the report
+    mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")
+            and i.code != "segment.untriaged"]
     # whoever wrote it, a decision or invariant drafted in this range must quote its document (C2)
     mine = [i for i in mine if i.code != "evidence.missing"] + [
         missing_evidence(rid, rec, "error", head.paths[rid])

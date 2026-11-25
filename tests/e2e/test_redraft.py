@@ -106,7 +106,7 @@ def test_changed_and_new_text_redrafted_and_drafted(tmp_path):
     write(repo, "kb/requirements/REQ-NF-001.yaml",
           REQ.format(statement="Pages load fast.", quote="Pages should load fast.", flags="flags: [vague]\n"))
     write(repo, "kb/sources/SRC-product/triage.yaml",
-          "segments:\n  seg-01: [REQ-NF-001]\n  seg-02: 'none: no requirement'\n")
+          "segments:\n  seg-01: [REQ-NF-001]\n  seg-02: 'none: other: no requirement'\n")
     out = invoke(repo, "ingest", "--report", "--strict")
     assert out.exit_code == 0, out.output
     commit(repo, "drafts")

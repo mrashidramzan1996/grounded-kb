@@ -177,14 +177,14 @@ def test_new_segment_left_untriaged_flagged(kb):
     assert [(i.record, i.code, i.severity, i.path) for i in r.flagged] == [("SRC-n", "segment.untriaged", "warning", TRIAGE)]
     assert "SRC-n#seg-03" in r.flagged[0].message
     assert "## Flagged (1)" in render_redraft_report(r)
-    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: covered by REQ-F-002'\n")
+    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: duplicate: covered by REQ-F-002'\n")
     assert redraft_report(kb, None).flagged == []
 
 
 def test_triage_of_old_segment_still_out_of_scope(kb):
     sync(kb, ADDED)
     redraft(kb, "--new")
-    put(kb, TRIAGE, "segments:\n  seg-01: 'none: dropped'\n  seg-02: [REQ-NF-001]\n  seg-03: 'none: a heading'\n")
+    put(kb, TRIAGE, "segments:\n  seg-01: 'none: other: dropped'\n  seg-02: [REQ-NF-001]\n  seg-03: 'none: heading'\n")
     r = redraft_report(kb, None)
     assert [(i.code, i.message) for i in r.rejected] == [
         ("redraft.out_of_scope", "SRC-n#seg-01: triage changed for a segment outside this redraft")
@@ -236,7 +236,7 @@ ANSWER = "Support answers within 24 hours."
 def settled_support(kb) -> None:
     """seg-03 is triaged "none" and cited by no record, committed."""
     sync(kb, SUPPORT)
-    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: no requirement'\n")
+    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: other: no requirement'\n")
     commit(kb)
 
 
@@ -252,7 +252,7 @@ def test_changed_uncited_segment_offered_for_new_records(kb):
     put(kb, TRIAGE, TRIAGED + "  seg-03: [REQ-NF-002]\n")  # a "none" entry may change: the text did
     r = redraft_report(kb, None)
     assert (r.rejected, r.drafted, r.flagged) == ([], ["REQ-NF-002"], [])
-    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: still no requirement'\n")
+    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: other: still no requirement'\n")
     (kb / "kb/requirements/REQ-NF-002.yaml").unlink()
     r = redraft_report(kb, None)
     assert (r.rejected, r.drafted, r.flagged) == ([], [], [])  # it has an entry, so no untriaged warning
@@ -300,7 +300,7 @@ def test_widened_changed_cited_segment_cannot_free_triage(kb):
     redraft(kb, "--new")
     offered, brief = (kb / REDRAFT_NEW).read_text(), (kb / REDRAFT_BRIEF).read_text()
     put(kb, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", REFUND, seg="seg-03"))
-    put(kb, TRIAGE, "segments:\n  seg-01: 'none: gone'\n  seg-02: [REQ-NF-001]\n  seg-03: [REQ-F-002]\n")
+    put(kb, TRIAGE, "segments:\n  seg-01: 'none: other: gone'\n  seg-02: [REQ-NF-001]\n  seg-03: [REQ-F-002]\n")
     # the agent widens the cache files to cover seg-01
     (kb / REDRAFT_NEW).write_text("SRC-n#seg-01\nSRC-n#seg-03\n")
     (kb / REDRAFT_BRIEF).write_text(brief.replace("## Finish", "### SRC-n#seg-01 · page 1\n\n## Finish"))

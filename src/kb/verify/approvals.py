@@ -1,5 +1,6 @@
 """The missing_owner_approval rule: who must approve a PR, and whether they did."""
 
+import re
 from collections.abc import Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -26,6 +27,8 @@ _READ_NOW = object()  # required_owners default: read CODEOWNERS from the workin
 NO_DECISION_APPROVERS = "(no decision approvers)"
 _INTENT_DIRS = ("kb/requirements/", "kb/features/", "kb/glossary/")
 _DECISION_DIRS = ("kb/decisions/", "kb/invariants/", "kb/components/")
+# a source's triage says which segments hold no product intent: the intent approvers sign off on it
+_TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
 
 
 def codeowners_rules(root: Path) -> CodeownersRules | None:
@@ -95,6 +98,15 @@ def _changed_records(repo: KbRepo, base_repo: KbRepo | None) -> dict[str, str]:
     return out
 
 
+def _changed_triage(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None) -> dict[str, str]:
+    """{source id: path} of triage files new, changed or deleted relative to the base (by bytes, so one that no
+    longer parses counts), plus those in `changes`."""
+    base_raw = base_repo.raw if base_repo else {}
+    paths = {p for p in set(repo.raw) | set(base_raw) if _TRIAGE.fullmatch(p) and repo.raw.get(p) != base_raw.get(p)}
+    paths |= {p for p in (changes.files if changes else ()) if _TRIAGE.fullmatch(p)}
+    return {m.group(1): p for p in sorted(paths) if (m := _TRIAGE.fullmatch(p))}
+
+
 def _handles(entries: Sequence[str], config: KbConfig) -> list[str]:
     return [h for e in entries if (h := resolve_owner(e, config))]
 
@@ -158,6 +170,9 @@ def required_owners(
         elif path.startswith("kb/invariants/"):
             for h in decisions:
                 need(h, f"invariant {rid} changed")
+    for src in _changed_triage(repo, base_repo, changes):
+        for h in intent:
+            need(h, f"triage of {src} changed")
     # a changed record file that does not parse is in no record map: route it by its path, so it cannot dodge approval
     parsed = set(_changed_records(repo, base_repo).values())
     for path in sorted(changes.files if changes and base_repo is not None else ()):
@@ -177,7 +192,7 @@ def required_owners(
     return {h: _ordered(rs) for h, rs in sorted(reasons.items())}
 
 
-_GROUP_RECORDS = {"intent": "requirements, features and glossary terms", "decisions": "decisions, invariants and components"}
+_GROUP_RECORDS = {"intent": "requirements, features, glossary terms and triage", "decisions": "decisions, invariants and components"}
 
 
 def no_approver_warnings(
@@ -191,7 +206,7 @@ def no_approver_warnings(
     if changes and base_repo is not None:  # record files that do not parse, routed by path
         paths |= {p for p in changes.files if p.startswith((*_INTENT_DIRS, *_DECISION_DIRS))}
     changed = {
-        "intent": any(p.startswith(_INTENT_DIRS) for p in paths)
+        "intent": any(p.startswith(_INTENT_DIRS) for p in paths) or bool(_changed_triage(repo, base_repo, changes))
         or any(v.kind == "requirement" and v.status == "stale" for v in verdicts),
         "decisions": any(p.startswith(_DECISION_DIRS) for p in paths),
     }
