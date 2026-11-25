@@ -75,7 +75,7 @@ def _iso(value) -> str:
 class SentenceRef(BaseModel):
     """A sentence a decision settles, by its key and its text: the reviewer of kb/eval/decisions.yaml reads the text."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)  # a plain str: never bytes (!!binary) made text
 
     key: str = Field(pattern=rf"^{_KEY.pattern}$")
     text: str
@@ -180,8 +180,13 @@ def read_summary(root: Path) -> Summary | None:
     return parse_summary(data)
 
 
+NOT_CANONICAL = f"{DECISIONS} is not in kb's canonical form; record decisions with `kb eval decide`"
+
+
 def _entries(data: bytes) -> list[Decision | str]:
-    """Each entry of the file, as a Decision or why it does not parse. EvalError when the file itself is unusable."""
+    """Each entry of the file, as a Decision or why it does not parse. EvalError when the file itself is unusable,
+    or is not in kb's canonical form: exactly what dump_yaml writes for the parsed decisions (every field, in its
+    order, plain scalars), so the text a reviewer reads is the text kb checks."""
     doc = _load(data, DECISIONS)
     if not isinstance(doc, dict) or list(doc) != ["decisions"] or not isinstance(doc["decisions"], list):
         raise EvalError(f"{DECISIONS} must be a mapping with one key, `decisions`, holding a list")
@@ -191,6 +196,13 @@ def _entries(data: bytes) -> list[Decision | str]:
             out.append(Decision.model_validate(entry))
         except ValidationError as e:
             out.append(_errors(e))
+    rendered = [e.model_dump() if isinstance(e, Decision) else raw for e, raw in zip(out, doc["decisions"])]
+    try:
+        canonical = dump_yaml({"decisions": rendered}).encode("utf-8") == data
+    except Exception:  # noqa: BLE001 - a value kb's writer cannot write is not canonical either
+        canonical = False
+    if not canonical:
+        raise EvalError(NOT_CANONICAL)
     return out
 
 
@@ -307,18 +319,45 @@ def _added_problem(repo: KbRepo, d: Decision, index: dict[str, list[Sentence]], 
     return "the term it names holds no quoted relation of that type"
 
 
-def _evaluated_records(root: Path | None, repo: KbRepo) -> tuple[Summary | None, set[str] | None]:
-    """(the summary `repo` holds, the record ids at its evaluated commit), each None when it cannot be read."""
+def _summary_of(repo: KbRepo) -> Summary | None:
     data = repo.raw.get(SUMMARY)
-    if data is None or root is None:
-        return None, None
     try:
-        summary = parse_summary(data)
-        if rev_parse(Path(root), summary.commit) != summary.commit:
-            return summary, None
-        return summary, set(KbRepo.at_ref(Path(root), summary.commit).records)
-    except (EvalError, GitError):
-        return None, None
+        return parse_summary(data) if data is not None else None
+    except EvalError:
+        return None
+
+
+class _Evaluated:
+    """The record ids at the summary's evaluated commit, read from git at most once, and only when asked."""
+
+    def __init__(self, root: Path | None, summary: Summary | None):
+        self.root, self.summary, self._ids, self._read = root, summary, None, False
+
+    def ids(self) -> set[str] | None:
+        if not self._read:
+            self._read = True
+            if self.root is not None and self.summary is not None:
+                try:
+                    if rev_parse(Path(self.root), self.summary.commit) == self.summary.commit:
+                        self._ids = set(KbRepo.at_ref(Path(self.root), self.summary.commit).records)
+                except GitError:
+                    self._ids = None
+        return self._ids
+
+
+def _sentences_problem(repo: KbRepo, d: Decision, index: dict[str, list[Sentence]],
+                       f: SummaryFinding | None) -> str | None:
+    """Why an S or B entry's sentences do not show what it settles: none listed; a text that is not, character for
+    character, the document's sentence of that key; for a finding of the current summary, not exactly the sentences
+    kb finds for it."""
+    if not d.sentences:
+        return "it lists no sentence, so it settles nothing"
+    if any(not any(s.text == x.text for s in index[x.key]) for x in d.sentences):
+        return "a sentence's text is not the document's, character for character"
+    if f is not None and [(x.key, x.text) for x in d.sentences] != [(sentence_key(s), s.text)
+                                                                    for s in finding_sentences(repo, f)]:
+        return "its sentences are not exactly its finding's"
+    return None
 
 
 def check_decisions(repo: KbRepo, entries: list[Decision | str],
@@ -330,8 +369,9 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
     must name a record new since its evaluated commit."""
     live = live_ids(repo)
     index = _sentence_index(repo)
-    summary, before = _evaluated_records(root, repo)
-    current = {(f.id, f.canonical) for f in summary.open_findings} if summary else set()
+    summary = _summary_of(repo) if root is not None else None
+    current = {(f.id, f.canonical): f for f in summary.open_findings} if summary else {}
+    evaluated = _Evaluated(root, summary)
     out: list[Decision] = []
     issues: list[Issue] = []
     seen: set[str] = set()
@@ -346,10 +386,15 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
             if why is None and any(text_key(x.text) != x.key for x in d.sentences):
                 why = "a sentence's key is not the key of its text"
             stale = why is None and any(x.key not in index for x in d.sentences)
+            f = current.get((d.finding, d.canonical))
+            if why is None and not stale and canonical_kind(d.canonical) == "omission":
+                why = _sentences_problem(repo, d, index, f)
+            if why is None and d.decision == "fixed" and d.record not in canonical_records(d.canonical):
+                why = "the record it names is not one its finding is about"
             if why is None and not stale and d.decision == "added":
                 why = _added_problem(repo, d, index, live)
-                if (why is None and canonical_kind(d.canonical) == "omission" and (d.finding, d.canonical) in current
-                        and before is not None and d.record in before):
+                if (why is None and canonical_kind(d.canonical) == "omission" and f is not None
+                        and (before := evaluated.ids()) is not None and d.record in before):
                     why = "the record it names existed when the evaluation ran"
             if why is not None:
                 why = f"{_shown_id(d.finding)}: {why}"
@@ -413,7 +458,12 @@ def finding_kind(f: SummaryFinding) -> str:
 def finding_records(f: SummaryFinding) -> list[str]:
     """The kb records an unfaithful or granularity finding is about (R:, T:, L: and M: canonical ids), each a valid
     record id; [] for any other finding."""
-    prefix, _, rest = f.canonical.partition(":")
+    return canonical_records(f.canonical)
+
+
+def canonical_records(canonical: str) -> list[str]:
+    """finding_records, from a canonical id."""
+    prefix, _, rest = canonical.partition(":")
     if prefix in ("R", "T"):
         ids = [rest]
     elif prefix == "L":
@@ -739,6 +789,8 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
     else:
         sha = None
     settles = [SentenceRef(key=sentence_key(x), text=x.text) for x in finding_sentences(repo, f)]
+    if kind == "omission" and not settles:
+        raise EvalError("this finding's text is no longer a sentence of the documents: run the evaluation again (`kb todo`)")
     entry = Decision(finding=fid, canonical=canonical, sentences=settles,
                      decision=decision, record=rid, record_sha256=sha, reason=why, by=by, date=day)  # type: ignore[arg-type]
     if summary is not None:

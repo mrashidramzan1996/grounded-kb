@@ -469,8 +469,8 @@ def evaluated(root: Path, message: str = "evaluated") -> None:
     today = datetime.date.today().isoformat()
     write_summary(root, summary(head(root), fingerprint(repo), "0" * 32, coverage_stats(repo), agr, [], today))
     put(root, DECISIONS, dump_yaml({"decisions": [{
-        "finding": "categories", "canonical": "categories", "decision": "not_a_rule",
-        "record": None, "reason": "None apply.", "by": "@alice", "date": today,
+        "finding": "categories", "canonical": "categories", "sentences": [], "decision": "not_a_rule",
+        "record": None, "record_sha256": None, "reason": "None apply.", "by": "@alice", "date": today,
     }]}))
     commit(root, message)
 

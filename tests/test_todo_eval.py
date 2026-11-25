@@ -1,5 +1,7 @@
 """`kb todo` and the extraction evaluation: the eval do items in order, then one blocking ask per open finding."""
 
+import base64
+import copy
 import datetime
 import hashlib
 import json
@@ -294,7 +296,7 @@ def test_inconsistent_decisions_are_dropped(tmp_path):
         base | {"finding": "F-ffffffffff", "decision": "not_a_rule",
                 "sentences": [{"key": key, "text": "Invoices are due whenever."}]},  # nor the S finding's sentence
     ]
-    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": entries}))
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [canonical(e) for e in entries]}))
     commit(root, "hand-written")
     out = invoke(root, "check").output
     assert out.count("error eval.decisions_invalid") == len(entries)
@@ -353,9 +355,20 @@ def test_fixed_needs_a_finding_about_records(tmp_path):
 
 # --- fix round 2: the re-review's probes ---------------------------------------------------------------------------
 
+FIELDS = ("finding", "canonical", "sentences", "decision", "record", "record_sha256", "reason", "by", "date")
+
+
+def canonical(entry: dict) -> dict:
+    """An entry as `kb eval decide` writes it: every field, in its order (other keys after them)."""
+    full = copy.deepcopy({"sentences": [], "record": None, "record_sha256": None, "reason": "None.", "by": "@alice",
+                          "date": "2026-11-26"} | entry)  # shared lists would be written as YAML anchors
+    return {k: full[k] for k in FIELDS if k in full} | {k: v for k, v in full.items() if k not in FIELDS}
+
+
 def hand_written(root: Path, *entries: dict) -> None:
-    base = {"record": None, "record_sha256": None, "reason": "None.", "by": "@alice", "date": "2026-11-26"}
-    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [base | e for e in entries]}))
+    """A decisions file written by hand, in kb's canonical form: consistent entries stand, as if `kb eval decide`
+    wrote them."""
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [canonical(e) for e in entries]}))
     commit(root, "hand-written")
 
 
@@ -427,3 +440,104 @@ def test_handwritten_added_must_quote_its_sentence(tmp_path):
                         "record_sha256": sha, "reason": None, "sentences": [{"key": key, "text": INVOICES}]})
     out = invoke(root, "check").output
     assert "eval.decisions_invalid" in out and "Invoices must be paid" in out  # REQ-F-001 quotes another sentence
+
+
+# --- fix round 3: the second re-review's probes --------------------------------------------------------------------
+
+def _invalid_or_open(root: Path, fid: str) -> bool:
+    return f"finding:{fid}" in ask_ids(todo_json(root)) and "eval.decisions_invalid" in invoke(root, "check").output
+
+
+def test_b_entry_must_list_exactly_its_findings_sentences(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (b_finding("F-2222222222", f"{INVOICES} {LISTED}"),))
+    hand_written(root, {"finding": "F-2222222222", "canonical": "B:B-REQ-F-001", "decision": "not_a_rule",
+                        "sentences": [{"key": key_of(root, LISTED), "text": LISTED}]})  # only one of its two
+    assert _invalid_or_open(root, "F-2222222222")
+
+
+def test_b_entry_with_no_sentences_never_closes(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (b_finding("F-2222222222", INVOICES),))
+    hand_written(root, {"finding": "F-2222222222", "canonical": "B:B-REQ-F-001", "decision": "product_decision",
+                        "sentences": []})
+    assert _invalid_or_open(root, "F-2222222222")
+
+
+def _raw_entry(root: Path, text_yaml: str) -> None:
+    k = key_of(root, INVOICES)
+    put(root, "kb/eval/decisions.yaml",
+        f"decisions:\n- finding: F-0123456789\n  canonical: S:{k}\n  sentences:\n  - key: {k}\n    text: {text_yaml}\n"
+        "  decision: not_a_rule\n  record: null\n  record_sha256: null\n  reason: None.\n  by: '@alice'\n"
+        "  date: '2026-11-26'\n")
+    commit(root, "raw")
+
+
+def test_binary_sentence_text_is_not_canonical(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    _raw_entry(root, "!!binary " + base64.b64encode(INVOICES.encode()).decode())
+    assert _invalid_or_open(root, "F-0123456789")
+    assert "not in kb's canonical form" in invoke(root, "check").output
+
+
+def test_escaped_sentence_text_is_not_canonical(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    _raw_entry(root, '"' + "".join(f"\\x{ord(c):02x}" for c in INVOICES) + '"')
+    assert _invalid_or_open(root, "F-0123456789")
+    assert "not in kb's canonical form" in invoke(root, "check").output
+
+
+def test_sentence_text_must_be_the_documents_exactly(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    fullwidth = "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else "\u3000" for c in INVOICES)  # the same key
+    hand_written(root, {"finding": "F-0123456789", "canonical": f"S:{key_of(root, INVOICES)}", "decision": "not_a_rule",
+                        "sentences": [{"key": key_of(root, INVOICES), "text": fullwidth}]})
+    assert _invalid_or_open(root, "F-0123456789")
+
+
+def test_fixed_entry_must_name_a_record_of_its_finding(tmp_path):
+    root = drafted(tmp_path)
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    commit(root, "two")
+    evaluate(root, (unfaithful("F-1111111111"),))
+    p = root / "kb/requirements/REQ-F-002.yaml"
+    p.write_text(p.read_text().replace("statement:", "statement: NOT", 1))  # an unrelated record edited...
+    hand_written(root, {"finding": "F-1111111111", "canonical": "R:REQ-F-001", "decision": "fixed",  # ...and pinned
+                        "record": "REQ-F-002", "record_sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
+                        "reason": None})
+    # the entry is dropped: it pins nothing, so REQ-F-002's edit makes the evaluation stale
+    assert do_ids(todo_json(root)) == ["fix:eval.decisions_invalid:kb/eval/decisions.yaml"]
+    assert "eval.decisions_invalid" in invoke(root, "check").output
+    assert "stale" in ok(root, "eval", "status").stdout
+
+
+def test_decide_writes_the_canonical_form(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root), b_finding("F-2222222222", f"{INVOICES} {LISTED}")))
+    ok(root, "eval", "decide", "F-0123456789", "--as", "not_a_rule", "--reason", "A contract term.", "--by", "@alice")
+    ok(root, "eval", "decide", "F-2222222222", "--as", "product_decision", "--reason", "Ask sales.", "--by", "@alice")
+    text = (root / "kb/eval/decisions.yaml").read_text()
+    assert dump_yaml(load_yaml_strict(text)) == text
+    assert "eval.decisions_invalid" not in invoke(root, "check").output
+    commit(root, "decided")
+    asks = ask_ids(todo_json(root))
+    assert "finding:F-0123456789" not in asks and "finding:F-2222222222" not in asks
+
+
+def test_yaml_anchors_are_not_canonical(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    k = key_of(root, INVOICES)
+    shared = [{"key": k, "text": INVOICES}]
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [  # one list twice: written as an anchor and alias
+        {"finding": "F-0123456789", "canonical": f"S:{k}", "sentences": shared, "decision": "not_a_rule", "record": None,
+         "record_sha256": None, "reason": "A.", "by": "@alice", "date": "2026-11-26"},
+        {"finding": "F-9999999999", "canonical": f"S:{k}", "sentences": shared, "decision": "not_a_rule", "record": None,
+         "record_sha256": None, "reason": "B.", "by": "@alice", "date": "2026-11-26"}]}))
+    commit(root, "anchors")
+    assert "&id001" in (root / "kb/eval/decisions.yaml").read_text()
+    assert _invalid_or_open(root, "F-0123456789")
