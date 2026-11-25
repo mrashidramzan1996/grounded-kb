@@ -3,6 +3,7 @@
 import dataclasses
 import datetime
 import json
+import re
 
 from helpers import invoke, stored_repo
 from judge_fixture import FILES, SPEC, ingested_with_run_b, valid
@@ -10,7 +11,7 @@ from judge_fixture import FILES, SPEC, ingested_with_run_b, valid
 from kb.eval.align import Alignment, Item
 from kb.eval.extract import EVAL_BASE
 from kb.eval.findings import Finding, build_findings, fingerprint
-from kb.eval.judge import JUDGE_ITEMS, VERDICTS, judge_state
+from kb.eval.judge import JUDGE_ITEMS, VERDICTS, judge_state, public_id
 from kb.records.repo import KbRepo
 from kb.yamlio import dump_yaml, load_yaml_strict
 
@@ -57,7 +58,9 @@ def test_findings_ranked():
     b2 = Item("B-REQ-F-002", "requirement", "y", (("SRC-a", 100, 110),))
     al = dataclasses.replace(EMPTY, only_b=[b1, b2], splits=[("REQ-F-001", ["B-REQ-F-007", "B-REQ-F-008"])])
     findings = build_findings(items, verdicts, al)
-    assert [(f.id, f.kind, f.severity, f.supporters) for f in findings] == [
+    # shown by opaque public id; ranked (and ties broken) by the canonical id
+    assert all(re.fullmatch(r"F-[0-9a-f]{10}", f.id) and f.id == public_id(f.canonical) for f in findings)
+    assert [(f.canonical, f.kind, f.severity, f.supporters) for f in findings] == [
         ("S:cccccccccccc", "omission", "high", 2),  # high first
         # run B also extracted it: the coverage gate, run B and the judge (B:B-REQ-F-001 is the same gap, asked once)
         ("S:bbbbbbbbbbbb", "omission", "medium", 3),
@@ -70,8 +73,20 @@ def test_findings_ranked():
     assert (f.ref, f.text, f.kind_hint) == ("SRC-a#seg-01", "text of S:cccccccccccc", "requirement")
     # judged not a rule as a sentence, but missing as run B drafted it: that B item stands, with every supporter
     flipped = [gap("S:bbbbbbbbbbbb", verdict="not_a_rule", severity=None) if v["id"] == "S:bbbbbbbbbbbb" else v for v in verdicts]
-    got = {x.id: x for x in build_findings(items, flipped, al)}
+    got = {x.canonical: x for x in build_findings(items, flipped, al)}
     assert "S:bbbbbbbbbbbb" not in got and got["B:B-REQ-F-001"].supporters == 3
+    # unknown as a sentence, missing (high) as run B drafted it: not folded, the judge's B verdict stands
+    flipped = [gap("S:bbbbbbbbbbbb", verdict="unknown", severity=None) if v["id"] == "S:bbbbbbbbbbbb"
+               else gap("B:B-REQ-F-001", severity="high") if v["id"] == "B:B-REQ-F-001" else v for v in verdicts]
+    got = {x.canonical: x for x in build_findings(items, flipped, al)}
+    assert got["B:B-REQ-F-001"].severity == "high" and got["S:bbbbbbbbbbbb"].severity == "medium"
+    # both missing, the sentence low and run B's high: folded into the sentence's finding, which becomes high
+    flipped = [gap("S:bbbbbbbbbbbb", severity="low") | {"kind_hint": None} if v["id"] == "S:bbbbbbbbbbbb"
+               else gap("B:B-REQ-F-001", severity="high", kind_hint="exclusion") if v["id"] == "B:B-REQ-F-001" else v
+               for v in verdicts]
+    got = {x.canonical: x for x in build_findings(items, flipped, al)}
+    assert "B:B-REQ-F-001" not in got
+    assert (got["S:bbbbbbbbbbbb"].severity, got["S:bbbbbbbbbbbb"].kind_hint) == ("high", "exclusion")
     # a split, merge or unknown granularity verdict
     for verdict, kind in (("ok", None), ("should_merge", "merge"), ("unknown", "unknown")):
         got = build_findings(items[6:7], [verdicts[6] | {"verdict": verdict}], al)
@@ -91,11 +106,11 @@ def test_unfaithful_from_any_no():
         {"id": "T:TERM-b", "span": "text of T:TERM-b", "definition_matches_quote": "yes", "kind_correct": "yes"},
     ]
     findings = build_findings(items, verdicts, EMPTY)
-    assert [(f.id, f.kind, f.supporters) for f in findings] == [
+    assert [(f.canonical, f.kind, f.supporters) for f in findings] == [
         ("L:TERM-a:owns:TERM-b", "unfaithful", 1), ("R:REQ-F-002", "unfaithful", 1), ("T:TERM-a", "unfaithful", 1)]
-    r2 = next(f for f in findings if f.id == "R:REQ-F-002")
+    r2 = next(f for f in findings if f.canonical == "R:REQ-F-002")
     assert "same_modality" in r2.note and "should, not must" in r2.note and r2.severity == "high"
-    assert "kind_correct" in next(f for f in findings if f.id == "T:TERM-a").note
+    assert "kind_correct" in next(f for f in findings if f.canonical == "T:TERM-a").note
 
 
 def test_fingerprint_follows_records_and_segments_not_eval_files():
@@ -134,7 +149,7 @@ def test_report_write_produces_summary(tmp_path):
     (root / VERDICTS).write_text(dump_yaml({"verdicts": [v for k, v in good.items() if k != "T:TERM-invoice"]}))
     # a verdict is missing: the report says so, exits 1 and writes nothing
     r = invoke(root, "eval", "report", "--write")
-    assert r.exit_code == 1 and "`T:TERM-invoice`: no verdict" in r.stdout
+    assert r.exit_code == 1 and f"`{public_id('T:TERM-invoice')}`: no verdict" in r.stdout
     assert not (root / "kb/eval/summary.yaml").exists() and "not written" in r.stderr
     (root / VERDICTS).write_text(dump_yaml({"verdicts": list(good.values())}))
     r = invoke(root, "eval", "report")
@@ -161,9 +176,13 @@ def test_report_write_produces_summary(tmp_path):
     assert summary["coverage"]["normative"] == 3 and set(summary["agreement"]) >= {"matched", "span_f1", "estimated_total"}
     assert summary["open_findings"] == expected
     # the unfaithful record (high) first; then the entity found by run B and kb's detector, and the rest by id
-    assert [(f["id"], f["kind"], f["supporters"]) for f in expected] == [
+    assert [(f["canonical"], f["kind"], f["supporters"]) for f in expected] == [
         ("R:REQ-F-001", "unfaithful", 1), ("E:billing admin", "omission", 3), ("E:seat", "omission", 2),
-        ("N:account:uses:seat", "omission", 2)]
+        ("N:B-TERM-account:uses:B-TERM-seat", "omission", 2)]
+    assert all(f["id"] == public_id(f["canonical"]) for f in summary["open_findings"])
+    assert list(summary["open_findings"][0])[:2] == ["id", "canonical"]
+    # the report names findings by public id only
+    assert "R:REQ-F-001" not in out and f"`{public_id('R:REQ-F-001')}`" in out
     assert Finding(**{**expected[0], "related": tuple(expected[0]["related"])}) in build_findings(state.items, verdicts, state.alignment)
     datetime.date.fromisoformat(summary["judged_at"])
     # the summary is a known kb file, and writing it does not change the fingerprint

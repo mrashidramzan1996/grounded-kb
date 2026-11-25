@@ -6,11 +6,11 @@ Markdown. A finding only proposes: a person resolves it (Task 9's `kb eval decid
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from kb.eval.align import Alignment, render_agreement
-from kb.eval.judge import YES_NO
+from kb.eval.judge import YES_NO, public_id
 from kb.ingest.report import issue_lines, section
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
@@ -26,7 +26,8 @@ _RANK = {"high": 0, "medium": 1, "low": 2}
 
 @dataclass(frozen=True)
 class Finding:
-    id: str  # the item's id
+    id: str  # the item's public id (F-…): what a person and every later command name it by
+    canonical: str  # the item's canonical id (R:, S:, B:, …), internal
     kind: str  # omission, unfaithful, split, merge, unknown
     ref: str
     text: str
@@ -47,7 +48,8 @@ def _finding(item: dict, v: dict, b_spans: list[list], s_spans: list[list], b_na
     related = tuple(v.get("related", ()))
 
     def make(fkind: str, severity: str, supporters: int, kind_hint: str | None = None, text_note: str = note) -> Finding:
-        return Finding(item["id"], fkind, item["ref"], item["text"], severity, supporters, related, text_note, kind_hint)
+        return Finding(public_id(item["id"]), item["id"], fkind, item["ref"], item["text"], severity, supporters, related,
+                       text_note, kind_hint)
 
     if kind in YES_NO:
         noes = [q for q in YES_NO[kind] if v.get(q) == "no"]
@@ -73,29 +75,39 @@ def _finding(item: dict, v: dict, b_spans: list[list], s_spans: list[list], b_na
 
 
 def build_findings(items: list[dict], verdicts: list[dict], alignment: Alignment) -> list[Finding]:
-    """The findings of the validated `verdicts`, ranked: high severity first, then more supporters, then id.
+    """The findings of the validated `verdicts` (by canonical id), ranked: high severity first, then more supporters,
+    then canonical id. Each is named by its item's public id.
 
     An S or B item judged missing or unknown is an omission; an S item that run B also extracted (or a B item the
-    coverage gate also flagged) has every supporter, and a B omission on the sentence of an S omission is left out
-    (the same gap). An R, T or L item with any "no" is unfaithful. A split_merge item
-    not judged ok is a split, merge or unknown. An E or N item judged missing or unknown is an omission with
-    kind_hint entity or relation."""
+    coverage gate also flagged) has every supporter. A B omission on the sentence of an S item judged missing is the
+    same gap: it is folded into the S finding, which keeps the higher of the two severities (and B's kind_hint when
+    it has none). Judged unknown as a sentence, the B omission stands on its own. An R, T or L item with any "no" is
+    unfaithful. A split_merge item not judged ok is a split, merge or unknown. An E or N item judged missing or
+    unknown is an omission with kind_hint entity or relation."""
     by_id = {v["id"]: v for v in verdicts}
     b_spans = [[list(s) for s in b.spans] for b in alignment.only_b]
     s_spans = [i["spans"] for i in items if i["kind"] == "uncovered"]
     b_names = {n for e in alignment.only_b_entities for n in e.names}
-    out = [f for i in items if i["id"] in by_id and (f := _finding(i, by_id[i["id"]], b_spans, s_spans, b_names))]
-    # a B omission on a sentence that is an S omission already is the same gap: the S finding counts run B, and a
-    # person is asked once
-    s_found = [i["spans"] for i in items if i["kind"] == "uncovered" and any(f.id == i["id"] for f in out)]
-    spans = {i["id"]: i["spans"] for i in items}
-    out = [f for f in out if not (f.id.startswith("B:") and f.kind == "omission" and any(_overlap(spans[f.id], s) for s in s_found))]
-    return sorted(out, key=lambda f: (_RANK[f.severity], -f.supporters, f.id))
+    found = {f.canonical: f for i in items if i["id"] in by_id and (f := _finding(i, by_id[i["id"]], b_spans, s_spans, b_names))}
+    # a person is asked once about one gap: a B omission folds into the first S item judged missing it overlaps
+    missing_s = [i for i in items if i["kind"] == "uncovered" and i["id"] in found and by_id[i["id"]].get("verdict") == "missing"]
+    for item in items:
+        b = found.get(item["id"])
+        if item["kind"] != "only_b" or b is None:
+            continue
+        s_item = next((s for s in missing_s if _overlap(item["spans"], s["spans"])), None)
+        if s_item is not None:
+            s = found[s_item["id"]]
+            found[s.canonical] = replace(s, severity=min(s.severity, b.severity, key=_RANK.__getitem__),
+                                         kind_hint=s.kind_hint or b.kind_hint)
+            del found[b.canonical]
+    return sorted(found.values(), key=lambda f: (_RANK[f.severity], -f.supporters, f.canonical))
 
 
 def fingerprint(repo: KbRepo) -> str:
     """What was evaluated: sha256 over the live records (id and raw bytes, by id) and every stored source's segment
     hashes, first 16 hex characters. kb/eval/ holds no record, so the summary and decisions never change it."""
+    # triage is left out on purpose: which S items exist depends only on quotes (records) and decisions, not on triage
     h = hashlib.sha256()
     for rid in sorted(live_ids(repo)):
         data = repo.raw.get(repo.paths[rid], b"")

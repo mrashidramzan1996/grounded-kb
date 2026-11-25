@@ -22,6 +22,8 @@ def load_yaml_strict(text: str) -> Any:
         raise YamlError(f"duplicate key: {e}") from e
     except YAMLError as e:
         raise YamlError(str(e)) from e
+    except RecursionError as e:  # nesting deep enough to exhaust the parser's recursion: untrusted input, not a crash
+        raise YamlError("nested too deeply") from e
 
 
 def dump_yaml(data: Any) -> str:

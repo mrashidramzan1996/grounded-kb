@@ -6,6 +6,7 @@ checked against the item it answers (its span word for word in the item's text, 
 IDs it names live). The brief shows no verdict and never says which extraction an item came from.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass
 from importlib.resources import files
@@ -69,27 +70,46 @@ _FIELDS = {kind: ("id", "span", "note", *YES_NO.get(kind, ()),
 
 # --- items -------------------------------------------------------------------------------------------------------
 
+def public_id(canonical: str) -> str:
+    """The opaque, stable id an item and its finding are shown by: "F-" and 10 hex digits of the canonical id's sha256.
+    Canonical ids (R:, S:, B:, M:, T:, L:, E:, N:) stay internal: they would tell the judge where an item came from."""
+    return "F-" + hashlib.sha256(canonical.encode()).hexdigest()[:10]
+
+
+def _segment_at(repo: KbRepo, src: str, offset: int):
+    return next((s for s in repo.segments(src) if s.start <= offset < s.end), None)
+
+
 def _seg_ref(repo: KbRepo, src: str, offset: int) -> str:
     """The "SRC-x#seg-NN" ref of the segment holding `offset` of the source's text.md."""
-    return next((f"{src}#{s.id}" for s in repo.segments(src) if s.start <= offset < s.end), src)
+    seg = _segment_at(repo, src, offset)
+    return f"{src}#{seg.id}" if seg else src
 
 
-def _passage(repo: KbRepo, spans: list[list]) -> str:
-    return "\n".join(repo.source_text(src)[a:b] for src, a, b in spans)
+def _headings(repo: KbRepo, spans: list[list]) -> str:
+    """`heading: …` of each segment the spans lie in, once each: the only context a passage is shown with."""
+    found = [seg.heading for src, a, _ in spans if (seg := _segment_at(repo, src, a)) is not None]
+    return "\n".join(f"heading: {h}" for h in dict.fromkeys(found))
 
 
-def _quoted(repo: KbRepo, ev: Evidence) -> tuple[list[list], str, str]:
-    """(spans, text, ref) of `ev`: the document text of its found quotes (gates.quotes.located_quotes), or, when none is
-    found, its quotes as written."""
+def _passages(repo: KbRepo, spans: list[list]) -> list[str]:
+    return [repo.source_text(src)[a:b] for src, a, b in spans]
+
+
+def _quoted(repo: KbRepo, ev: Evidence) -> tuple[list[list], list[str], str]:
+    """(spans, passages, ref) of `ev`: the document text of its found quotes (gates.quotes.located_quotes), or, when
+    none is found, its quotes as written."""
     located = sorted(located_quotes(repo, ev), key=lambda x: (x[1], x[2], x[3]))
     if located:
         spans = [[src, a, b] for _, src, a, b in located]
-        return spans, _passage(repo, spans), located[0][0].source
-    return [], "\n".join(q.text for q in ev.quotes), ev.quotes[0].source
+        return spans, _passages(repo, spans), located[0][0].source
+    return [], [q.text for q in ev.quotes], ev.quotes[0].source
 
 
-def _item(iid: str, kind: str, ref: str, text: str, context: str, spans: list[list], **extra) -> dict:
-    return {"id": iid, "kind": kind, "ref": ref, "text": text, "context": context, "spans": spans, **extra}
+def _item(iid: str, kind: str, ref: str, passages: list[str], context: str, spans: list[list], **extra) -> dict:
+    """An item. Its `text` is its passages joined by line breaks; a verdict's span must lie inside one passage."""
+    return {"id": iid, "public": public_id(iid), "kind": kind, "ref": ref, "text": "\n".join(passages),
+            "passages": passages, "context": context, "spans": spans, **extra}
 
 
 def _records(repo: KbRepo, live: set[str]) -> list[dict]:
@@ -98,94 +118,103 @@ def _records(repo: KbRepo, live: set[str]) -> list[dict]:
     for rid, rec in sorted(repo.records.items()):
         if rid not in live or not isinstance(rec, (Requirement, Exclusion)):
             continue
-        spans, text, ref = _quoted(repo, rec.evidence)
+        spans, passages, ref = _quoted(repo, rec.evidence)
         lines = [f"{'requirement' if isinstance(rec, Requirement) else 'exclusion (out of scope)'} {rid}", f"statement: {rec.statement}"]
         if isinstance(rec, Requirement):
             lines += [f"modality: {rec.modality or 'not set'}", f"actor: {rec.actor or 'not set'}"]
-        out.append(_item(f"R:{rid}", "faithful", ref, text, "\n".join(lines), spans))
+        out.append(_item(f"R:{rid}", "faithful", ref, passages, "\n".join(lines), spans))
     return out
 
 
 def _gaps(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str]) -> list[dict]:
-    """S: every uncovered rule-like sentence; B: every run B record no kb record matches (its quoted text and
-    statement, nothing more)."""
-    out = []
+    """S: every uncovered rule-like sentence (one item per sentence key: the same sentence twice is one question, as a
+    decision on it is); B: every run B record no kb record matches. Both are shown alike: the passage, its segment ref
+    and heading, nothing else (never run B's statement)."""
+    out: dict[str, dict] = {}
     for s in uncovered(repo, decided):
-        src, _, seg_id = s.ref.partition("#")
-        seg = next(x for x in repo.segments(src) if x.id == seg_id)
-        out.append(_item(f"S:{sentence_key(s)}", "uncovered", s.ref, s.text, repo.source_text(src)[seg.start:seg.end],
-                         [[src, s.start, s.end]]))
+        spans = [[s.ref.partition("#")[0], s.start, s.end]]
+        iid = f"S:{sentence_key(s)}"
+        if iid not in out:
+            out[iid] = _item(iid, "uncovered", s.ref, [s.text], _headings(repo, spans), spans)
     for b in alignment.only_b:
         if b.spans:  # run B items are validated: each has a found quote
             spans = [list(x) for x in b.spans]
-            out.append(_item(f"B:{b.id}", "only_b", _seg_ref(repo, spans[0][0], spans[0][1]), _passage(repo, spans),
-                             f"statement: {b.statement}", spans))
-    return out
+            _add(out, _item(f"B:{b.id}", "only_b", _seg_ref(repo, spans[0][0], spans[0][1]), _passages(repo, spans),
+                            _headings(repo, spans), spans))
+    return list(out.values())
 
 
 def _granularity(repo: KbRepo, alignment: Alignment) -> list[dict]:
-    """M: every split (M:<rid>) and merge (M:<rid>+<rid>…), shown as the kb records only."""
+    """M: every split (M:<rid>) and merge (M:<rid>+<rid>…), shown as the kb records only; two run B items merging the
+    same kb records are one question."""
     kb = {i.id: i for i in kb_items(repo) if i.kind != "entity"}
     groups = [([k], f"This record's passage may hold {len(bs)} separate rules. Should it be split into one record per rule?")
               for k, bs in alignment.splits]
     groups += [(ks, f"These {len(ks)} records may state one rule. Should they be merged into one record?")
                for ks, _ in alignment.merges]
-    out = []
+    out: dict[str, dict] = {}
     for ids, question in groups:
         recs = [kb[k] for k in ids if k in kb and kb[k].spans]
-        if len(recs) != len(ids):
+        iid = "M:" + "+".join(ids)
+        if len(recs) != len(ids) or iid in out:
             continue
-        spans = sorted({tuple(s) for r in recs for s in r.spans})
+        spans = [list(s) for s in sorted({tuple(s) for r in recs for s in r.spans})]
         lines = [line for r in recs for line in (f"{r.kind} {r.id}", f"statement: {r.statement}")]
-        out.append(_item("M:" + "+".join(ids), "split_merge", _seg_ref(repo, spans[0][0], spans[0][1]),
-                         _passage(repo, [list(s) for s in spans]), "\n".join([*lines, "", question]), [list(s) for s in spans]))
-    return out
+        out[iid] = _item(iid, "split_merge", _seg_ref(repo, spans[0][0], spans[0][1]), _passages(repo, spans),
+                         "\n".join([*lines, "", question]), spans)
+    return list(out.values())
 
 
 def _entities(repo: KbRepo, live: set[str]) -> list[dict]:
-    """T: every live term with evidence; L: every relation of a live term."""
+    """T: every live term with evidence; L: every relation of a live term (L:<term>:<type>:<target>:<n>, n its index
+    among the term's relations)."""
     out = []
     for tid, term in sorted(repo.records.items()):
         if tid not in live or not isinstance(term, Term):
             continue
         if term.evidence is not None:
-            spans, text, ref = _quoted(repo, term.evidence)
+            spans, passages, ref = _quoted(repo, term.evidence)
             context = (f"term {tid}\nname: {term.name}\naliases: {', '.join(term.aliases) or 'none'}\n"
                        f"kind: {term.kind or 'not set'}\ndefinition: {term.definition}")
-            out.append(_item(f"T:{tid}", "entity_faithful", ref, text, context, spans))
-        for r in term.relations:
-            spans, text, ref = _quoted(repo, Evidence(quotes=[r.quote]))
+            out.append(_item(f"T:{tid}", "entity_faithful", ref, passages, context, spans))
+        for n, r in enumerate(term.relations):
+            spans, passages, ref = _quoted(repo, Evidence(quotes=[r.quote]))
             target = repo.records.get(r.target)
             tname = target.name if isinstance(target, Term) else "not a term"
             context = f"source: {tid} ({term.name})\nrelation: {r.type}\ntarget: {r.target} ({tname})"
-            out.append(_item(f"L:{tid}:{r.type}:{r.target}", "relation_faithful", ref, text, context, spans))
+            out.append(_item(f"L:{tid}:{r.type}:{r.target}:{n}", "relation_faithful", ref, passages, context, spans))
     return out
 
 
 def _entity_gaps(repo: KbRepo, alignment: Alignment) -> list[dict]:
     """E: every run B entity no kb term matches, and every entity candidate kb detects, one item per key (a candidate
-    named by such an entity joins its item); N: every run B relation no kb relation matches."""
+    named by such an entity joins its item); N: every run B relation no kb relation matches, by its run B label. An
+    entity is shown alike whichever found it: its name and where it appears (never run B's definition or aliases)."""
     found: dict[str, dict] = {}
     for b in alignment.only_b_entities:
-        if b.names and b.spans and b.names[0] not in found:
+        if b.names and b.spans and b.names[0] not in found:  # two run B entities of one name: one question
             spans = [list(x) for x in b.spans]
-            context = f"name: {b.names[0]}\naliases: {', '.join(b.names[1:]) or 'none'}\ndefinition: {b.statement}"
             found[b.names[0]] = _item(f"E:{b.names[0]}", "entity_missing", _seg_ref(repo, spans[0][0], spans[0][1]),
-                                      _passage(repo, spans), context, spans, names=list(b.names), detected=False)
+                                      _passages(repo, spans), f"name: {b.names[0]}", spans, names=list(b.names), detected=False)
     for phrase, ref, s in entity_candidates(repo):
         owner = next((e for e in found.values() if phrase in e["names"]), None)
         if owner is not None:
             owner["detected"] = True
         else:
-            found[phrase] = _item(f"E:{phrase}", "entity_missing", ref, s.text, f"name: {phrase}",
+            found[phrase] = _item(f"E:{phrase}", "entity_missing", ref, [s.text], f"name: {phrase}",
                                   [[ref.partition("#")[0], s.start, s.end]], names=[phrase], detected=True)
     out = list(found.values())
     for (src, rtype, tgt), rq in zip(alignment.only_b_relations, alignment.only_b_relation_quotes, strict=True):
-        spans, text, ref = _quoted(repo, Evidence(quotes=[Quote(source=rq.ref, text=rq.quote)]))
-        out.append(_item(f"N:{src}:{rtype}:{tgt}", "relation_missing", ref, text,
-                         f"source: {src}\nrelation: {rtype}\ntarget: {tgt}", spans,
-                         ends=[list(rq.source_names), list(rq.target_names)]))
+        spans, passages, ref = _quoted(repo, Evidence(quotes=[Quote(source=rq.ref, text=rq.quote)]))
+        out.append(_item(f"N:{rq.label}", "relation_missing", ref, passages, f"source: {src}\nrelation: {rtype}\ntarget: {tgt}",
+                         spans, ends=[list(rq.source_names), list(rq.target_names)]))
     return out
+
+
+def _add(out: dict[str, dict], item: dict) -> None:
+    """Add `item`; two distinct items under one id (or one public id) are a bug, never collapsed silently."""
+    assert item["id"] not in out, f"two judge items share the id {item['id']}"
+    out[item["id"]] = item
 
 
 def _order(item: dict) -> tuple:
@@ -195,14 +224,16 @@ def _order(item: dict) -> tuple:
 
 
 def judge_items(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str]) -> list[dict]:
-    """The items the judge answers, each {id, kind, ref, text, context, spans} (entity gaps also carry `names` and
-    `detected`, relation gaps `ends`), sorted by question, document position and id; one item per id. `decided` holds
-    the sentence keys a person has decided, which are not asked again."""
+    """The items the judge answers, each {id (canonical), public, kind, ref, text, passages, context, spans} (entity
+    gaps also carry `names` and `detected`, relation gaps `ends`), sorted by question, document position and id. Ids
+    are unique (AssertionError otherwise). `decided` holds the sentence keys a person has decided, not asked again."""
     live = live_ids(repo)
     out: dict[str, dict] = {}
     for item in (*_records(repo, live), *_gaps(repo, alignment, decided), *_granularity(repo, alignment),
                  *_entities(repo, live), *_entity_gaps(repo, alignment)):
-        out.setdefault(item["id"], item)
+        _add(out, item)
+    publics = [i["public"] for i in out.values()]
+    assert len(set(publics)) == len(publics), "two judge items share a public id"
     return sorted(out.values(), key=_order)
 
 
@@ -267,6 +298,12 @@ _ANSWER = {
 }
 
 
+# the question each kind asks, as the brief names it; S and B items ask the same one
+_QUESTION = {"faithful": "Record", "uncovered": "Possible rule", "only_b": "Possible rule",
+             "split_merge": "Record granularity", "entity_faithful": "Entity", "relation_faithful": "Relation",
+             "entity_missing": "Possible entity", "relation_missing": "Possible relation"}
+
+
 def _flagged_segments(repo: KbRepo) -> set[str]:
     return {f"{src}#{seg}" for src, s in repo.sources.items() for seg in s.guard.injection_segments}
 
@@ -278,7 +315,7 @@ def _block(label: str, text: str) -> str:
 
 def _render_item(repo: KbRepo, item: dict, flagged: set[str]) -> str:
     refs = {item["ref"], *(_seg_ref(repo, src, a) for src, a, _ in item["spans"])}
-    lines = [f"### {inline_code(item['id'])} · {inline_code(item['ref'])}"]
+    lines = [f"### {inline_code(item['public'])} · {inline_code(item['ref'])}", "", f"Question: {_QUESTION[item['kind']]}"]
     if refs & flagged or has_injection(item["text"]) or has_injection(item["context"]):
         lines.append(INJECTION_FLAG)
     lines += ["", _block("Text", item["text"]), "", _block("Context", item["context"]), "", f"Answer: {_ANSWER[item['kind']]}."]
@@ -286,8 +323,9 @@ def _render_item(repo: KbRepo, item: dict, flagged: set[str]) -> str:
 
 
 def build_judge_brief(repo: KbRepo, items: list[dict]) -> str:
-    """The brief: the rules, the questions per item prefix, and every item with its text and context fenced (untrusted
-    text cannot close its fence) and instruction-like text flagged. Deterministic for the same items."""
+    """The brief: the rules, the questions, and every item by its public id with its question, its text and context
+    fenced (untrusted text cannot close its fence) and instruction-like text flagged. No canonical id and nothing that
+    tells which extraction an item came from. Deterministic for the same items."""
     flagged = _flagged_segments(repo)
     text = files("kb.eval").joinpath("templates", "judge.md").read_text(encoding="utf-8")
     return Template(text).substitute(
@@ -323,11 +361,13 @@ def _names_term(names: list[str]) -> Term:
 def _span(item: dict, span) -> str:
     if not isinstance(span, str) or not span.strip():
         raise _Bad("needs a `span` copied word for word from the item's text")
-    whole = fold(span)[0].strip() == fold(item["text"])[0].strip()
+    passages = item["passages"]
+    whole = any(fold(span)[0].strip() == fold(p)[0].strip() for p in passages)
     if too_short(span) and not whole:
         raise _Bad(f"its span is shorter than {MIN_QUOTE_CHARS} characters: {inline_code(span)}")
-    if find_quote(item["text"], span) is None:
-        raise _Bad(f"its span is not word for word in the item's text: {inline_code(span)}")
+    # inside one passage: a span across the line break that joins two passages is not text of the document
+    if not any(find_quote(p, span) is not None for p in passages):
+        raise _Bad(f"its span is not word for word in one passage of the item's text: {inline_code(span)}")
     return span
 
 
@@ -349,7 +389,7 @@ def _check(repo: KbRepo, live: set[str], item: dict, entry: dict) -> dict:
     extra = sorted(str(k) for k in entry if k not in _FIELDS[kind])
     if extra:
         raise _Bad(f"fields this item does not take: {', '.join(inline_code(k) for k in extra)}")
-    out: dict = {"id": item["id"], "span": _span(item, entry.get("span"))}
+    out: dict = {"id": item["id"], "public": item["public"], "span": _span(item, entry.get("span"))}
     note = entry.get("note") or ""
     if not isinstance(note, str) or len(note) > MAX_NOTE:
         raise _Bad(f"`note` must be text of at most {MAX_NOTE} characters")
@@ -406,10 +446,11 @@ def _read_verdicts(root: Path) -> tuple[list, list[Issue]]:
 
 
 def check_verdicts(root: Path, repo: KbRepo, items: list[dict]) -> tuple[list[dict], list[Issue]]:
-    """The valid verdicts for `items` (already checked against JUDGE_ITEMS), normalised, in file order, and an
-    `eval.verdict_invalid` issue per entry set aside (an unknown item id, a second answer to one item, a span not in
-    the item's text, a value not allowed, an id that is not live) and an `eval.verdict_missing` per unanswered item."""
-    by_id = {i["id"]: i for i in items}
+    """The valid verdicts for `items` (already checked against JUDGE_ITEMS), normalised (`id` the canonical id,
+    `public` the one the verdict answered by), in file order, and an `eval.verdict_invalid` issue per entry set aside
+    (an id that is not an item's public id, a second answer to one item, a span not in one passage of the item's text,
+    a value not allowed, an id that is not live) and an `eval.verdict_missing` per unanswered item."""
+    by_id = {i["public"]: i for i in items}
     live = live_ids(repo)
     entries, issues = _read_verdicts(root)
     answered: set[str] = set()
@@ -430,8 +471,8 @@ def check_verdicts(root: Path, repo: KbRepo, items: list[dict]) -> tuple[list[di
             out.append(_check(repo, live, by_id[iid], entry))
         except _Bad as e:
             issues.append(_invalid(f"{where}: {e}"))
-    issues += [Issue("eval.verdict_missing", f"{inline_code(i['id'])}: no verdict", "error", VERDICTS)
-               for i in items if i["id"] not in answered]
+    issues += [Issue("eval.verdict_missing", f"{inline_code(i['public'])}: no verdict", "error", VERDICTS)
+               for i in items if i["public"] not in answered]
     return out, issues
 
 
@@ -442,7 +483,7 @@ def check_items_file(root: Path, items: list[dict]) -> None:
         raise EvalError(f"no judge items at {JUDGE_ITEMS}: run `kb eval judge` first")
     try:
         written = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):  # RecursionError: nested too deeply to parse
         written = None
     if written != json.loads(items_json(items)):
         raise EvalError(f"{JUDGE_ITEMS} is not the item list kb asks about now (it was edited, or the knowledge base or "

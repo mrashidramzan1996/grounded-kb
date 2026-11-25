@@ -78,11 +78,11 @@ def write_run_b(root: Path, files: dict[str, str] = RUN_B_FILES) -> None:
 
 
 def valid(items: list[dict]) -> dict[str, dict]:
-    """A valid verdict for every item."""
+    """A valid verdict for every item, by canonical id."""
     out = {}
     for i in items:
         span = i["text"]
-        v: dict = {"id": i["id"], "span": span}
+        v: dict = {"id": i["public"], "span": span}  # verdicts answer by public id
         if i["kind"] == "faithful":
             v |= {"same_meaning": "yes", "same_actor": "yes", "same_modality": "yes", "no_added_constraint": "yes"}
         elif i["kind"] == "entity_faithful":

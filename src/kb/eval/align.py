@@ -38,8 +38,10 @@ class Link(NamedTuple):
 
 
 class RelationQuote(NamedTuple):
-    """An unmatched run B relation as the judge is asked about it: both ends' names, and its quote and segment ref."""
+    """An unmatched run B relation as the judge is asked about it: its id label ("B-TERM-a:type:B-TERM-b", unique), both
+    ends' names, and its quote and segment ref."""
 
+    label: str
     source_names: tuple[str, ...]
     target_names: tuple[str, ...]
     quote: str
@@ -174,8 +176,9 @@ def _relations(items: list[Item]) -> list[tuple[str, frozenset[str], str, frozen
     for item in items:
         for r in item.relations:
             target = by_id.get(r.target)
-            quote = RelationQuote(item.names, target.names if target else (), r.quote, r.ref)
-            out.append((f"{item.id}:{r.type}:{r.target}", frozenset(item.names), r.type,
+            label = f"{item.id}:{r.type}:{r.target}"
+            quote = RelationQuote(label, item.names, target.names if target else (), r.quote, r.ref)
+            out.append((label, frozenset(item.names), r.type,
                         frozenset(target.names) if target else frozenset(), _label(item, item.id), _label(target, r.target), quote))
     return out
 
