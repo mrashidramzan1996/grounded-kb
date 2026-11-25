@@ -81,7 +81,8 @@ the target branch's CODEOWNERS.
 
 To bootstrap, name the approvers on the default branch first: commit `policy.approvers.decisions` (and `intent`) there
 before any pull request changes the config. While the default branch names no decision approvers, a pull request that
-changes `kb.config.yaml` or CODEOWNERS cannot pass the approval check.
+changes `kb.config.yaml` or CODEOWNERS cannot pass the approval check. In the pull request that adds `kb.config.yaml`, its own policy
+applies: name the decision approvers in that change.
 
 Team approvers (`@org/team`) are checked against the forge's team membership. When the forge cannot read a team
 (a token without organisation read access), the approval does not count and `missing_owner_approval` is reported,

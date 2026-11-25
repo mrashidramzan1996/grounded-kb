@@ -122,7 +122,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     required = None
     if forge and pr:
         required = required_owners(root, policy.config, repo, base_repo, changes, verdicts, rules=policy.codeowners)
-        issues += owner_approval(forge, pr, policy.config, required)
+        issues += owner_approval(forge, pr, policy.config, required, bootstrap=policy.bootstrap)
 
     issues = sorted(issues, key=lambda i: (*i.sort_key, i.message))
     return VerifyReport(

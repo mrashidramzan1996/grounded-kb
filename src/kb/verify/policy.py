@@ -16,6 +16,7 @@ class Policy:
     config: KbConfig  # approvers, teams, bots, modules (for owners), fail_on and mode
     codeowners: CodeownersRules | None  # None: no CODEOWNERS, module owners apply
     source: str  # where it came from, for the report: "base <branch> at <sha7>" or "working tree…"
+    bootstrap: bool = False  # the target branch has no kb.config.yaml yet: the change's own config is the policy
 
 
 def load_policy(root: Path, branch: "str | tuple[str, str] | None", head_config: KbConfig) -> Policy:
@@ -34,5 +35,5 @@ def load_policy(root: Path, branch: "str | tuple[str, str] | None", head_config:
     config = config_at(root, tip)
     rules = codeowners_rules_at(root, tip)
     if config is None:
-        return Policy(head_config, rules, "working tree (kb.config.yaml is new in this change)")
+        return Policy(head_config, rules, "working tree (kb.config.yaml is new in this change)", bootstrap=True)
     return Policy(config, rules, f"base {name} at {tip[:7]}")

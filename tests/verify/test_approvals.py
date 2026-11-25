@@ -243,6 +243,18 @@ def test_config_change_with_no_base_decision_approvers_fails_closed(tmp_path):
     ]
 
 
+def test_no_decision_approvers_while_bootstrapping_says_to_set_them_in_this_change(tmp_path):
+    """kb.config.yaml is new in this change, so its own policy applies: the fix is in the change, not on the default
+    branch."""
+    config = policy_cfg(decisions=["TODO"])
+    req = required_owners(tmp_path, config, repo_of({}), None, changes("kb.config.yaml"), [])
+    issues = owner_approval(FakeForge([review("bob")]), PR, config, req, bootstrap=True)
+    assert [i.message for i in issues] == [
+        "kb.config.yaml changed, but the approval policy names no decision approvers; "
+        "set policy.approvers.decisions in this change"
+    ]
+
+
 def test_emptied_intent_in_the_change_still_needs_base_intent_approvers(tmp_path):
     head = KbRepo.load(Path(__file__).parent.parent / "fixtures" / "kb_valid")
     path = head.paths["REQ-F-001"]

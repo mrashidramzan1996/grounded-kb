@@ -213,3 +213,14 @@ def test_a_tag_shadowing_the_base_branch_is_an_error(tmp_path):
     policy = load_policy(root, "refs/heads/main", head_cfg(root))  # a full ref is not ambiguous
     assert policy.config.policy.mode == "enforce"
     assert policy.source == f"base refs/heads/main at {sha(root, 'refs/heads/main')[:7]}"
+
+
+def test_bootstrap_without_decision_approvers_says_to_set_them_in_this_change(tmp_path):
+    root = make_git_repo(None, tmp_path, {"README.md": "x\n"})
+    branch(root)
+    (root / "kb.config.yaml").write_text(HEAD_CONFIG.replace("decisions: ['@acme/tech-leads']", "decisions: []"))
+    commit(root, "add kb")
+    report = run_verify(root, base="main", all_=False, forge=local_forge(tmp_path, root))
+    assert report.policy_source == "working tree (kb.config.yaml is new in this change)"
+    (message,) = [i.message for i in report.issues if i.code == "missing_owner_approval"]
+    assert message.endswith("names no decision approvers; set policy.approvers.decisions in this change")

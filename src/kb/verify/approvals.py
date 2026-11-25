@@ -183,7 +183,11 @@ def _approvers(reviews: list[Review], pr: PullRequest, config: KbConfig) -> set[
     }
 
 
-def owner_approval(forge: Forge, pr: PullRequest, config: KbConfig, required: dict[str, list[str]]) -> list[Issue]:
+def owner_approval(
+    forge: Forge, pr: PullRequest, config: KbConfig, required: dict[str, list[str]], *, bootstrap: bool = False
+) -> list[Issue]:
+    """`bootstrap`: the policy is the change's own (the target branch has no kb.config.yaml yet), so a missing
+    approver is set in this change, not on the default branch first."""
     if not required:
         return []
     approved = _approvers(forge.reviews(pr), pr, config)
@@ -191,8 +195,9 @@ def owner_approval(forge: Forge, pr: PullRequest, config: KbConfig, required: di
     unreadable: list[str] = []
     for handle in sorted(required):
         if handle == NO_DECISION_APPROVERS:  # no approval can satisfy it
+            where = "in this change" if bootstrap else "on the default branch first"
             issues.append(Issue("missing_owner_approval", f"{', '.join(required[handle])}, but the approval policy names "
-                                "no decision approvers; set policy.approvers.decisions on the default branch first"))
+                                f"no decision approvers; set policy.approvers.decisions {where}"))
             continue
         if "/" in handle:
             members = forge.team_members(handle)
