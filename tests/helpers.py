@@ -443,12 +443,36 @@ def todo_ingested(tmp_path: Path, config: str = TODO_CONFIG, **docs: str) -> Pat
 
 
 def todo_drafted(tmp_path: Path, config: str = TODO_CONFIG) -> Path:
-    """todo_ingested() with REQ-F-001 quoting seg-01 and seg-01 triaged, committed: a clean KB."""
+    """todo_ingested() with REQ-F-001 quoting seg-01 and seg-01 triaged, committed and evaluated: a clean KB."""
     root = todo_ingested(tmp_path, config)
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
     commit(root, "drafts")
+    evaluated(root)
     return root
+
+
+def evaluated(root: Path, message: str = "evaluated") -> None:
+    """Record an evaluation of the knowledge base as it is now with nothing left open (as `kb eval report --write`
+    writes it, and a person's `kb eval decide categories`), then commit: `kb todo` lists no eval item for it."""
+    import datetime
+
+    from kb.eval.decisions import DECISIONS
+    from kb.eval.findings import fingerprint, summary, write_summary
+    from kb.gates.coverage import coverage_stats
+    from kb.records.repo import KbRepo
+    from kb.yamlio import dump_yaml
+
+    repo = KbRepo.load(root)
+    agr = {"matched": 0, "only_kb": 0, "only_b": 0, "kb_items": 0, "b_items": 0, "unlocated": 0, "span_f1": None,
+           "estimated_total": None, "entity_f1": None, "relation_f1": None}
+    today = datetime.date.today().isoformat()
+    write_summary(root, summary(head(root), fingerprint(repo), "0" * 32, coverage_stats(repo), agr, [], today))
+    put(root, DECISIONS, dump_yaml({"decisions": [{
+        "finding": "categories", "canonical": "categories", "sentence_key": None, "decision": "not_a_rule",
+        "record": None, "reason": "None apply.", "by": "@alice", "date": today,
+    }]}))
+    commit(root, message)
 
 
 # --- in-memory repos over one stored Markdown document (entities, graph) -----------------------

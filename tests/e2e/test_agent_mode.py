@@ -11,7 +11,7 @@ import re
 import shlex
 from pathlib import Path
 
-from helpers import classification, commit, git, invoke, make_git_repo, write
+from helpers import classification, commit, evaluated, git, invoke, make_git_repo, write
 
 from kb.rules import PLAYBOOK
 
@@ -145,7 +145,10 @@ def set_up_from_docs(tmp_path: Path) -> Path:
     assert "## Still flagged (0)" in out.stdout
     commit(repo, "REQ-NF-001: checkout page target")
 
-    # 7. no errors, nothing to do, no blocking asks: only the optional freeze is asked
+    # 7. no errors and no blocking asks: the extraction is evaluated (tests/test_todo_eval.py runs that loop; here it
+    #    finds nothing), then only the optional freeze is asked
+    assert do_ids(todo(repo)) == ["eval:extract"]
+    evaluated(repo)
     t = todo(repo)
     assert t["do"] == [] and ask_ids(t) == ["freeze:v1"]
     assert t["state"]["clean"] is True and t["state"]["errors"] == 0 and t["state"]["baseline"] is None
@@ -349,6 +352,11 @@ def session(repo: Path, agent: LiteralAgent, replies: list[dict]) -> tuple[int, 
         pending = [a for a in t["ask"] if a["id"] not in agent.asked]
         if not t["do"] and not pending:  # step 12: no do items and no ask not yet put to the user
             break
+        if [d["id"] for d in t["do"] if d["id"] != "branch"] == ["eval:extract"]:
+            # the evaluation of the extraction: the playbook's eval steps and their scripted run come later (the
+            # e2e eval loop); here it is done outside this session and finds nothing
+            evaluated(repo)
+            continue
         for item in t["do"]:
             agent.do(item)
         if pending:
@@ -370,7 +378,7 @@ def test_agent_follows_playbook_literally(tmp_path):
     ]
     rounds, _ = session(repo, agent, replies)
 
-    assert replies == [] and rounds == 5
+    assert replies == [] and rounds == 6  # one round is the evaluation
     assert agent.commits == [
         "kb ingest: report passed",
         "kb.config.yaml: owners and approvers",
@@ -399,7 +407,7 @@ def test_agent_follows_playbook_literally(tmp_path):
     assert do_ids(first) == ["branch", "ingest:docs/refund-policy.md"] and first["ask"] == []
     (branch,) = agent.pull_requests
     assert first["do"][0]["command"] == f"git switch -c {branch}" and re.fullmatch(r"kb/update-\d{8}", branch)
-    assert rounds == 2 and agent.commits == ["kb ingest: report passed"]
+    assert rounds == 3 and agent.commits == ["kb ingest: report passed"]  # one round is the evaluation
     assert git(repo, "branch", "--show-current").strip() == branch and git(repo, "status", "--porcelain") == ""
     assert git(repo, "rev-parse", "main").strip() == main  # main is unchanged: nothing committed there
     assert git(repo, "ls-tree", "--name-only", "main", "kb/requirements/REQ-F-002.yaml", "docs/refund-policy.md") == ""

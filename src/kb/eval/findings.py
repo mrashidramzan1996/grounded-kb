@@ -5,7 +5,7 @@ Markdown. A finding only proposes: a person resolves it (Task 9's `kb eval decid
 """
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -105,12 +105,13 @@ def build_findings(items: list[dict], verdicts: list[dict], alignment: Alignment
     return sorted(found.values(), key=lambda f: (_RANK[f.severity], -f.supporters, f.canonical))
 
 
-def fingerprint(repo: KbRepo) -> str:
+def fingerprint(repo: KbRepo, skip: Iterable[str] = ()) -> str:
     """What was evaluated: sha256 over the live records (id and raw bytes, by id) and every stored source's segment
-    hashes, first 16 hex characters. kb/eval/ holds no record, so the summary and decisions never change it."""
+    hashes, first 16 hex characters. kb/eval/ holds no record, so the summary and decisions never change it. `skip`
+    leaves those records out (kb.eval.decisions.is_fresh: records a person's decision settled)."""
     # triage is left out on purpose: which S items exist depends only on quotes (records) and decisions, not on triage
     h = hashlib.sha256()
-    for rid in sorted(live_ids(repo)):
+    for rid in sorted(live_ids(repo) - set(skip)):
         data = repo.raw.get(repo.paths[rid], b"")
         h.update(f"record {rid} {len(data)}\n".encode())
         h.update(data)

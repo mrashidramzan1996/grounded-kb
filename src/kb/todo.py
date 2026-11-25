@@ -14,6 +14,19 @@ from kb.baseline import requirement_hashes
 from kb.check import run_check
 from kb.config.load import load_config
 from kb.config.schema import KbConfig
+from kb.eval import EvalError
+from kb.eval.decisions import (
+    CATEGORIES,
+    DECISIONS,
+    EvalStatus,
+    SummaryFinding,
+    eval_status,
+    finding_kind,
+    finding_records,
+    read_decisions,
+)
+from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, RUN_B, _run_b_files
+from kb.eval.judge import JUDGE_ITEMS
 from kb.gates.base import GateContext
 from kb.gates.sources import STORE_NAMES, changed_message, differs_prefix, source_gate
 from kb.gitfiles import (
@@ -32,6 +45,8 @@ from kb.issues import Issue
 from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement
 from kb.records.repo import KbRepo
+from kb.safepath import UnsafePath
+from kb.safewrite import check_target
 from kb.sources.readers import SourceError
 from kb.sources.store import MAX_SOURCE_BYTES, derive_store
 from kb.textfmt import inline_code
@@ -57,8 +72,10 @@ class Option:
 
 @dataclass(frozen=True)
 class AskItem:
-    id: str  # stable, e.g. "vague:REQ-NF-001", "owner:policy.approvers.intent", "freeze:v1"
-    kind: str  # vague | conflicting | untestable | owner | secret | unreadable | freeze
+    id: str  # stable, e.g. "vague:REQ-NF-001", "owner:policy.approvers.intent", "freeze:v1", "finding:F-0123456789"
+    # vague | conflicting | untestable | owner | secret | unreadable | freeze | implied | categories, or a finding's:
+    # omission | entity | relation | unfaithful | split | merge | granularity
+    kind: str
     question: str  # raw, for JSON
     evidence: dict  # {} or {"record": id, "statement": ..., "source": "SRC-x#seg-NN", "quote": ..., ...}
     options: tuple[Option, ...]
@@ -466,6 +483,176 @@ def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pend
     )]
 
 
+# --- the extraction evaluation -------------------------------------------------------------------------------------
+
+def _eval_status(root: Path, repo: KbRepo) -> tuple[EvalStatus | None, list[DoItem]]:
+    """(the evaluation's state, a fix item when kb/eval/decisions.yaml is unusable). An unusable summary counts as
+    none: the evaluation starts over and `kb eval report --write` rewrites it. An unusable decisions file is the
+    agent's to repair (or the person's to restore from git) before anything else of the evaluation."""
+    try:
+        read_decisions(root)
+    except (EvalError, UnsafePath, OSError) as e:
+        why = str(e) if isinstance(e, EvalError) else f"{DECISIONS} cannot be read"
+        return None, [DoItem(f"fix:eval.decisions_invalid:{DECISIONS}", "eval.decisions_invalid",
+                             f"{why}; repair it (`git checkout -- {DECISIONS}` restores the committed one)", None,
+                             DECISIONS, None)]
+    try:
+        return eval_status(root, repo), []
+    except (EvalError, UnsafePath, OSError):
+        return EvalStatus(None, read_decisions(root), False, []), []
+
+
+def _cache_file(root: Path, rel: str) -> bool:
+    """Whether `rel` under .kb/cache is a regular file reached through no symlink."""
+    try:
+        return check_target(root, rel, "file", UnsafePath)
+    except UnsafePath:
+        return False
+
+
+def _run_b_has_files(root: Path) -> bool:
+    try:
+        return bool(_run_b_files(root)[0])
+    except (UnsafePath, OSError):
+        return False
+
+
+def _eval_items(root: Path, status: EvalStatus | None) -> list[DoItem]:
+    """The next step of the evaluation, one at a time and in order, while its summary is missing or stale: the blind
+    brief (`kb eval extract`), run B, the judge brief (`kb eval judge`), the verdicts (`kb eval report --write`).
+    `kb eval extract` and `kb eval judge` run at HEAD; an extraction of an earlier commit starts over."""
+    if status is not None and status.fresh:
+        return []
+    extract = DoItem("eval:extract", "kb.eval",
+                     "evaluate the extraction: the knowledge base was never evaluated, or it or its documents changed "
+                     "since; start with a blind second extraction", "kb eval extract", None, None)
+    if recorded_base(root, EVAL_BASE) != head_commit(root):
+        return [extract]
+    if _cache_file(root, JUDGE_ITEMS):
+        return [DoItem("eval:verdicts", "kb.eval", "follow .kb/cache/eval/judge.md, then run `kb eval report --write`",
+                       None, None, None)]
+    if _run_b_has_files(root):
+        return [DoItem("eval:judge", "kb.eval", "run B is written: write the judge brief", "kb eval judge", None, None)]
+    if _cache_file(root, EXTRACT_BRIEF) and not (root / RUN_B).is_symlink():
+        return [DoItem("eval:run-b", "kb.eval",
+                       "follow .kb/cache/eval/extract.md in a fresh session or subagent, then run `kb eval judge`",
+                       None, None, None)]
+    return [extract]
+
+
+def _decide(fid: str, rest: str) -> str:
+    """A `kb eval decide` command: the finding's public id (validated) and kb's own placeholders, nothing else."""
+    return f"`kb eval decide {fid} {rest} --by <handle>`"
+
+
+def _finding_evidence(f: SummaryFinding, repo: KbRepo, records: list[str]) -> dict:
+    """Where the finding's text is: its document, page and heading (looked up in the store), and the text itself."""
+    src_id, _, seg_id = f.ref.partition("#")
+    src = repo.sources.get(src_id)
+    seg = next((s for s in repo.segments(src_id) if s.id == seg_id), None)
+    ev = {"source": f.ref, "quote": f.text, "document": src.original if src else "",
+          "page": seg.page if seg else None, "heading": seg.heading if seg else ""}
+    return ({"record": ", ".join(records)} if records else {}) | ev
+
+
+def _finding_ask(f: SummaryFinding, repo: KbRepo) -> AskItem:
+    fid, kind = f.id, finding_kind(f)
+    records = [r for r in finding_records(f) if r in repo.records]  # record ids kb holds: never text of the summary
+    rids = " ".join(records) or "<rid>"
+    if kind == "omission":
+        hint = f" ({f.kind_hint})" if f.kind_hint else ""
+        question = _question(f"Finding {fid}: no record states this rule-like text{hint}. What is it?")
+        options = (
+            Option("add", "Add it as a new record", "write a record quoting this sentence, run `kb ingest --report`, then "
+                   + _decide(fid, "--as added --record <new id>")),
+            Option("covered", "Already covered by a record", _decide(fid, "--as covered --record <id>")),
+            Option("not_a_rule", "Not a rule", _decide(fid, "--as not_a_rule --reason <why>")),
+            Option("product", "Needs a product decision",
+                   "record the user's answer with `kb clarify`, draft from it, then decide `--as added`"),
+        )
+        ask_kind = "omission"
+    elif kind in ("entity", "relation"):
+        what = ("an entity no glossary term records" if kind == "entity"
+                else "a relation between two entities that no glossary term records")
+        question = _question(f"Finding {fid}: this text may name {what}. Add it?")
+        options = (
+            Option("add", "Add it", "add the TERM (or the relation on its source TERM) with a quote containing the "
+                   "name(s), run `kb ingest --report`, then " + _decide(fid, "--as added --record <TERM id>")),
+            Option("covered", "Already recorded as TERM-x", _decide(fid, "--as covered --record <TERM id>")),
+            Option("not_an_entity", "Not an entity", _decide(fid, "--as not_a_rule --reason <why>")),
+        )
+        ask_kind = kind
+    elif kind == "unfaithful":
+        question = _question(f"Finding {fid}: {rids} may not say what its quote says ({{note}}). Is the record right?",
+                             note=f.note)
+        options = (
+            Option("fix", "Fix the record",
+                   f"`kb redraft {rids}`, follow the brief, `kb redraft --report`, then decide `--as fixed`"),
+            Option("correct", "It is correct", _decide(fid, "--as correct")),
+        )
+        ask_kind = "unfaithful"
+    else:  # split, merge, or granularity unknown
+        question = _question({
+            "split": f"Finding {fid}: {rids} may hold several rules. Split it into one record per rule?",
+            "merge": f"Finding {fid}: {rids} may state one rule. Merge them into one record?",
+        }.get(f.kind, f"Finding {fid}: should {rids} be split or merged?"))
+        options = (
+            Option("fix", "Split or merge as suggested",
+                   f"`kb redraft {rids}`, follow the brief, `kb redraft --report`, then " + _decide(fid, "--as fixed")),
+            Option("keep", "Keep as is", _decide(fid, "--as ok")),
+        )
+        ask_kind = f.kind if f.kind in ("split", "merge") else "granularity"
+    return AskItem(f"finding:{fid}", ask_kind, question[0], _finding_evidence(f, repo, records), options, question[1])
+
+
+def _implied_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
+    """One per live requirement whose origin is implied and that no clarification confirms."""
+    live = live_ids(repo)
+    out: dict[str, AskItem] = {}
+    for i in issues:
+        rec = repo.records.get(i.record or "")
+        if i.code != "requirement.implied_unconfirmed" or not isinstance(rec, Requirement) or rec.id not in live:
+            continue
+        rid = rec.id
+        question = _question(f"{rid} is implied: no document states it. Is it a requirement?")
+        out[rid] = AskItem(
+            f"implied:{rid}", "implied", question[0], _evidence(rid, rec, repo),
+            (
+                Option("confirm", "Confirm",
+                       f"`kb clarify` with the user's confirmation, add it as a quote, `kb redraft {rid}`"),
+                Option("retire", "Not a requirement", f"set `status: rejected` on {rid}; never delete the file"),
+            ),
+            question[1],
+        )
+    return list(out.values())
+
+
+_ASKED_CATEGORIES = ("security", "privacy", "availability")
+
+
+def _categories_ask(repo: KbRepo, status: EvalStatus | None) -> list[AskItem]:
+    """Once there is an evaluation: the categories of _ASKED_CATEGORIES no live REQ-NF has, unless a person decided
+    that none apply."""
+    if status is None or status.summary is None or any(d.finding == CATEGORIES for d in status.decisions):
+        return []
+    live = live_ids(repo)
+    reqs = [r for rid, r in repo.records.items() if rid in live and isinstance(r, Requirement)]
+    have = {r.category for r in reqs if r.id.startswith("REQ-NF-")}
+    missing = [c for c in _ASKED_CATEGORIES if c not in have]
+    if not reqs or not missing:
+        return []
+    named = missing[0] if len(missing) == 1 else f"{', '.join(missing[:-1])} or {missing[-1]}"
+    question = _question(f"None of the documents state {named} requirements. Is that right?")
+    return [AskItem(
+        CATEGORIES, "categories", question[0], {},
+        (
+            Option("none_apply", "Correct, none apply", _decide(CATEGORIES, "--as not_a_rule --reason <why>")),
+            Option("give", "I will give them", "record each with `kb clarify`, then draft a REQ-NF requirement quoting it"),
+        ),
+        question[1],
+    )]
+
+
 def build_todo(root: Path) -> Todo:
     """Raises ConfigError / GitError (and the other tool errors of `kb check`); the caller maps them to exit 2."""
     root = Path(root)
@@ -489,11 +676,20 @@ def build_todo(root: Path) -> Todo:
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head, stale) + _fix_items(issues, repo, outdated, broken, stale) + _triage_items(issues)
+    status, broken_decisions = _eval_status(root, repo)
+    do += broken_decisions
     if not do and dirty:
         do.append(COMMIT)
-    # owners, secrets and unreadable documents block; flag and freeze asks are optional decisions ("keep it
-    # flagged" and "not yet" are answers), so they never make the KB unclean
-    blocking = _owner_asks(issues, config) + _secret_asks(issues, repo) + _unreadable_asks(unreadable)
+    findings = [_finding_ask(f, repo) for f in status.open] if status is not None and status.fresh else []
+    # owners, secrets, unreadable documents, open findings and unconfirmed implied requirements block; flag, freeze
+    # and categories asks are optional decisions ("keep it flagged", "not yet" and "none apply" are answers), so they
+    # never make the KB unclean
+    blocking = (_owner_asks(issues, config) + _secret_asks(issues, repo) + _unreadable_asks(unreadable)
+                + findings + _implied_asks(issues, repo))
+    # the evaluation runs last: on a committed knowledge base with nothing else to do and no blocking question whose
+    # answer would change it (open findings exist only while the evaluation is current, so they never wait for it)
+    if not do and not blocking and head is not None and live_ids(repo):
+        do += _eval_items(root, status)
     errors = sum(i.severity == "error" for i in issues)
     latest = _baseline(root)
     do.sort(key=lambda d: d.id)
@@ -503,7 +699,8 @@ def build_todo(root: Path) -> Todo:
     frozen = latest is not None or has_tag_matching(root, "kb-baseline-*")
     if do and frozen and (branch := _on_default_branch(root)) is not None:
         do.insert(0, _branch_item(root, branch))
-    ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, latest, errors, bool(do or blocking))
+    ask = (_flag_asks(repo) + blocking + _categories_ask(repo, status)
+           + _freeze_asks(root, repo, latest, errors, bool(do or blocking)))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
         "warnings": len(issues) - errors, "baseline": latest, "clean": not errors and not do and not blocking,

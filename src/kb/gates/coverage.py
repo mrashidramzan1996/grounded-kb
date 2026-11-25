@@ -77,10 +77,18 @@ def coverage_stats(repo: KbRepo) -> dict:
 
 
 def coverage_gate(ctx: GateContext) -> list[Issue]:
+    """sentence.uncovered leaves out the sentences a person decided (kb/eval/decisions.yaml as `ctx.repo` holds it:
+    added, covered or not a rule)."""
+    # imported here: kb.eval imports this module
+    from kb.eval.decisions import DECISIONS, decisions_of, suppressed_keys
+
     repo = ctx.repo
     rules, spans = _normative(repo), quote_spans(repo)
+    decisions, unusable = decisions_of(repo)
     issues: list[Issue] = []
-    for s in _uncovered(rules, spans, frozenset()):
+    if unusable:
+        issues.append(Issue("eval.decisions_invalid", f"{unusable}; no decision in it counts", "warning", DECISIONS))
+    for s in _uncovered(rules, spans, suppressed_keys(decisions)):
         src = s.ref.partition("#")[0]
         issues.append(Issue("sentence.uncovered", f"{s.ref}: rule-like sentence no record quotes: {inline_code(s.text)}",
                             "warning", f"kb/sources/{src}/triage.yaml", src))

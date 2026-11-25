@@ -148,17 +148,22 @@ def _records(repo: KbRepo, live: set[str]) -> list[dict]:
 
 def _gaps(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str]) -> list[dict]:
     """S: every uncovered rule-like sentence (one item per sentence key: the same sentence twice is one question, as a
-    decision on it is); B: every run B record no kb record matches. Both are shown alike: the passage, its segment ref
-    and heading, nothing else (never run B's statement)."""
+    decision on it is); B: every run B record no kb record matches, unless a person decided its (first) sentence. Both
+    are shown alike: the passage, its segment ref and heading, nothing else (never run B's statement)."""
     out: dict[str, dict] = {}
     for s in uncovered(repo, decided):
         spans = [[s.ref.partition("#")[0], s.start, s.end]]
         iid = f"S:{sentence_key(s)}"
         if iid not in out:
             out[iid] = _item(iid, "uncovered", s.ref, [s.text], _headings(repo, spans), spans)
+    # imported here: kb.eval.decisions imports kb.eval.findings, which imports this module
+    from kb.eval.decisions import span_sentence_key
+
     for b in alignment.only_b:
         if b.spans:  # run B items are validated: each has a found quote
             spans = [list(x) for x in b.spans]
+            if decided and span_sentence_key(repo, spans) in decided:  # a person decided that sentence already
+                continue
             _add(out, _item(f"B:{b.id}", "only_b", _seg_ref(repo, spans[0][0], spans[0][1]), _passages(repo, spans),
                             _headings(repo, spans), spans))
     return list(out.values())
@@ -271,8 +276,11 @@ def judge_items(repo: KbRepo, alignment: Alignment, decided: set[str] | frozense
 
 
 def _decided(root: Path) -> frozenset[str]:
-    """The sentence keys a person has decided (kb/eval/decisions.yaml, Task 9); none yet."""
-    return frozenset()
+    """The sentence keys a person has decided (kb/eval/decisions.yaml: added, covered or not a rule)."""
+    # imported here: kb.eval.decisions imports kb.eval.findings, which imports this module
+    from kb.eval.decisions import decided_keys
+
+    return frozenset(decided_keys(root))
 
 
 @dataclass(frozen=True)

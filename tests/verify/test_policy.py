@@ -234,7 +234,7 @@ def test_a_checked_pr_warns_when_an_approver_group_is_empty(tmp_path):
     commit(root, "a requirement")
     report = run_verify(root, base="main", all_=False, forge=local_forge(tmp_path, root))
     assert [i.message for i in report.issues if i.code == "owner_approval.no_approvers"] == [
-        "intent approvers are empty in the approval policy; changes to requirements, exclusions, features, glossary terms and triage "
+        "intent approvers are empty in the approval policy; changes to requirements, exclusions, features, glossary terms, triage and evaluation decisions "
         "need no approval"
     ]
     no_pr = run_verify(root, base="main", all_=False, forge=None)  # no PR: approvals are not checked

@@ -8,6 +8,7 @@ from helpers import (
     TODO_TRIAGE,
     commit,
     docx_bytes,
+    evaluated,
     git,
     ok,
     put,
@@ -39,6 +40,7 @@ def flagged(tmp_path, *reqs: tuple[str, tuple[str, ...]]):
         put(root, f"kb/requirements/{rid}.yaml", req_yaml(rid, flags=flags))
     put(root, TODO_TRIAGE, f"segments:\n  seg-01: [{', '.join(sorted({'REQ-F-001', *(r for r, _ in reqs)}))}]\n")
     commit(root, "flags")
+    evaluated(root)
     return root
 
 
@@ -225,6 +227,7 @@ def test_freeze_offered_alongside_flag_asks(tmp_path):
     ok(root, "ingest")
     put(root, "kb/sources/SRC-keys/triage.yaml", 'segments:\n  seg-01: "none: other: not a requirement"\n')
     commit(root, "keys")
+    evaluated(root)  # the new document's text is evaluated too
     t = todo_json(root)
     assert t["do"] == []
     assert [a["id"] for a in t["ask"]] == ["secret:SRC-keys", "untestable:REQ-F-002", "vague:REQ-NF-001"]
@@ -276,6 +279,7 @@ def test_no_freeze_without_requirements(tmp_path):
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
     commit(root, "live")
+    evaluated(root)
     assert list(asks(root)) == ["freeze:v1"]
 
 
@@ -286,6 +290,7 @@ def test_no_freeze_with_uncommitted_kb_changes(tmp_path):
     t = todo_json(root)
     assert ([d["id"] for d in t["do"]], t["ask"], t["state"]["errors"]) == (["commit"], [], 0)
     commit(root, "reword")
+    evaluated(root)
     assert list(asks(root)) == ["freeze:v1"]
 
     put(root, "kb.config.yaml", TODO_CONFIG + "    title: Seats\n")
@@ -313,6 +318,7 @@ def test_freeze_next_version_after_v1(tmp_path):
     reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
     put(root, "kb/requirements/REQ-F-001.yaml", reworded)  # differs from what v1 recorded
     commit(root, "edit REQ-F-001")
+    evaluated(root)
     item = asks(root)["freeze:v2"]
     assert item["question"] == "The knowledge base has no errors. Freeze baseline v2?"
     assert item["options"][0]["then"] == (
@@ -332,6 +338,7 @@ def test_no_freeze_ask_on_a_feature_branch(tmp_path):
     reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
     put(root, "kb/requirements/REQ-F-001.yaml", reworded)
     commit(root, "edit REQ-F-001")  # merged on main: v2 may be frozen there
+    evaluated(root)
     assert list(asks(root)) == ["freeze:v2"]
 
     git(root, "switch", "-qc", "kb/update-x")  # a new branch, still at the tip of main: not where a baseline is frozen

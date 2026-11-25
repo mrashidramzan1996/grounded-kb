@@ -42,8 +42,11 @@ from kb.eval.align import agreement
 from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, build_extract_brief, clear_run_b
 from kb.eval.findings import SUMMARY, build_findings, fingerprint, render_eval_report, summary, write_summary
 from kb.eval.judge import (
-    JUDGE_BRIEF, VERDICTS, check_items_file, check_verdicts, judge_state, read_salt, require_eval_base, write_judge,
+    JUDGE_BRIEF, JUDGE_ITEMS, SALT, VERDICTS, check_items_file, check_verdicts, judge_state, read_salt, require_eval_base,
+    write_judge,
 )
+from kb.eval.decisions import DECISIONS, decide as record_decision, eval_status
+from kb.eval.sample import DEFAULT_N, build_sample
 from kb.gates.coverage import coverage_stats
 from kb.graph import build_graph, render_mermaid
 from kb.testrun import TestRunError
@@ -663,6 +666,8 @@ def eval_extract(ctx: typer.Context) -> None:
         brief = build_extract_brief(root, load_config(root / "kb.config.yaml"))
         commit = head_commit(root)
         clear_run_b(root)
+        for rel in (JUDGE_BRIEF, JUDGE_ITEMS, VERDICTS, SALT):  # a new cycle: the last one's judge files are stale
+            remove_cache(root, rel)
         write_cache(root, EXTRACT_BRIEF, brief)
         write_cache(root, EVAL_BASE, commit + "\n")
     except TOOL_ERRORS as e:
@@ -720,6 +725,77 @@ def eval_report(
         except TOOL_ERRORS as e:
             raise _fail(e) from e
         typer.echo(f"wrote {SUMMARY}")
+
+
+@eval_app.command("decide")
+def eval_decide(
+    ctx: typer.Context,
+    finding: Annotated[str, typer.Argument(help="The finding's id (F-…, as `kb todo` shows it), or `categories`.")],
+    as_: Annotated[str, typer.Option("--as", help="added, covered, not_a_rule, product_decision, correct, fixed or ok.")],
+    by: Annotated[str, typer.Option("--by", help="Who decided: @handle or @org/team.")],
+    record: Annotated[str | None, typer.Option("--record", help="The record it names (added, covered, fixed).")] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Why, in one short plain sentence (not_a_rule).")] = None,
+    date: Annotated[str | None, typer.Option("--date", help="When they decided, YYYY-MM-DD (default: today).")] = None,
+) -> None:
+    """Record a person's decision on a finding in kb/eval/decisions.yaml, after checking the knowledge base shows it."""
+    root = Path(ctx.obj["root"])
+    try:
+        entry = record_decision(root, finding, as_, by, record, reason, date)
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    named = f" ({entry.record})" if entry.record else ""
+    typer.echo(f"recorded in {DECISIONS}: {entry.finding} {entry.decision}{named}; commit it")
+
+
+@eval_app.command("sample")
+def eval_sample(
+    ctx: typer.Context,
+    n: Annotated[int, typer.Option("--n", help="How many records, and how many unquoted sentences.")] = DEFAULT_N,
+) -> None:
+    """Print a QC checklist for the pull-request description: records with their quotes and unquoted sentences,
+    chosen at random but the same for the same HEAD."""
+    if n < 1:
+        typer.echo("--n must be at least 1", err=True)
+        raise typer.Exit(2)
+    root = Path(ctx.obj["root"])
+    try:
+        out = build_sample(KbRepo.load(root), head_commit(root), n)
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    typer.echo(out, nl=False)
+
+
+def _count_of(data: dict, key: str) -> str:
+    value = data.get(key)
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else "?"
+
+
+def _f1(value) -> str:
+    return f"{value:.2f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "n/a"
+
+
+@eval_app.command("status")
+def eval_status_cmd(ctx: typer.Context) -> None:
+    """Print the last evaluation: coverage, agreement, open and decided findings, and whether it is current."""
+    root = Path(ctx.obj["root"])
+    try:
+        st = eval_status(root, KbRepo.load(root))
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    if st.summary is None:
+        typer.echo(f"no evaluation yet ({SUMMARY}): run `kb eval extract`")
+        return
+    s = st.summary
+    cov, agr = s.coverage, s.agreement
+    normative, covered = cov.get("normative"), cov.get("covered")
+    pct = (f" ({round(100 * covered / normative)}%)" if isinstance(normative, int) and isinstance(covered, int)
+           and normative > 0 else "")
+    typer.echo(f"evaluated commit {s.commit[:12]}, judged {s.judged_at}")
+    typer.echo(f"coverage: {_count_of(cov, 'covered')} of {_count_of(cov, 'normative')} rule-like sentences quoted{pct}")
+    typer.echo(f"agreement: {_count_of(agr, 'matched')} matched; span F1 {_f1(agr.get('span_f1'))}; "
+               f"entity F1 {_f1(agr.get('entity_f1'))}; relation F1 {_f1(agr.get('relation_f1'))}")
+    typer.echo(f"findings: {len(st.open)} open, {len(s.open_findings) - len(st.open)} decided")
+    typer.echo("up to date" if st.fresh else "stale: the knowledge base or its documents changed since; run `kb eval extract`")
 
 
 agents_app = typer.Typer(help="Wire kb into coding agents.", no_args_is_help=True)

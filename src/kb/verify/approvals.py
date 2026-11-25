@@ -29,6 +29,9 @@ _INTENT_DIRS = ("kb/requirements/", "kb/exclusions/", "kb/features/", "kb/glossa
 _DECISION_DIRS = ("kb/decisions/", "kb/invariants/", "kb/components/")
 # a source's triage says which segments hold no product intent: the intent approvers sign off on it
 _TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
+# the evaluation's summary and a person's decisions on its findings (kb eval decide): the intent approvers sign off
+_EVAL_DIR = "kb/eval/"
+EVAL_REASON = "evaluation decisions changed"
 
 
 def codeowners_rules(root: Path) -> CodeownersRules | None:
@@ -107,6 +110,13 @@ def _changed_triage(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet |
     return {m.group(1): p for p in sorted(paths) if (m := _TRIAGE.fullmatch(p))}
 
 
+def _eval_changed(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None) -> bool:
+    """Whether a file under kb/eval/ is new, changed or deleted relative to the base (by bytes), or in `changes`."""
+    base_raw = base_repo.raw if base_repo else {}
+    paths = {p for p in set(repo.raw) | set(base_raw) if p.startswith(_EVAL_DIR) and repo.raw.get(p) != base_raw.get(p)}
+    return bool(paths) or any(p.startswith(_EVAL_DIR) for p in (changes.files if changes else ()))
+
+
 def _handles(entries: Sequence[str], config: KbConfig) -> list[str]:
     return [h for e in entries if (h := resolve_owner(e, config))]
 
@@ -176,6 +186,9 @@ def required_owners(
     for src in _changed_triage(repo, base_repo, changes):
         for h in intent:
             need(h, f"triage of {src} changed")
+    if _eval_changed(repo, base_repo, changes):
+        for h in intent:
+            need(h, EVAL_REASON)
     # a changed record file that does not parse is in no record map: route it by its path, so it cannot dodge approval
     parsed = set(_changed_records(repo, base_repo).values())
     for path in sorted(changes.files if changes and base_repo is not None else ()):
@@ -195,7 +208,7 @@ def required_owners(
     return {h: _ordered(rs) for h, rs in sorted(reasons.items())}
 
 
-_GROUP_RECORDS = {"intent": "requirements, exclusions, features, glossary terms and triage", "decisions": "decisions, invariants and components"}
+_GROUP_RECORDS = {"intent": "requirements, exclusions, features, glossary terms, triage and evaluation decisions", "decisions": "decisions, invariants and components"}
 
 
 def no_approver_warnings(
@@ -210,6 +223,7 @@ def no_approver_warnings(
         paths |= {p for p in changes.files if p.startswith((*_INTENT_DIRS, *_DECISION_DIRS))}
     changed = {
         "intent": any(p.startswith(_INTENT_DIRS) for p in paths) or bool(_changed_triage(repo, base_repo, changes))
+        or _eval_changed(repo, base_repo, changes)
         or any(v.kind == "requirement" and v.status == "stale" for v in verdicts),
         "decisions": any(p.startswith(_DECISION_DIRS) for p in paths),
     }

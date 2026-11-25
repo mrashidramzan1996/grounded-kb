@@ -4,7 +4,7 @@
 import json
 import re
 
-from helpers import TODO_CONFIG, TODO_DOC, TODO_TRIAGE, commit, git, ok, put, req_yaml
+from helpers import TODO_CONFIG, TODO_DOC, TODO_TRIAGE, commit, evaluated, git, ok, put, req_yaml
 from helpers import todo_drafted as drafted
 from helpers import todo_ingested as ingested
 from helpers import todo_json as todo
@@ -44,6 +44,8 @@ def test_ingest_brief_not_committed_asks_for_report(tmp_path):
     ok(root, "ingest", "--report", "--strict")
     assert "report:ingest" in items(root)  # until it is committed
     commit(root, "drafts")
+    assert list(items(root)) == ["eval:extract"]  # then the extraction is evaluated (tests/test_todo_eval.py)
+    evaluated(root)
     t = todo(root)
     assert t["do"] == [] and t["state"]["clean"] is True and [a["id"] for a in t["ask"]] == ["freeze:v1"]
 
@@ -201,6 +203,7 @@ def test_report_item_not_repeated_when_brief_changed_nothing(tmp_path):
     root = drafted(tmp_path)
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", flags=("vague",)))
     commit(root, "flag")
+    evaluated(root)
     ok(root, "redraft", "REQ-F-001")
     assert "report:redraft" not in items(root)  # the brief is written, but nothing changed yet: nothing to check
     ok(root, "redraft", "--report", "--strict")
@@ -298,5 +301,6 @@ def test_no_branch_item_when_nothing_to_do(tmp_path):
     assert (t["do"], t["ask"], t["state"]["clean"]) == ([], [], True)
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", flags=("vague",)))
     commit(root, "flag")
+    evaluated(root)
     t = todo(root)  # only an optional ask: still nothing to do, so no branch item
     assert t["do"] == [] and t["state"]["clean"] is True
