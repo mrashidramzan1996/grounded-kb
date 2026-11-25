@@ -368,6 +368,9 @@ def test_github_template_runs_verify_with_comment_and_artifact(tmp_path):
     verify = next(s for s in steps if "--comment" in s.get("run", ""))
     assert verify["env"] == {"GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
     assert "${{ secrets.GITHUB_TOKEN }}" in text
+    # the default token cannot read organisation teams: say what to do next to it, not only in the README
+    token = text.split("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", 1)[0].rsplit("env:", 1)[1]
+    assert "read:org" in token and "teams.<name>.members" in token and "unreadable_teams: defer" in token
     upload = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact@v4"))
     assert upload["if"] == "always()"
     assert ".kb/cache/status.json" in upload["with"]["path"] and ".kb/cache/verify.md" in upload["with"]["path"]

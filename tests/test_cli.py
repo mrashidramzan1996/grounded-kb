@@ -79,6 +79,8 @@ def test_readme_covers_install_every_command_and_posix():
     # kb redraft takes --base with --changed (a committed sync) and with --report
     assert "`kb redraft [IDs] [--flagged] [--changed [--base REF]] [--new]`" in readme
     assert "`kb redraft --report [--strict] [--base REF]`" in readme
+    upgrade = readme.split("## Upgrading to 0.3.1\n", 1)[1].split("\n## ", 1)[0]  # team approvals now fail closed
+    assert "teams.<name>.members" in upgrade and "read:org" in upgrade and "unreadable_teams: defer" in upgrade
     kb_readme = (Path(__file__).parents[1] / "src/kb/init/templates/kb_readme.md").read_text()
     assert "2. Before committing, run the `kb redraft` it suggests" in kb_readme
     assert "run `kb redraft --changed --base <commit before it>`" in kb_readme

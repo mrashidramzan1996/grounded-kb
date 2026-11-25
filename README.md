@@ -97,6 +97,22 @@ teams:
 Set `policy.unreadable_teams: defer` to restore the old behaviour (any approval is accepted with an
 `owner_approval.deferred` warning, leaving the check to branch protection's required code-owner review).
 
+## Upgrading to 0.3.1
+
+`kb verify` now reads the approval policy from the target branch's tip, and team approvals fail closed: when the forge
+cannot read an `@org/team` approver's members, an approval by one of them no longer counts. The default GitHub Actions
+`GITHUB_TOKEN` cannot read organisation team membership, so most GitHub repositories with team approvers will report
+`missing_owner_approval` after the upgrade until you do one of these, on the default branch first:
+
+- list each team's members under `teams.<name>.members` in `kb.config.yaml` (forge logins, no `@`);
+- give the verify step a token that can read teams (`read:org`, or a GitHub App token with Members: read);
+- or set `policy.unreadable_teams: defer` to keep 0.3.0's behaviour (any approval counts, with an
+  `owner_approval.deferred` warning, leaving the check to branch protection's required code-owner review).
+
+Also give the decision approvers CODEOWNERS lines for the CI workflow and the CODEOWNERS files themselves
+(`/.github/workflows/kb.yml`, `/.gitlab-ci.yml`, `/CODEOWNERS`, `/.github/CODEOWNERS`, `/docs/CODEOWNERS`; `kb init`
+does not rewrite an existing setup), and see the prerequisites under [Approvals](#approvals).
+
 ## Use (Phase 1)
 
 | Command | What it does |

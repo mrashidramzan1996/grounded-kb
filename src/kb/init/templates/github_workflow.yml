@@ -43,6 +43,10 @@ jobs:
       # Both verify steps honour policy.mode in kb.config.yaml (warn-only until you switch it to enforce).
       - if: env.KB_INSTALL_SPEC != '' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')
         env:
+          # The default token cannot read organisation team membership, so an approval by a member of an @org/team
+          # approver does not count (missing_owner_approval). Either list the members under teams.<name>.members in
+          # kb.config.yaml on the default branch, or use a token that can read teams (read:org; e.g. a GitHub App
+          # token with Members: read), or set policy.unreadable_teams: defer to leave it to code-owner review.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --comment --forge auto
       - if: env.KB_INSTALL_SPEC != '' && github.event_name == 'push'
