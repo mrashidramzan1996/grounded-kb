@@ -1,5 +1,3 @@
-<!-- `kb eval judge`, named below, is added by Task 8 of the 0.4.0 plan. Lines like this one are template notes:
-kb strips them, so they never reach the brief. -->
 # kb eval extract brief $version
 
 Work in a fresh session or subagent. Do not read kb/requirements, kb/decisions, kb/invariants, kb/exclusions or

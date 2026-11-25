@@ -20,7 +20,7 @@ from kb.baseline import BaselineError, freeze_baseline
 from kb.init.scaffold import InitError, init_repo, upsert_agents_md
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, rev_parse, toplevel
 from kb.modules import suggest_paths
-from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, write_base, write_brief
+from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, recorded_base, write_base, write_brief
 from kb.cache import remove_cache, write_cache
 from kb.ingest.redraft import (
     REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_FILES, REDRAFT_IDS, REDRAFT_NEW, RedraftError, build_redraft_brief, changed_segments, changed_text,
@@ -38,7 +38,13 @@ from kb.todo import build_todo, render_todo_json, render_todo_text, summary_line
 from kb.trace import TraceError, trace_chain
 from kb.forge import ForgeError, forge_from_option
 from kb.eval import EvalError
+from kb.eval.align import agreement
 from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, build_extract_brief, clear_run_b
+from kb.eval.findings import SUMMARY, build_findings, fingerprint, render_eval_report, summary, write_summary
+from kb.eval.judge import (
+    JUDGE_BRIEF, VERDICTS, check_items_file, check_verdicts, judge_state, require_eval_base, write_judge,
+)
+from kb.gates.coverage import coverage_stats
 from kb.graph import build_graph, render_mermaid
 from kb.testrun import TestRunError
 from kb.verify.report import render_json, render_markdown, render_text, summary_line, write_outputs
@@ -50,7 +56,7 @@ app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
 # What a command reports as a usage, config or tool error (exit 2, the message on stderr, no traceback).
 TOOL_ERRORS = (
     ConfigError, SourceError, GitError, UnsafePath, RecordError, YamlError, OSError,
-    ContextError, TraceError, BaselineError, WriteRefused, TestRunError, ForgeError,
+    ContextError, TraceError, BaselineError, WriteRefused, TestRunError, ForgeError, EvalError,
 )
 
 
@@ -659,10 +665,60 @@ def eval_extract(ctx: typer.Context) -> None:
         clear_run_b(root)
         write_cache(root, EXTRACT_BRIEF, brief)
         write_cache(root, EVAL_BASE, commit + "\n")
-    except (EvalError, *TOOL_ERRORS) as e:
+    except TOOL_ERRORS as e:
         raise _fail(e) from e
     typer.echo(f"Brief: {EXTRACT_BRIEF}")
     typer.echo(f"Ask a fresh session or subagent of your coding agent: *follow {EXTRACT_BRIEF}*")
+
+
+@eval_app.command("judge")
+def eval_judge(ctx: typer.Context) -> None:
+    """Write the judge brief and its item list: every record, gap, entity and relation, one question each."""
+    root = Path(ctx.obj["root"])
+    try:
+        require_eval_base(root)
+        state = write_judge(root, KbRepo.load(root))
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    if state.run_b_issues:
+        typer.echo(f"{len(state.run_b_issues)} run B item(s) set aside (`kb eval report` lists them)", err=True)
+    typer.echo(f"Brief: {JUDGE_BRIEF} ({len(state.items)} items)")
+    typer.echo(f"Ask a fresh session or subagent of your coding agent: *follow {JUDGE_BRIEF}*. It writes {VERDICTS}; "
+               "then run `kb eval report --write`.")
+
+
+@eval_app.command("report")
+def eval_report(
+    ctx: typer.Context,
+    write: Annotated[bool, typer.Option("--write", help=f"Also write {SUMMARY}, to commit.")] = False,
+) -> None:
+    """Print coverage, agreement, the ranked findings and rejected verdicts; exit 1 when a verdict is missing or invalid."""
+    root = Path(ctx.obj["root"])
+    try:
+        commit = recorded_base(root, EVAL_BASE)
+        if commit is None:
+            raise EvalError("no second extraction of this repository: run `kb eval extract` first")
+        repo = KbRepo.load(root)
+        state = judge_state(root, repo)
+        check_items_file(root, state.items)
+        verdicts, issues = check_verdicts(root, repo, state.items)
+        coverage = coverage_stats(repo)
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    findings = build_findings(state.items, verdicts, state.alignment)
+    agr = agreement(state.alignment, state.kb_count, state.b_count)
+    typer.echo(render_eval_report(coverage, agr, findings, issues, state.run_b_issues))
+    if issues:
+        if write:
+            typer.echo(f"{SUMMARY} not written: {len(issues)} verdict(s) missing or invalid; fix {VERDICTS}, then run "
+                       "`kb eval report --write` again", err=True)
+        raise typer.Exit(1)
+    if write:
+        try:
+            write_summary(root, summary(commit, fingerprint(repo), coverage, agr, findings, datetime.date.today().isoformat()))
+        except TOOL_ERRORS as e:
+            raise _fail(e) from e
+        typer.echo(f"wrote {SUMMARY}")
 
 
 agents_app = typer.Typer(help="Wire kb into coding agents.", no_args_is_help=True)

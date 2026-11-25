@@ -37,6 +37,15 @@ class Link(NamedTuple):
     ref: str
 
 
+class RelationQuote(NamedTuple):
+    """An unmatched run B relation as the judge is asked about it: both ends' names, and its quote and segment ref."""
+
+    source_names: tuple[str, ...]
+    target_names: tuple[str, ...]
+    quote: str
+    ref: str
+
+
 @dataclass(frozen=True)
 class Item:
     """A record or an entity (kind "entity") of one run. `spans` are its found quotes; an entity also has its
@@ -64,6 +73,7 @@ class Alignment:
     only_kb_relations: list[str] = field(default_factory=list)  # "TERM-a:owns:TERM-b"
     # (source name, type, target name), one per distinct unmatched relation: two can show the same names
     only_b_relations: list[tuple[str, str, str]] = field(default_factory=list)
+    only_b_relation_quotes: list[RelationQuote] = field(default_factory=list)  # one per only_b_relations entry, same order
     unlocated: list[str] = field(default_factory=list)  # kb records none of whose quotes is found: not aligned at all
 
 
@@ -156,16 +166,17 @@ def _label(item: Item | None, fallback: str) -> str:
     return item.names[0] if item is not None and item.names else fallback
 
 
-def _relations(items: list[Item]) -> list[tuple[str, frozenset[str], str, frozenset[str], str, str]]:
-    """(label "src:type:target", source names, type, target names, source name, target name) per relation; an end that
-    is not among `items`, or has no names, has an empty key and never matches."""
+def _relations(items: list[Item]) -> list[tuple[str, frozenset[str], str, frozenset[str], str, str, RelationQuote]]:
+    """(label "src:type:target", source names, type, target names, source name, target name, RelationQuote) per
+    relation; an end that is not among `items`, or has no names, has an empty key and never matches."""
     by_id = {i.id: i for i in items}
     out = []
     for item in items:
         for r in item.relations:
             target = by_id.get(r.target)
+            quote = RelationQuote(item.names, target.names if target else (), r.quote, r.ref)
             out.append((f"{item.id}:{r.type}:{r.target}", frozenset(item.names), r.type,
-                        frozenset(target.names) if target else frozenset(), _label(item, item.id), _label(target, r.target)))
+                        frozenset(target.names) if target else frozenset(), _label(item, item.id), _label(target, r.target), quote))
     return out
 
 
@@ -194,7 +205,8 @@ def align(kb_items: list[Item], b_items: list[Item]) -> Alignment:
     kb_rels, b_rels = _relations(kb_ents), _relations(b_ents)
     matched_r = sorted({(k[0], b[0]) for k in kb_rels for b in b_rels if k[2] == b[2] and k[1] & b[1] and k[3] & b[3]})
     kb_r_hit, b_r_hit = {k for k, _ in matched_r}, {b for _, b in matched_r}
-    only_b_r = {b[0]: (b[4], b[2], b[5]) for b in b_rels if b[0] not in b_r_hit}  # by id label: names may repeat
+    only_b_r = {b[0]: b for b in b_rels if b[0] not in b_r_hit}  # by id label: names may repeat
+    only_b_sorted = [b for _, b in sorted(only_b_r.items(), key=lambda kv: ((kv[1][4], kv[1][2], kv[1][5]), kv[0]))]
 
     return Alignment(
         matched=matched,
@@ -207,7 +219,8 @@ def align(kb_items: list[Item], b_items: list[Item]) -> Alignment:
         only_b_entities=sorted((b for b in b_ents if b.id not in b_e_hit), key=lambda i: i.id),
         matched_relations=matched_r,
         only_kb_relations=sorted({k[0] for k in kb_rels if k[0] not in kb_r_hit}),
-        only_b_relations=[names for _, names in sorted(only_b_r.items(), key=lambda kv: (kv[1], kv[0]))],
+        only_b_relations=[(b[4], b[2], b[5]) for b in only_b_sorted],
+        only_b_relation_quotes=[b[6] for b in only_b_sorted],
         unlocated=unlocated,
     )
 

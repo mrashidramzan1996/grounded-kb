@@ -22,6 +22,7 @@ _RECORD_FILE = re.compile(
 )
 _SOURCE_FILE = re.compile(r"kb/sources/(SRC-[^/]+)/(source\.yaml|text\.md|segments\.jsonl|triage\.yaml)")
 _BASELINE_FILE = re.compile(r"kb/baseline/v\d+\.yaml")  # written by `kb baseline freeze`, not a record
+_EVAL_FILE = re.compile(r"kb/eval/(?:summary|decisions)\.yaml")  # the committed evaluation summary and decisions, not records
 _SEGMENT_KEYS = {"id": str, "heading": str, "page": int, "start": int, "end": int, "hash": str}
 
 
@@ -88,7 +89,7 @@ class KbRepo:
             self.id_paths.append((rec.id, path))  # type: ignore[attr-defined]
             self.records[rec.id] = rec  # type: ignore[attr-defined]
             self.paths[rec.id] = path  # type: ignore[attr-defined]
-        elif _BASELINE_FILE.fullmatch(path) or path == "kb/README.md":  # README: written by `kb init`, documentation
+        elif _BASELINE_FILE.fullmatch(path) or _EVAL_FILE.fullmatch(path) or path == "kb/README.md":  # README: written by `kb init`, documentation
             pass
         elif m := _SOURCE_FILE.fullmatch(path):
             self._load_source_file(m.group(1), m.group(2), data)
