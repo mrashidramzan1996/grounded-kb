@@ -15,6 +15,15 @@ class _Model(BaseModel):
 
 class Team(_Model):
     git_team: str
+    members: list[str] = []  # forge logins, no "@"; used when the forge cannot read the team
+
+    @field_validator("members")
+    @classmethod
+    def _logins(cls, v: list[str]) -> list[str]:
+        for m in v:
+            if not m or m.startswith("@") or "/" in m:
+                raise ValueError(f"teams members must each be a login without @ or /: {m!r}")
+        return v
 
 
 _CATCH_ALL = {"**", "*", "**/*", ".", "./**"}
@@ -98,6 +107,8 @@ class PolicyCfg(_Model):
     fail_on: list[FailOn] = ["broken", "schema", "decision_guard", "missing_owner_approval", "stale_context"]
     warn_on: list[WarnOn] = ["stale", "coverage_drop"]
     approvers: ApproversCfg = ApproversCfg()
+    # fail: an approval of a team whose members cannot be read does not count; defer: leave it to branch protection
+    unreadable_teams: Literal["fail", "defer"] = "fail"
 
 
 class ReviewCfg(_Model):

@@ -96,8 +96,9 @@ def test_message_and_order():
 
 def test_team_membership_satisfied_and_unreadable_defers_with_warning():
     forge = FakeForge([review("bob")], teams={"@org/a": {"bob"}})
-    assert owner_approval(forge, PR, cfg(), {"@org/a": ["x"]}) == []
-    issues = owner_approval(forge, PR, cfg(), {"@org/b": ["x"], "@org/a": ["y"], "@org/c": ["z"]})
+    defer = cfg(policy={"unreadable_teams": "defer", "approvers": {"intent": ["@pm"], "decisions": ["@arch"]}})
+    assert owner_approval(forge, PR, defer, {"@org/a": ["x"]}) == []
+    issues = owner_approval(forge, PR, defer, {"@org/b": ["x"], "@org/a": ["y"], "@org/c": ["z"]})
     assert [(i.code, i.severity) for i in issues] == [("owner_approval.deferred", "warning")]
     assert issues[0].message == (
         "cannot read team membership for @org/b, @org/c; relying on branch protection's required code-owner review"
@@ -248,3 +249,47 @@ def test_module_added_in_the_change_owns_nothing_yet(tmp_path):
     report = run_verify(root, base="main", all_=False, forge=LocalForge(forge_path))
     assert report.required is not None and "@attacker" not in report.required
     assert report.required == {"@arch": ["kb.config.yaml changed"]}
+
+
+def _team_cfg(git_team="@acme/product", members=("erin",), **policy):
+    team = {"git_team": git_team} | ({"members": list(members)} if members is not None else {})
+    return cfg(teams={"product": team}, policy={"approvers": {"intent": ["@pm"], "decisions": ["@arch"]}} | policy)
+
+
+def test_unreadable_team_fails_closed_by_default():
+    issues = owner_approval(FakeForge([review("someone")]), PR, cfg(), {"@acme/product": ["x"]})
+    assert [(i.code, i.severity) for i in issues] == [("missing_owner_approval", "error")]
+    assert "cannot read the members of @acme/product" in issues[0].message
+    assert "teams.<name>.members" in issues[0].message
+    assert issues[0].message.startswith("@acme/product has not approved ccccccc: ")
+    assert issues[0].message.endswith("(x)")
+
+
+def test_configured_members_used_when_forge_cannot_read():
+    c = _team_cfg()
+    assert owner_approval(FakeForge([review("erin")]), PR, c, {"@acme/product": ["x"]}) == []
+    issues = owner_approval(FakeForge([review("bob")]), PR, c, {"@acme/product": ["x"]})
+    assert [i.code for i in issues] == ["missing_owner_approval"]
+
+
+def test_configured_members_match_case_insensitively():
+    c = _team_cfg("@Acme/Product", ["Erin"])
+    assert owner_approval(FakeForge([review("erin")]), PR, c, {"@acme/product": ["x"]}) == []
+
+
+def test_forge_membership_wins_over_config():
+    c = _team_cfg()
+    teams = {"@acme/product": {"carol"}}
+    assert [i.code for i in owner_approval(FakeForge([review("erin")], teams), PR, c, {"@acme/product": ["x"]})] == [
+        "missing_owner_approval"
+    ]
+    assert owner_approval(FakeForge([review("carol")], teams), PR, c, {"@acme/product": ["x"]}) == []
+
+
+def test_defer_keeps_the_old_behaviour():
+    c = _team_cfg(members=None, unreadable_teams="defer")
+    issues = owner_approval(FakeForge([review("someone")]), PR, c, {"@acme/product": ["x"]})
+    assert [(i.code, i.severity) for i in issues] == [("owner_approval.deferred", "warning")]
+    assert issues[0].message == (
+        "cannot read team membership for @acme/product; relying on branch protection's required code-owner review"
+    )

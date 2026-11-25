@@ -66,6 +66,20 @@ To bootstrap, name the approvers on the default branch first: commit `policy.app
 before any pull request changes the config. While the default branch names no decision approvers, a pull request that
 changes `kb.config.yaml` or CODEOWNERS cannot pass the approval check.
 
+Team approvers (`@org/team`) are checked against the forge's team membership. When the forge cannot read a team
+(a token without organisation read access), the approval does not count and `missing_owner_approval` is reported,
+unless the team's members are listed in the base branch's config:
+
+```yaml
+teams:
+  product:
+    git_team: "@acme/product"
+    members: [alice, bob]   # forge logins, no @; used only when the forge cannot read the team
+```
+
+Set `policy.unreadable_teams: defer` to restore the old behaviour (any approval is accepted with an
+`owner_approval.deferred` warning, leaving the check to branch protection's required code-owner review).
+
 ## Use (Phase 1)
 
 | Command | What it does |

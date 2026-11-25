@@ -175,10 +175,22 @@ def owner_approval(forge: Forge, pr: PullRequest, config: KbConfig, required: di
         if "/" in handle:
             members = forge.team_members(handle)
             if members is None:
-                if approved:  # some approval counts, but its team cannot be checked: defer to branch protection
-                    unreadable.append(handle)
+                members = {
+                    m
+                    for t in config.teams.values()
+                    if t.git_team.lower() == handle.lower()
+                    for m in t.members
+                } or None
+            if members is None:
+                if config.policy.unreadable_teams == "defer" and approved:
+                    unreadable.append(handle)  # defer to branch protection's required code-owner review
                     continue
-                members = set()
+                why = ", ".join(required[handle])
+                issues.append(Issue("missing_owner_approval", f"{handle} has not approved {pr.head_sha[:7]}: cannot read "
+                                    f"the members of {handle}; list them under teams.<name>.members in kb.config.yaml "
+                                    "on the base branch, or give the CI token read access to the organisation's "
+                                    f"teams ({why})"))
+                continue
             satisfied = bool({m.lower() for m in members} & approved)
         else:
             satisfied = handle.lstrip("@").lower() in approved
