@@ -146,3 +146,12 @@ def test_abbreviation_with_leading_punctuation_and_decimal():
     assert len(out) == 1
     _, out = _units("It costs 5.5 EUR. Next one.\n")
     assert [s.text for s in out] == ["It costs 5.5 EUR.", "Next one."]
+
+
+def test_wrapped_and_negated_must():
+    assert cues("Seats must\nnot be removed.") == {"must_not"}
+    assert cues("Seats shall  not be removed.") == {"must_not"}
+    assert cues("Seats may\nnot be removed.") == {"must_not"}
+    assert cues("Seats can\nnot be removed.") == {"must_not"}
+    assert cues("Seats are not\nallowed.") == {"must_not"}
+    assert cues("Seats must never be removed.") == {"must_not"}

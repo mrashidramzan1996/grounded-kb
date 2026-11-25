@@ -163,3 +163,9 @@ def test_records_outside_the_drafted_range_keep_warnings(acme_repo_ingested, fix
     sev = {(i["record"], i["code"]): i["severity"] for i in data["issues"] if i["code"].startswith("requirement.")}
     assert sev[("REQ-NF-002", "requirement.fields_missing")] == "warning"
     assert sev[("REQ-NF-001", "requirement.modality_mismatch")] == "warning"
+
+
+def test_must_never_is_not_must(tmp_path):
+    q = "Seats must never be removed."
+    assert _mismatch(_check(tmp_path / "a", q, "must")[0]) == ["requirement.modality_mismatch"]
+    assert _mismatch(_check(tmp_path / "b", q, "must_not")[0]) == []
