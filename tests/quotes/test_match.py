@@ -38,3 +38,12 @@ def test_fold_maps_every_index_and_end():
     assert len(mapping) == len(folded) + 1
     assert mapping[0] == 0 and mapping[-1] == len("a  “b”…")
     assert mapping[1] == 1  # collapsed whitespace maps to the first space
+
+
+def test_quote_must_align_to_word_and_number_boundaries():
+    assert find_quote("Minimum seats: 25", "Minimum seats: 2") is None
+    assert find_quote("two seats", "seat") is None
+    assert find_quote("Pay within 14 days.", "within 14 days.") is not None
+    hay = "a 2 and a 25"
+    assert find_quote(hay, "a 2") == (0, 3)
+    assert find_quote("a 25 and a 2", "a 2") == (9, 12)  # skips the earlier non-aligned occurrence

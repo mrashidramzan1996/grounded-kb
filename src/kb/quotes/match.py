@@ -31,12 +31,21 @@ def fold(text: str) -> tuple[str, list[int]]:
 
 
 def find_quote(haystack: str, quote: str) -> tuple[int, int] | None:
-    """Original [start, end) of `quote` inside `haystack`, or None."""
+    """Original [start, end) of `quote` inside `haystack`, or None.
+
+    A match must not start inside a word or number (when the quote starts with a letter or digit) nor end inside one
+    (when it ends with one); later occurrences are tried.
+    """
     needle = fold(quote)[0].strip()
     if not needle:
         return None
     folded, mapping = fold(haystack)
     at = folded.find(needle)
-    if at < 0:
-        return None
-    return mapping[at], mapping[at + len(needle) - 1] + 1
+    while at >= 0:
+        end = at + len(needle)
+        starts_ok = not (needle[0].isalnum() and at > 0 and folded[at - 1].isalnum())
+        ends_ok = not (needle[-1].isalnum() and end < len(folded) and folded[end].isalnum())
+        if starts_ok and ends_ok:
+            return mapping[at], mapping[end - 1] + 1
+        at = folded.find(needle, at + 1)
+    return None

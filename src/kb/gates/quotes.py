@@ -11,7 +11,9 @@ from kb.textfmt import inline_code
 
 MAX_QUOTES_PER_CLAIM = 5
 _NUMBER = re.compile(r"\d[\d,.]*")
-_ID_LIKE = re.compile(r"\b[A-Z]+(?:-[A-Z]+)*-\d+\b|\bseg-\d+\b")  # REQ-F-001, ADR-0002, seg-03: not numbers
+MIN_QUOTE_CHARS = 12  # non-space characters: shorter quotes match almost anywhere
+# kb's own ids (REQ-F-001, ADR-0002, seg-03) are not numbers; "ISO-27001" is
+_ID_LIKE = re.compile(r"\b(?:REQ-F|REQ-NF|FEAT|ADR|INV|EXCL|COMP|TERM)-\d+\b|\bseg-\d+\b")
 
 
 def numbers(text: str) -> set[str]:
@@ -84,17 +86,26 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
             continue
         if len(ev.quotes) > MAX_QUOTES_PER_CLAIM:
             issues.append(Issue("quote.too_many", f"{rid} has {len(ev.quotes)} quotes; at most {MAX_QUOTES_PER_CLAIM} are allowed", path=path, record=rid))
+        unfound: list[Issue] = []
+        found = 0
         for q in ev.quotes:
+            if len("".join(q.text.split())) < MIN_QUOTE_CHARS:
+                issues.append(Issue("quote.too_short", f"{rid}: quote shorter than {MIN_QUOTE_CHARS} characters: {inline_code(q.text)}", path=path, record=rid))
+                continue
             src, _, seg_id = q.source.partition("#")
             seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
             if src not in repo.sources or seg is None:
                 continue  # id_gate reports the missing source or segment
-            if find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is None:
-                if rid in live:
-                    issues.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
-                else:  # a superseded or rejected record stays as it was, even when its document moved on
-                    issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
-                                        "warning", path, rid))
+            if find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is not None:
+                found += 1
+            elif rid in live:
+                unfound.append(Issue("quote.not_found", f"{rid}: quote not found in {q.source}: {inline_code(q.text)}", path=path, record=rid))
+            else:  # a superseded or rejected record stays as it was, even when its document moved on
+                issues.append(Issue("quote.not_found", f"{rid}: quote no longer in the current source ({q.source}); the record is superseded or rejected",
+                                    "warning", path, rid))
+        if unfound and ev.mode == "any" and found:  # one grounded quote is enough; the others are only noted
+            unfound = [Issue(i.code, i.message, "warning", i.path, i.record) for i in unfound]
+        issues.extend(unfound)
         grounded = set().union(*(numbers(q.text) for q in ev.quotes))
         missing = sorted(numbers(_claimed_text(rec)) - grounded)
         if missing:

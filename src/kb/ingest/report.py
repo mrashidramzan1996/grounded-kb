@@ -174,6 +174,12 @@ def gate_drafts(root: Path, config: KbConfig, config_at_base: KbConfig | None, h
         for rid, rec in sorted(head.records.items())
         if rid in ids and isinstance(rec, (Decision, Invariant)) and rec.evidence is None
     ]
+    # a number the quotes do not carry is an error in a record drafted in this range
+    mine = [
+        Issue(i.code, i.message, "error", i.path, i.record)
+        if i.code == "statement.number_not_in_quote" and getattr(head.records.get(i.record), "drafted_by", None) else i
+        for i in mine
+    ]
     caused = new_since([i for i in issues if i.severity == "error" and i not in mine and not i.code.startswith("source.")], at_base)
     return DraftGates(issues, drafted, ids, mine, caused)
 

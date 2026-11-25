@@ -98,7 +98,9 @@ Decision (`ADR-0001.md`): front matter with `id`, `title`, `governs` (module or 
 
 Invariant (`INV-001.md`): front matter with `id`, `statement`, `governs`, `evidence`, optional `tests`, `supersedes`; optional body. Like a decision, an accepted invariant is never edited; supersede it.
 
-A decision or invariant drafted from documents (`drafted_by` set) must quote them in `evidence`; without it `kb check` reports the error `evidence.missing`. One a person records without a document is a warning. Every number in a statement, or in a decision's title and body, must appear in one of its quotes.
+A decision or invariant drafted from documents (`drafted_by` set) must quote them in `evidence`; without it `kb check` reports the error `evidence.missing`. One a person records without a document is a warning. Every number in a statement, or in a decision's title and body, must appear in one of its quotes. For a record drafted in the current ingest or redraft range, a missing number is an error (`statement.number_not_in_quote`), otherwise a warning. A number includes ISO-style names such as `ISO-27001`.
+
+Quotes must be verbatim and aligned to word and number boundaries: `seat` does not match inside `seats`, nor `2` inside `25`. A quote shorter than 12 non-space characters is rejected (`quote.too_short`). `evidence.mode` is `all` by default (every quote must be found); with `mode: any` an unfound quote is only a warning (`quote.not_found`) while at least one quote is found, and an error when none is.
 
 Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/features/` and `kb/glossary/`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
 

@@ -399,3 +399,11 @@ def test_recorded_base_that_is_not_an_ancestor_is_ignored(md_repo_ingested):
     git(md_repo_ingested, "checkout", "-q", "main")
     head = git(md_repo_ingested, "rev-parse", "HEAD").strip()
     assert f"nothing drafted since {head}" in invoke(md_repo_ingested, "ingest", "--report").stderr
+
+
+def test_drafted_number_mismatch_is_rejected_in_report(acme_repo_ingested, fixtures):
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    p = acme_repo_ingested / "kb/invariants/INV-001.md"
+    p.write_text(p.read_text().replace("A session expires after 30 minutes without activity.\n", "A session expires after 45 minutes without activity.\n", 1))
+    r = ingest_report(acme_repo_ingested, base="HEAD")
+    assert ("INV-001", "statement.number_not_in_quote") in _pairs(r.rejected) and "INV-001" not in r.accepted

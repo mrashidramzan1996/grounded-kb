@@ -128,3 +128,37 @@ def test_feature_body_numbers_checked(valid_ctx_with):
 def test_ids_in_claims_are_not_numbers(valid_ctx_with):
     ctx = valid_ctx_with(set_claim("FEAT-001", 0, claim="Implements REQ-F-001 in seg-03."))
     assert _claim_issues(ctx) == []
+
+
+def _quotes(*texts):
+    return {"quotes": [{"source": "SRC-pricing-spec-v3#seg-03", "text": t} for t in texts]}
+
+
+def test_short_quote_rejected(valid_ctx_with):
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence=_quotes("s")))
+    assert "quote.too_short" in codes(run_gates(ctx, [quote_gate]))
+
+
+def test_iso_number_checked(acme_kb_with):
+    ctx = acme_kb_with(req("REQ-NF-004", "Comply with ISO-27001.", quote=(SPEC, "5. Non-functional requirements", "The checkout page must be fast.")))
+    assert "statement.number_not_in_quote" in codes(run_gates(ctx, [quote_gate]))
+
+
+def test_mode_any_allows_one_unfound_quote(valid_ctx_with):
+    ev = _quotes("Refunds are always given.")
+    ev["quotes"].append({"source": "SRC-pricing-spec-v3#seg-03", "text": "Refunds are always given, never."})
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence=ev))
+    assert [i.severity for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"] == ["error", "error"]
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"mode": "any", "quotes": [*_orig_quote(valid_ctx_with), *ev["quotes"]]}))
+    found = [i for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"]
+    assert found and all(i.severity == "warning" for i in found)
+
+
+def test_mode_any_none_found_is_error(valid_ctx_with):
+    ctx = valid_ctx_with(set_field("REQ-F-001", evidence={"mode": "any", **_quotes("Refunds are always given.")}))
+    assert [i.severity for i in run_gates(ctx, [quote_gate]) if i.code == "quote.not_found"] == ["error"]
+
+
+def _orig_quote(valid_ctx_with):
+    rec = valid_ctx_with().repo.records["REQ-F-001"]
+    return [q.model_dump() for q in rec.evidence.quotes]
