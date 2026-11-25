@@ -102,7 +102,24 @@ def test_branch_tip_looks_only_among_branches(tmp_path):
     assert branch_tip(repo, "nope") is None and branch_tip(repo, "-x") is None
     assert branch_tip(repo, "HEAD") is None and branch_tip(repo, main) is None  # not branches
     git(repo, "tag", "v1")
-    assert branch_tip(repo, "v1") is None  # a tag is not a branch
+    with pytest.raises(GitError, match="a tag named 'v1'"):  # a tag is not a branch, nor a guess
+        branch_tip(repo, "v1")
+    git(repo, "tag", "refs/heads/feature")  # no local feature: git rev-parse refs/heads/feature would find the tag
+    with pytest.raises(GitError, match="a tag named 'refs/heads/feature'"):
+        branch_tip(repo, "refs/heads/feature")
+    git(repo, "branch", "feature")
+    git(repo, "update-ref", "refs/remotes/origin/feature", main)
+    with pytest.raises(GitError, match="a tag named 'refs/heads/feature'"):
+        branch_tip(repo, "feature")
+    git(repo, "tag", "-d", "refs/heads/feature")
+    assert branch_tip(repo, "feature") == ("feature", main)  # local and origin's agree
+    (repo / "b.txt").write_text("2")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "b")
+    git(repo, "branch", "-f", "feature", "HEAD")
+    with pytest.raises(GitError, match="ambiguous: refs/heads/feature and refs/remotes/origin/feature"):
+        branch_tip(repo, "feature")
+    assert branch_tip(repo, "refs/heads/feature")[0] == "refs/heads/feature"
     git(repo, "tag", "origin/release")
     with pytest.raises(GitError, match="a tag named 'origin/release' shadows the branch"):
         branch_tip(repo, "release")  # found as origin/release, which the tag shadows

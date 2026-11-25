@@ -9,7 +9,7 @@ from kb.config.load import load_config
 from kb.gitfiles import (
     GitError,
     branch_tip,
-    find_default_branch,
+    default_branch_tip,
     head_commit,
     merge_base_of,
 )
@@ -45,8 +45,8 @@ def _bases(root: Path, base: str | None, all_: bool) -> tuple[Branch | None, str
     only (a tag of the same name is a GitError) and everything after uses its commit, never the name."""
     if base:
         branch = _branch(root, base)
-    elif not all_ and (default := find_default_branch(root)) is not None:
-        branch = _branch(root, default)
+    elif not all_ and (default := default_branch_tip(root)) is not None:
+        branch = default
     else:
         return None, None
     return branch, merge_base_of(root, branch[1], branch[0])
@@ -63,11 +63,11 @@ def _policy_branch(root: Path, base_branch: Branch | None, pr: PullRequest | Non
         if found is None:
             raise GitError(f"cannot find the pull request's base branch {pr.base!r} to read the approval policy; fetch it")
         return found
-    branch = find_default_branch(root)
+    branch = default_branch_tip(root)
     if branch is None:
         raise GitError("a pull request is checked but there is no base branch to read the approval policy from; "
                        "fetch the default branch or pass --base")
-    return _branch(root, branch)
+    return branch
 
 
 def verdict_issues(verdicts: list[Verdict], repo: KbRepo) -> list[Issue]:

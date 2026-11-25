@@ -48,20 +48,47 @@ def _ref_exists(root: Path, ref: str) -> bool:
     return _git(root, "rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
-def find_default_branch(root: Path) -> str | None:
-    """The default branch as a ref name that resolves (the local branch, else origin/<name>), or None when
-    neither origin/HEAD's target, main nor master exists."""
+def exact_ref(root: Path, full: str) -> str | None:
+    """The object id ref `full` (a full name: refs/...) points to, looked up by that exact name. Never git's name
+    lookup, which would fall through from a missing refs/heads/main to a tag named refs/heads/main."""
+    if not full.startswith("refs/"):
+        return None
+    r = _git(root, "show-ref", "--verify", "--hash", full, check=False)
+    out = r.stdout.decode().strip()
+    return out if r.returncode == 0 and out else None
+
+
+def _default_branch_ref(root: Path) -> str | None:
+    """The default branch's full ref: refs/heads/<name>, else refs/remotes/origin/<name>, for origin/HEAD's target,
+    then main, then master; None when none exists."""
     r = _git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False)
     candidates = []
     if r.returncode == 0 and r.stdout.strip():
         candidates.append(r.stdout.decode().strip().removeprefix("origin/"))
     candidates += ["main", "master"]
     for name in candidates:
-        if _ref_exists(root, f"refs/heads/{name}"):
-            return name
-        if _ref_exists(root, f"refs/remotes/origin/{name}"):
-            return f"origin/{name}"
+        for full in (f"refs/heads/{name}", f"refs/remotes/origin/{name}"):
+            if exact_ref(root, full) is not None:
+                return full
     return None
+
+
+def _shown(full: str) -> str:
+    """A branch's full ref as people name it: "main" for refs/heads/main, "origin/main" for refs/remotes/origin/main."""
+    return full.removeprefix("refs/heads/").removeprefix("refs/remotes/")
+
+
+def find_default_branch(root: Path) -> str | None:
+    """The default branch as a ref name that resolves (the local branch, else origin/<name>), or None when
+    neither origin/HEAD's target, main nor master exists."""
+    full = _default_branch_ref(root)
+    return _shown(full) if full is not None else None
+
+
+def default_branch_tip(root: Path) -> tuple[str, str] | None:
+    """branch_tip for the default branch, from its full ref (never looked up again by its short name)."""
+    full = _default_branch_ref(root)
+    return branch_tip(root, full, shown=_shown(full)) if full is not None else None
 
 
 def default_branch(root: Path) -> str:
@@ -109,26 +136,33 @@ def require_commit(root: Path) -> None:
 _BRANCH_PREFIXES = ("refs/heads/", "refs/remotes/", "refs/remotes/origin/")
 
 
-def branch_tip(root: Path, name: str) -> tuple[str, str] | None:
-    """(the branch as shown, its tip commit) for branch `name`, looked up only among branches: refs/heads/<name>, then
-    refs/remotes/<name>, then refs/remotes/origin/<name>; a full ref under refs/heads/ or refs/remotes/ is taken as
-    given. None when no such branch exists. A tag of the same short name is a GitError: git resolves refs/tags/<name>
-    before refs/remotes/<name>, so whoever can push a tag could otherwise choose the commit a short name means."""
+def branch_tip(root: Path, name: str, *, shown: str | None = None) -> tuple[str, str] | None:
+    """(the branch as shown, its tip commit) for branch `name`, looked up only among branches and by exact full ref:
+    refs/heads/<name>, refs/remotes/<name>, refs/remotes/origin/<name>; a full ref under refs/heads/ or refs/remotes/
+    is the only candidate (shown as given, or as `shown`). None when no candidate exists. GitError (never a guess):
+    - a tag named <name>, like a candidate ref or like the shown name: git resolves refs/tags/<name> before
+      refs/remotes/<name> (and a missing refs/heads/main falls through to the tag refs/tags/refs/heads/main), so
+      whoever can push a tag could otherwise choose the commit the name means in git commands and scripts;
+    - candidates at different commits (a local main behind or ahead of origin/main, a local branch named
+      origin/main): which one the base is would be a guess."""
     if not name or name.startswith("-"):
         return None
-    if name.startswith(("refs/heads/", "refs/remotes/")):
-        tip = rev_parse(root, name)
-        return (name, tip) if tip is not None else None
-    for prefix in _BRANCH_PREFIXES:
-        if (tip := rev_parse(root, prefix + name)) is None:
-            continue
-        shown = (prefix + name).removeprefix("refs/heads/").removeprefix("refs/remotes/")
-        for short in dict.fromkeys((name, shown)):  # "main" found as origin/main: neither name may be a tag
-            if tag_exists(root, short):
-                raise GitError(f"a tag named {short!r} shadows the branch; delete it or pass a full ref "
-                               "(refs/heads/<branch> or refs/remotes/<remote>/<branch>)")
-        return shown, tip
-    return None
+    full_given = name.startswith(("refs/heads/", "refs/remotes/"))
+    candidates = [name] if full_given else [prefix + name for prefix in _BRANCH_PREFIXES]
+    found = [(c, oid) for c in candidates if (oid := exact_ref(root, c)) is not None]
+    shown = shown or (name if full_given or not found else _shown(found[0][0]))
+    for tag in dict.fromkeys((name, *candidates, shown)):
+        if exact_ref(root, f"refs/tags/{tag}") is not None:
+            raise GitError(f"a tag named {tag!r} shadows the branch; delete it or pass a full ref "
+                           "(refs/heads/<branch> or refs/remotes/<remote>/<branch>)")
+    if not found:
+        return None
+    first, oid = found[0]
+    if other := next((c for c, o in found if o != oid), None):
+        raise GitError(f"the base branch {name!r} is ambiguous: {first} and {other} point to different commits; "
+                       "pass a full ref")
+    tip = rev_parse(root, oid)  # a full object id: peeled to its commit, no name lookup
+    return (shown, tip) if tip is not None else None
 
 
 def merge_base_of(root: Path, commit: str, shown: str) -> str:

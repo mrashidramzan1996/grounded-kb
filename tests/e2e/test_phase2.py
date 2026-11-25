@@ -342,3 +342,51 @@ def test_renaming_codeowners_away_needs_decision_approval(repo, tmp_path):
     assert ".github/CODEOWNERS changed" in required["@acme/tech-leads"]
     assert "changes services/billing/notes.py" in required["@acme/billing"]
     assert "missing_owner_approval" in r.stdout
+
+
+def test_tag_named_like_a_full_branch_ref_is_refused(repo, tmp_path):
+    """A CI checkout has refs/remotes/origin/main and no local main. `git rev-parse refs/heads/main` then falls through
+    to refs/tags/refs/heads/main, a tag the PR author can push: branch refs are looked up by exact full name, and a
+    tag named like any candidate ref is exit 2. Never the tag's commit."""
+    _loosened_pr(repo)
+    git(repo, "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+    tip = git(repo, "rev-parse", "refs/remotes/origin/main").strip()
+    git(repo, "branch", "-q", "-D", "main")
+    unapproved = f"local:{forge_file(tmp_path, repo, teams=TEAMS)}"
+
+    for tag in ("refs/heads/main", "refs/remotes/origin/main"):
+        git(repo, "tag", tag, "HEAD")
+        for base in ("main", tag):
+            r = invoke(repo, "verify", "--base", base, "--forge", unapproved)
+            assert r.exit_code == 2, (tag, base, r.output)
+            assert f"a tag named '{tag}' shadows the branch" in r.stderr, (tag, base)
+        git(repo, "tag", "-d", tag)
+
+    git(repo, "tag", "refs/heads/main", "HEAD")  # a tag that names no candidate of origin/main: the real tip decides
+    r = invoke(repo, "verify", "--base", "origin/main", "--forge", unapproved, "--format", "markdown")
+    assert r.exit_code == 1, r.output
+    assert f"Policy from base origin/main at {tip[:7]}." in r.stdout
+    assert "requirement REQ-F-001 changed" in _approvals(r.stdout)["@acme/product"]
+
+
+def test_local_branch_shadowing_the_remote_base_is_refused(repo, tmp_path):
+    """A short name that more than one branch answers to (a local main and origin/main, or a local branch named
+    origin/main) at different commits is ambiguous: exit 2, naming both refs. At the same commit it is not."""
+    _loosened_pr(repo)
+    git(repo, "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+    unapproved = f"local:{forge_file(tmp_path, repo, teams=TEAMS)}"
+    r = invoke(repo, "verify", "--base", "main", "--forge", unapproved)
+    assert r.exit_code == 1, r.output  # local main and origin/main agree
+
+    git(repo, "branch", "-f", "main", "HEAD")  # local main moved to the PR head
+    r = invoke(repo, "verify", "--base", "main", "--forge", unapproved)
+    assert r.exit_code == 2, r.output
+    assert "refs/heads/main" in r.stderr and "refs/remotes/origin/main" in r.stderr and "ambiguous" in r.stderr
+    git(repo, "branch", "-f", "main", "refs/remotes/origin/main")
+
+    git(repo, "branch", "origin/main", "HEAD")  # refs/heads/origin/main
+    r = invoke(repo, "verify", "--base", "origin/main", "--forge", unapproved)
+    assert r.exit_code == 2, r.output
+    assert "refs/heads/origin/main" in r.stderr and "refs/remotes/origin/main" in r.stderr
+    r = invoke(repo, "verify", "--base", "refs/remotes/origin/main", "--forge", unapproved)
+    assert r.exit_code == 1, r.output  # the full ref is not ambiguous
