@@ -36,6 +36,9 @@ class Finding:
     related: tuple[str, ...]
     note: str
     kind_hint: str | None = None  # an omission's: the judge's requirement/decision/invariant/exclusion, or entity/relation
+    # an entity omission's names (one tuple), a relation omission's source and target names (two): what a TERM added
+    # for it must be named by (kb eval decide)
+    ends: tuple[tuple[str, ...], ...] = ()
 
 
 def _overlap(a: list, b: list) -> bool:
@@ -48,8 +51,13 @@ def _finding(item: dict, v: dict, b_spans: list[list], s_spans: list[list], b_na
     related = tuple(v.get("related", ()))
 
     def make(fkind: str, severity: str, supporters: int, kind_hint: str | None = None, text_note: str = note) -> Finding:
+        ends: tuple[tuple[str, ...], ...] = ()
+        if kind == "entity_missing":
+            ends = (tuple(item.get("names", ())),)
+        elif kind == "relation_missing":
+            ends = tuple(tuple(e) for e in item.get("ends", ()))
         return Finding(item["public"], item["id"], fkind, item["ref"], item["text"], severity, supporters, related,
-                       text_note, kind_hint)
+                       text_note, kind_hint, ends)
 
     if kind in YES_NO:
         noes = [q for q in YES_NO[kind] if v.get(q) == "no"]
@@ -122,7 +130,7 @@ def fingerprint(repo: KbRepo, skip: Iterable[str] = ()) -> str:
 
 
 def finding_dict(f: Finding) -> dict:
-    return asdict(f) | {"related": list(f.related)}
+    return asdict(f) | {"related": list(f.related), "ends": [list(e) for e in f.ends]}
 
 
 def summary(commit: str, fp: str, salt: str, coverage: dict, agreement: dict, findings: list[Finding], judged_at: str) -> dict:

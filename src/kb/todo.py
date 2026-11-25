@@ -17,13 +17,12 @@ from kb.config.schema import KbConfig
 from kb.eval import EvalError
 from kb.eval.decisions import (
     CATEGORIES,
-    DECISIONS,
     EvalStatus,
     SummaryFinding,
+    decisions_of,
     eval_status,
     finding_kind,
     finding_records,
-    read_decisions,
 )
 from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, RUN_B, _run_b_files
 from kb.eval.judge import JUDGE_ITEMS
@@ -485,21 +484,13 @@ def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pend
 
 # --- the extraction evaluation -------------------------------------------------------------------------------------
 
-def _eval_status(root: Path, repo: KbRepo) -> tuple[EvalStatus | None, list[DoItem]]:
-    """(the evaluation's state, a fix item when kb/eval/decisions.yaml is unusable). An unusable summary counts as
-    none: the evaluation starts over and `kb eval report --write` rewrites it. An unusable decisions file is the
-    agent's to repair (or the person's to restore from git) before anything else of the evaluation."""
+def _eval_status(root: Path, repo: KbRepo) -> EvalStatus | None:
+    """The evaluation's state; an unusable summary counts as none (the evaluation starts over and `kb eval report
+    --write` rewrites it). Decisions that do not stand are kb check errors (eval.decisions_invalid): fix items."""
     try:
-        read_decisions(root)
-    except (EvalError, UnsafePath, OSError) as e:
-        why = str(e) if isinstance(e, EvalError) else f"{DECISIONS} cannot be read"
-        return None, [DoItem(f"fix:eval.decisions_invalid:{DECISIONS}", "eval.decisions_invalid",
-                             f"{why}; repair it (`git checkout -- {DECISIONS}` restores the committed one)", None,
-                             DECISIONS, None)]
-    try:
-        return eval_status(root, repo), []
+        return eval_status(root, repo)
     except (EvalError, UnsafePath, OSError):
-        return EvalStatus(None, read_decisions(root), False, []), []
+        return EvalStatus(None, decisions_of(repo)[0], False, [])
 
 
 def _cache_file(root: Path, rel: str) -> bool:
@@ -676,8 +667,7 @@ def build_todo(root: Path) -> Todo:
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head, stale) + _fix_items(issues, repo, outdated, broken, stale) + _triage_items(issues)
-    status, broken_decisions = _eval_status(root, repo)
-    do += broken_decisions
+    status = _eval_status(root, repo)
     if not do and dirty:
         do.append(COMMIT)
     findings = [_finding_ask(f, repo) for f in status.open] if status is not None and status.fresh else []

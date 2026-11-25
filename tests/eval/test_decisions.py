@@ -1,5 +1,6 @@
 """`kb eval decide`: a person's decision on a finding, validated and recorded in kb/eval/decisions.yaml."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -72,7 +73,9 @@ def test_decide_added_requires_quoting_record(tmp_path):
     data = load_yaml_strict((root / DECISIONS).read_text())
     assert data == {"decisions": [{
         "finding": fid, "canonical": f"S:{key_of(root, INVOICES)}", "sentence_key": key_of(root, INVOICES),
-        "decision": "added", "record": "REQ-F-003", "reason": None, "by": "@pm", "date": "2026-11-26",
+        "decision": "added", "record": "REQ-F-003",
+        "record_sha256": hashlib.sha256((root / "kb/requirements/REQ-F-003.yaml").read_bytes()).hexdigest(),
+        "reason": None, "by": "@pm", "date": "2026-11-26",
     }]}
     # one decision per finding
     assert decide(root, fid, "--as", "not_a_rule", "--reason", "A note.", "--by", "@pm").exit_code == 2
@@ -221,3 +224,39 @@ def test_eval_dir_changes_need_intent_approvers(tmp_path):
     repo = make_git_repo(None, tmp_path / "init")
     init_repo(repo)
     assert "# /kb/eval/ " in (repo / "CODEOWNERS").read_text()
+
+
+def test_relation_added_must_join_the_findings_ends(tmp_path):
+    root, findings = evaluated(tmp_path)
+    seat, relation = findings["E:seat"]["id"], next(f["id"] for c, f in findings.items() if c.startswith("N:"))
+    put(root, "kb/glossary/TERM-seat.yaml",
+        "id: TERM-seat\nname: seat\naliases: [seats]\ndefinition: A paid place.\nkind: concept\nevidence:\n  quotes:\n"
+        "  - source: SRC-spec#seg-02\n    text: Each account buys seats for its users.\n")
+    put(root, "kb/glossary/TERM-user.yaml",
+        "id: TERM-user\nname: user\naliases: [users]\ndefinition: A person.\nkind: actor\nevidence:\n  quotes:\n"
+        "  - source: SRC-spec#seg-02\n    text: Each account buys seats for its users.\n")
+    account = (root / "kb/glossary/TERM-account.yaml").read_text()
+    rel = "- type: uses\n  target: {}\n  quote:\n    source: SRC-spec#seg-02\n    text: Each account buys seats for its users.\n"
+    # named in the passage, but not the finding's target (seat): not this relation
+    (root / "kb/glossary/TERM-account.yaml").write_text(account + rel.format("TERM-user"))
+    r = decide(root, relation, "--as", "added", "--record", "TERM-account", "--by", "@pm")
+    assert r.exit_code == 2 and "join" in r.output, r.output
+    # the entity first (an undecided edit to TERM-account would make the evaluation stale), then its relation
+    (root / "kb/glossary/TERM-user.yaml").unlink()
+    (root / "kb/glossary/TERM-account.yaml").write_text(account)
+    assert decide(root, seat, "--as", "added", "--record", "TERM-seat", "--by", "@pm").exit_code == 0
+    (root / "kb/glossary/TERM-account.yaml").write_text(account + rel.format("TERM-seat"))
+    r = decide(root, relation, "--as", "added", "--record", "TERM-account", "--by", "@pm")
+    assert r.exit_code == 0, r.output
+
+
+def test_entity_added_needs_a_quote_naming_it(tmp_path):
+    root, findings = evaluated(tmp_path)
+    seat = findings["E:seat"]["id"]
+    term = ("id: TERM-seat\nname: seat\naliases: [seats]\ndefinition: A paid place.\nkind: concept\nevidence:\n"
+            "  quotes:\n  - source: SRC-spec#seg-02\n    text: {}\n")
+    put(root, "kb/glossary/TERM-seat.yaml", term.format("An account is a customer of Acme."))
+    r = decide(root, seat, "--as", "added", "--record", "TERM-seat", "--by", "@pm")
+    assert r.exit_code == 2 and "quote" in r.output, r.output
+    put(root, "kb/glossary/TERM-seat.yaml", term.format("Each account buys seats for its users."))
+    assert decide(root, seat, "--as", "added", "--record", "TERM-seat", "--by", "@pm").exit_code == 0

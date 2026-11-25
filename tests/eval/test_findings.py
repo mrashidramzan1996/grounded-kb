@@ -177,7 +177,8 @@ def test_report_write_produces_summary(tmp_path):
     from kb.eval.judge import validate_verdicts
 
     verdicts, _ = validate_verdicts(root, repo)
-    expected = [dataclasses.asdict(f) | {"related": list(f.related)} for f in build_findings(state.items, verdicts, state.alignment)]
+    expected = [dataclasses.asdict(f) | {"related": list(f.related), "ends": [list(e) for e in f.ends]}
+                for f in build_findings(state.items, verdicts, state.alignment)]
     assert list(summary) == ["commit", "fingerprint", "salt", "coverage", "agreement", "open_findings", "judged_at"]
     assert summary["commit"] == (root / EVAL_BASE).read_text().strip()
     assert summary["fingerprint"] == fingerprint(repo)
@@ -191,7 +192,11 @@ def test_report_write_produces_summary(tmp_path):
     assert list(summary["open_findings"][0])[:2] == ["id", "canonical"]
     # the report names findings by public id only
     assert "R:REQ-F-001" not in out and f"`{public_id('R:REQ-F-001', read_salt(root))}`" in out
-    assert Finding(**{**expected[0], "related": tuple(expected[0]["related"])}) in build_findings(state.items, verdicts, state.alignment)
+    assert Finding(**{**expected[0], "related": tuple(expected[0]["related"]),
+                      "ends": tuple(tuple(e) for e in expected[0]["ends"])}) in build_findings(state.items, verdicts, state.alignment)
+    # an entity omission carries its names, a relation omission the names of both ends
+    assert next(f for f in expected if f["canonical"] == "E:seat")["ends"] == [["seat", "seats"]]
+    assert next(f for f in expected if f["canonical"].startswith("N:"))["ends"] == [["account"], ["seat", "seats"]]
     datetime.date.fromisoformat(summary["judged_at"])
     # the summary is a known kb file, and writing it does not change the fingerprint
     assert not [i for i in repo.errors if i.code == "schema.unknown_file"]

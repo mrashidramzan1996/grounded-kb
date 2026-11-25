@@ -27,7 +27,8 @@ from kb.sources.sentences import sentence_key, sentences
 from kb.yamlio import dump_yaml, load_yaml_strict
 
 INVOICES = "Invoices must be paid within 30 days."
-DOC = f"# Seats\n\nA seat costs 5 EUR. {INVOICES}\n"
+LISTED = "Seats are listed on the account page."
+DOC = f"# Seats\n\nA seat costs 5 EUR. {INVOICES} {LISTED}\n"
 RUN_B_REQ = (
     f"id: B-REQ-F-001\nstatement: Invoices are due in 30 days.\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n"
     f"    text: '{INVOICES}'\nmodules: [MOD-a]\n"
@@ -226,5 +227,120 @@ def test_unusable_decisions_file_is_a_fix_item(tmp_path):
     t = todo_json(root)
     assert do_ids(t) == ["fix:eval.decisions_invalid:kb/eval/decisions.yaml"] and not t["state"]["clean"]
     assert "freeze:v1" not in ask_ids(t)
-    assert "eval.decisions_invalid" in invoke(root, "check").output  # a warning: kb check still passes
-    assert invoke(root, "check").exit_code == 0
+    assert "error eval.decisions_invalid" in invoke(root, "check").output
+    assert invoke(root, "check", "--strict").exit_code == 1
+
+
+# --- fix round 1 --------------------------------------------------------------------------------------------------
+
+def b_finding(fid: str, text: str) -> Finding:
+    return Finding(fid, "B:B-REQ-F-001", "omission", "SRC-n#seg-01", text, "medium", 2, (), "", "requirement")
+
+
+def unfaithful(fid: str, canonical: str = "R:REQ-F-001") -> Finding:
+    return Finding(fid, canonical, "unfaithful", "SRC-n#seg-01", "A seat costs 5 EUR.", "high", 1, (), "no: same_actor")
+
+
+def decide(root: Path, *args: str):
+    return invoke(root, "eval", "decide", *args)
+
+
+def test_run_b_decision_does_not_carry_to_another_sentence(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (b_finding("F-1111111111", LISTED),))
+    ok(root, "eval", "decide", "F-1111111111", "--as", "not_a_rule", "--reason", "Navigation, not a rule.", "--by", "@alice")
+    commit(root, "decided")
+    # a second cycle: run B numbers from 001 again, and B-REQ-F-001 is now another sentence
+    evaluate(root, (b_finding("F-2222222222", INVOICES),))
+    t = todo_json(root)
+    assert "finding:F-2222222222" in ask_ids(t) and t["state"]["blocking_asks"] == 1 and not t["state"]["clean"]
+    # the same sentence again, under whatever id: settled by its sentence key
+    evaluate(root, (b_finding("F-3333333333", LISTED),))
+    assert "finding:F-3333333333" not in ask_ids(todo_json(root))
+
+
+def test_correct_stops_applying_when_the_record_changes(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (unfaithful("F-1111111111"),))
+    ok(root, "eval", "decide", "F-1111111111", "--as", "correct", "--by", "@alice")
+    commit(root, "decided")
+    evaluate(root, (unfaithful("F-2222222222"),))  # the record is as it was: the decision still applies
+    assert "finding:F-2222222222" not in ask_ids(todo_json(root))
+    reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
+    put(root, "kb/requirements/REQ-F-001.yaml", reworded)
+    commit(root, "reworded")
+    evaluate(root, (unfaithful("F-3333333333"),))
+    t = todo_json(root)
+    assert "finding:F-3333333333" in ask_ids(t) and t["state"]["blocking_asks"] == 1
+
+
+def test_inconsistent_decisions_are_dropped(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root)
+    key = key_of(root, INVOICES)
+    base = {"canonical": f"S:{key}", "sentence_key": key, "record": None, "reason": "A note.", "by": "@alice",
+            "date": "2026-11-26"}
+    entries = [
+        {"finding": "categories", "canonical": "categories", "sentence_key": key, "decision": "not_a_rule",
+         "record": None, "reason": "None apply.", "by": "@alice", "date": "2026-11-26"},  # categories carries no key
+        base | {"finding": "F-aaaaaaaaaa", "decision": "correct", "reason": None},  # not a decision for an omission
+        base | {"finding": "F-bbbbbbbbbb", "decision": "added", "record": "REQ-F-404"},  # no such record
+        base | {"finding": "F-cccccccccc", "decision": "not_a_rule", "by": "@jöhn"},  # not an ASCII handle
+        base | {"finding": "F-dddddddddd", "decision": "not_a_rule", "reason": "# A heading"},  # not plain text
+        base | {"finding": "F-eeeeeeeeee", "decision": "not_a_rule", "sentence_key": "0" * 12},  # not the S finding's key
+    ]
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": entries}))
+    commit(root, "hand-written")
+    out = invoke(root, "check").output
+    assert out.count("error eval.decisions_invalid") == len(entries)
+    assert "Invoices must be paid" in out and "sentence.uncovered" in out  # silenced by none of them
+    assert f"S:{key}" not in out and key not in out  # canonical ids and keys are not echoed
+    from kb.eval.decisions import decided_keys
+
+    assert decided_keys(root) == set()
+    assert "categories" in ask_ids(todo_json(root))
+
+
+def test_decided_record_edit_makes_the_summary_stale(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", INVOICES))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    ok(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    commit(root, "added")
+    assert do_ids(todo_json(root)) == []
+    put(root, "kb/requirements/REQ-F-002.yaml",
+        req_yaml("REQ-F-002", INVOICES).replace(f"statement: '{INVOICES}'", "statement: 'Invoices are due in 30 days.'"))
+    commit(root, "edited after the decision")
+    assert do_ids(todo_json(root)) == ["eval:extract"]
+
+
+def test_added_needs_a_new_record(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    both = req_yaml("REQ-F-001").replace("modules:", f"  - source: SRC-n#seg-01\n    text: '{INVOICES}'\nmodules:")
+    put(root, "kb/requirements/REQ-F-001.yaml", both)  # an existing record made to quote the sentence too
+    r = decide(root, "F-0123456789", "--as", "added", "--record", "REQ-F-001", "--by", "@alice")
+    assert r.exit_code == 2, r.output
+    assert "use a new record, or redraft the existing one and decide --as fixed on its finding" in r.output
+    assert not (root / "kb/eval/decisions.yaml").exists()
+
+
+def test_decide_refuses_a_stale_summary_and_needs_reasons(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    r = decide(root, "F-0123456789", "--as", "product_decision", "--by", "@alice")
+    assert r.exit_code == 2 and "--reason" in r.output
+    put(root, "kb/requirements/REQ-F-003.yaml", req_yaml("REQ-F-003"))  # a change nobody decided
+    r = decide(root, "F-0123456789", "--as", "not_a_rule", "--reason", "Not one.", "--by", "@alice")
+    assert r.exit_code == 2 and "run the evaluation again (`kb todo`)" in r.output
+    assert not (root / "kb/eval/decisions.yaml").exists()
+
+
+def test_fixed_needs_a_finding_about_records(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (unfaithful("F-1111111111", canonical="R:not-a-record"),))
+    reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
+    put(root, "kb/requirements/REQ-F-001.yaml", reworded)
+    r = decide(root, "F-1111111111", "--as", "fixed", "--record", "REQ-F-001", "--by", "@alice")
+    assert r.exit_code == 2, r.output

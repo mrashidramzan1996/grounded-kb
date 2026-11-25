@@ -7,6 +7,7 @@ that sentence after a later `kb eval judge` cycle gives its finding another publ
 """
 
 import datetime
+import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from kb.gates.entities import mentions, names, normalise_name
 from kb.gates.quotes import located_quotes
 from kb.gates.sources import bad_segment_ids
 from kb.gitfiles import GitError, rev_parse
+from kb.graph import entity_key
+from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.ids import ADR_ID, COMP_ID, EXCL_ID, FEAT_ID, INV_ID, REQ_ID, TERM_ID
 from kb.records.lifecycle import live_ids
@@ -77,14 +80,24 @@ class Decision(BaseModel):
     sentence_key: str | None = Field(default=None, pattern=rf"^{_KEY.pattern}$")
     decision: Literal["added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok"]
     record: str | None = Field(default=None, pattern=rf"^{_RECORD_ID.pattern}$")
+    # the sha256 of the record file's bytes when the person decided: of `record`, or (a correct or ok on a record's
+    # finding) of the finding's records (records_sha256). A decision stops applying once they change.
+    record_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reason: str | None = Field(default=None, max_length=MAX_REASON)
-    by: str = Field(max_length=MAX_BY, pattern=r"^@[\w.-]+(/[\w.-]+)?$")
+    by: str = Field(max_length=MAX_BY)
     date: str
 
     @field_validator("date", mode="before")
     @classmethod
     def _date(cls, v):
         return _iso(v)
+
+    @field_validator("by")
+    @classmethod
+    def _handle(cls, v: str) -> str:
+        if not _HANDLE.fullmatch(v):
+            raise ValueError("must look like @handle or @org/team (ASCII)")
+        return v
 
 
 class SummaryFinding(BaseModel):
@@ -102,6 +115,7 @@ class SummaryFinding(BaseModel):
     related: list[str]
     note: str
     kind_hint: Literal["requirement", "decision", "invariant", "exclusion", "entity", "relation"] | None = None
+    ends: list[list[str]] = []  # an entity omission's names; a relation omission's source names and target names
 
 
 class Summary(BaseModel):
@@ -157,16 +171,27 @@ def read_summary(root: Path) -> Summary | None:
     return parse_summary(data)
 
 
-def parse_decisions(data: bytes) -> list[Decision]:
+def _entries(data: bytes) -> list[Decision | str]:
+    """Each entry of the file, as a Decision or why it does not parse. EvalError when the file itself is unusable."""
     doc = _load(data, DECISIONS)
     if not isinstance(doc, dict) or list(doc) != ["decisions"] or not isinstance(doc["decisions"], list):
         raise EvalError(f"{DECISIONS} must be a mapping with one key, `decisions`, holding a list")
-    out = []
-    for n, entry in enumerate(doc["decisions"], 1):
+    out: list[Decision | str] = []
+    for entry in doc["decisions"]:
         try:
             out.append(Decision.model_validate(entry))
         except ValidationError as e:
-            raise EvalError(f"{DECISIONS}: decision {n} is invalid: {inline_code(_errors(e))}") from e
+            out.append(_errors(e))
+    return out
+
+
+def parse_decisions(data: bytes) -> list[Decision]:
+    """Every entry, each well-formed (EvalError on the first that is not): what `kb eval decide` appends to."""
+    out = []
+    for n, entry in enumerate(_entries(data), 1):
+        if isinstance(entry, str):
+            raise EvalError(f"{DECISIONS}: decision {n} is invalid: {inline_code(entry)}")
+        out.append(entry)
     return out
 
 
@@ -184,16 +209,90 @@ def read_decisions(root: Path) -> list[Decision]:
     return parse_decisions(data)
 
 
-def decisions_of(repo: KbRepo) -> tuple[list[Decision], str | None]:
-    """(the decisions kb/eval/decisions.yaml holds in `repo`, why the file is unusable or None). A repository loaded
-    from a ref or the working tree carries the file in `raw`; the gates read it from there."""
+def _invalid(why: str) -> Issue:
+    return Issue("eval.decisions_invalid", why, "error", DECISIONS)
+
+
+def canonical_kind(canonical: str) -> str | None:
+    """The kind of finding a canonical id names (as finding_kind), or None when it names none."""
+    if canonical == CATEGORIES:
+        return "categories"
+    return {"S": "omission", "B": "omission", "E": "entity", "N": "relation", "R": "unfaithful", "T": "unfaithful",
+            "L": "unfaithful", "M": "granularity"}.get(canonical.partition(":")[0] if ":" in canonical else "")
+
+
+def _inconsistency(repo: KbRepo, d: Decision, live: set[str]) -> str | None:
+    """Why `d` cannot stand as a person's decision, or None: what `kb eval decide` would not have written."""
+    kind = canonical_kind(d.canonical)
+    if (d.finding == CATEGORIES) != (d.canonical == CATEGORIES) or kind is None:
+        return "its finding and canonical id do not name one finding"
+    if kind == "categories" and (d.sentence_key or d.record or d.record_sha256):
+        return "`categories` carries no sentence key and no record"
+    if d.decision not in ALLOWED[kind]:
+        return f"`{d.decision}` is not a decision this finding takes"
+    prefix, _, rest = d.canonical.partition(":")
+    if prefix == "S" and d.sentence_key != rest:
+        return "its sentence key is not its finding's"
+    if prefix != "S" and prefix != "B" and d.sentence_key is not None:
+        return "only a sentence's finding carries a sentence key"
+    if d.decision in ("added", "covered"):
+        if d.record is None or d.record not in repo.records or d.record not in live:
+            return "the record it names does not exist or is not live"
+    elif d.decision == "fixed":
+        if d.record is None or d.record not in repo.records:
+            return "the record it names does not exist"
+    elif d.record is not None:
+        return f"`{d.decision}` names no record"
+    if d.decision in _CHANGING and d.record_sha256 is None:
+        return "it has no record_sha256"
+    if d.decision in ("correct", "ok") and d.record_sha256 is None:
+        return "it has no record_sha256"
+    if d.decision in ("not_a_rule", "product_decision") and d.reason is None:
+        return "it has no reason"
+    if d.reason is not None:
+        try:
+            _plain("reason", d.reason, MAX_REASON)
+        except ClarifyError as e:
+            return str(e)
+    return None
+
+
+def check_decisions(repo: KbRepo, entries: list[Decision | str]) -> tuple[list[Decision], list[Issue]]:
+    """(the decisions that stand, an eval.decisions_invalid error per entry that does not: malformed, inconsistent
+    with itself or the knowledge base, or a second decision on one finding). A dropped entry settles nothing."""
+    live = live_ids(repo)
+    out: list[Decision] = []
+    issues: list[Issue] = []
+    seen: set[str] = set()
+    for n, d in enumerate(entries, 1):
+        if isinstance(d, str):
+            why = f"invalid: {inline_code(d)}"
+        elif d.finding in seen:
+            why = f"{_shown_id(d.finding)} is decided twice; only the first counts"
+        else:
+            why = _inconsistency(repo, d, live)
+            if why is not None:
+                why = f"{_shown_id(d.finding)}: {why}"
+        if why is not None:
+            issues.append(_invalid(f"{DECISIONS}: decision {n} is dropped, it settles nothing: {why}"))
+            continue
+        seen.add(d.finding)  # type: ignore[union-attr]
+        out.append(d)  # type: ignore[arg-type]
+    return out, issues
+
+
+def decisions_of(repo: KbRepo) -> tuple[list[Decision], list[Issue]]:
+    """(the decisions kb/eval/decisions.yaml holds in `repo` that stand, an eval.decisions_invalid error per entry
+    that does not, or for the whole file). A repository loaded from a ref or the working tree carries the file in
+    `raw`; the gates read it from there."""
     data = repo.raw.get(DECISIONS)
     if data is None:
-        return [], None
+        return [], []
     try:
-        return parse_decisions(data), None
+        entries = _entries(data)
     except EvalError as e:
-        return [], str(e)
+        return [], [_invalid(f"{e}; no decision in it counts")]
+    return check_decisions(repo, entries)
 
 
 def suppressed_keys(decisions: Iterable[Decision]) -> set[str]:
@@ -201,12 +300,25 @@ def suppressed_keys(decisions: Iterable[Decision]) -> set[str]:
 
 
 def decided_keys(repo_root: Path) -> set[str]:
-    """The sentence keys whose decision is added, covered or not_a_rule: `uncovered()` leaves them out, so a decided
-    sentence stops warning. An unusable decisions file decides nothing (kb check warns about it)."""
-    try:
-        return suppressed_keys(read_decisions(Path(repo_root)))
-    except EvalError:
-        return set()
+    """The sentence keys whose decision (one that stands) is added, covered or not_a_rule: `uncovered()` leaves them
+    out, so a decided sentence stops warning. kb check reports the entries that do not stand."""
+    return suppressed_keys(decisions_of(KbRepo.load(Path(repo_root)))[0])
+
+
+def record_bytes(repo: KbRepo, rid: str) -> bytes | None:
+    return repo.raw.get(repo.paths[rid]) if rid in repo.paths else None
+
+
+def records_sha256(repo: KbRepo, rids: list[str]) -> str:
+    """The sha256 of one record file's bytes; for several, over each id, length and bytes in id order."""
+    if len(rids) == 1:
+        return hashlib.sha256(record_bytes(repo, rids[0]) or b"").hexdigest()
+    h = hashlib.sha256()
+    for rid in sorted(rids):
+        data = record_bytes(repo, rid) or b""
+        h.update(f"{rid} {len(data)}\n".encode())
+        h.update(data)
+    return h.hexdigest()
 
 
 # --- findings in the knowledge base ------------------------------------------------------------------------------
@@ -284,11 +396,26 @@ def finding_sentence_key(repo: KbRepo, f: SummaryFinding) -> str | None:
     return None
 
 
+def _carries(repo: KbRepo, d: Decision, f: SummaryFinding) -> bool:
+    """Whether an earlier cycle's decision `d` on the same canonical id still decides `f`. Never for a B or N item (run
+    B numbers its items from 001 in every run: the same id is another passage; a sentence carries over by its key)
+    nor a fixed record (flagged again, it is asked again); for a record's finding (R, T, L, M) only while the
+    record files are byte for byte what the person saw."""
+    if d.canonical != f.canonical or d.decision == "fixed":
+        return False
+    prefix = f.canonical.partition(":")[0]
+    if prefix in ("B", "N"):
+        return False
+    if prefix in ("R", "T", "L", "M"):
+        rids = finding_records(f)
+        return bool(rids) and d.record_sha256 == records_sha256(repo, rids)
+    return True
+
+
 def is_decided(repo: KbRepo, f: SummaryFinding, decisions: list[Decision], keys: set[str] | None = None) -> bool:
-    """Whether a person has decided `f`: by its public id; by its canonical id (an earlier cycle's decision on the same
-    item, unless it was fixed: a fixed record flagged again is asked again); or, for an S or B omission, by a decision
-    that settled its sentence."""
-    if any(d.finding == f.id or (d.canonical == f.canonical and d.decision != "fixed") for d in decisions):
+    """Whether a person has decided `f`: by its public id (this cycle); by an earlier cycle's decision on its canonical
+    id where that carries over (_carries); or, for an S or B omission, by a decision that settled its sentence."""
+    if any(d.finding == f.id or _carries(repo, d, f) for d in decisions):
         return True
     if f.kind != "omission" or finding_kind(f) != "omission":
         return False
@@ -310,13 +437,12 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
     evaluation."""
     if summary.fingerprint == fingerprint(repo):
         return True
-    ids = {f.id: f for f in summary.open_findings}
-    touched: set[str] = set()
-    for d in decisions:
-        if d.finding in ids and d.decision in _CHANGING:
-            touched |= {d.record} if d.record else set(finding_records(ids[d.finding]))
-    if not touched:
+    ids = {f.id for f in summary.open_findings}
+    pins = [(d.record, d.record_sha256) for d in decisions if d.finding in ids and d.decision in _CHANGING and d.record]
+    # each skipped record is pinned to the bytes the person decided on: a later edit needs a new evaluation
+    if not pins or any(sha != records_sha256(repo, [rid]) for rid, sha in pins):
         return False
+    touched = {rid for rid, _ in pins}
     try:
         if rev_parse(Path(root), summary.commit) != summary.commit:
             return False
@@ -335,10 +461,10 @@ class EvalStatus:
 
 
 def eval_status(root: Path, repo: KbRepo) -> EvalStatus:
-    """The summary, the decisions, whether the summary is current and its findings no one has decided. EvalError
-    when either file is unusable."""
+    """The summary, the decisions that stand (kb/eval/decisions.yaml as `repo` holds it), whether the summary is
+    current and its findings no one has decided. EvalError when the summary is unusable."""
     summary = read_summary(root)
-    decisions = read_decisions(root)
+    decisions, _ = decisions_of(repo)  # those that stand; kb check reports the others
     if summary is None:
         return EvalStatus(None, decisions, False, [])
     return EvalStatus(summary, decisions, is_fresh(root, repo, summary, decisions), open_findings(repo, summary, decisions))
@@ -379,10 +505,27 @@ def _overlaps(spans: list, others: list) -> bool:
     return any(s[0] == o[0] and max(s[1], o[1]) < min(s[2], o[2]) for s in spans for o in others)
 
 
-def _check_added(repo: KbRepo, kind: str, f: SummaryFinding, rid: str | None) -> str:
+def _evaluated(root: Path, summary: Summary) -> KbRepo:
+    """The knowledge base at the evaluated commit."""
+    try:
+        if rev_parse(Path(root), summary.commit) != summary.commit:
+            raise EvalError(f"the evaluated commit of {SUMMARY} is not in this repository")
+        return KbRepo.at_ref(Path(root), summary.commit)
+    except GitError as e:
+        raise EvalError(f"cannot read the evaluated commit of {SUMMARY}") from e
+
+
+def _names_of(names_: Iterable[str]) -> set[str]:
+    return {normalise_name(n) for n in names_}
+
+
+def _check_added(root: Path, repo: KbRepo, summary: Summary, kind: str, f: SummaryFinding, rid: str | None) -> str:
     spans = finding_spans(repo, f)
     if kind == "omission":
         rid = _live(repo, rid)
+        if rid in _evaluated(root, summary).records:
+            raise EvalError(f"{rid} existed when the evaluation ran: use a new record, or redraft the existing one and "
+                            "decide --as fixed on its finding")
         rec = repo.records[rid]
         if not isinstance(rec, COVERING_TYPES) or rec.evidence is None:
             raise EvalError(f"{rid} quotes nothing a rule is recorded by: add a requirement, exclusion, decision or invariant")
@@ -396,44 +539,53 @@ def _check_added(repo: KbRepo, kind: str, f: SummaryFinding, rid: str | None) ->
         raise EvalError(f"{rid} is not a glossary term (TERM)")
     prefix, _, rest = f.canonical.partition(":")
     if kind == "entity":
-        if prefix != "E" or normalise_name(rest) not in names(term):
+        wanted = _names_of(f.ends[0]) if f.ends else {normalise_name(rest)}
+        if prefix != "E" or not wanted & set(names(term)):
             raise EvalError(f"{rid} does not carry the entity's name or alias: add it as the name or an alias")
+        found = [q for q, *_ in located_quotes(repo, term.evidence)] if term.evidence is not None else []
+        if not any(mentions(q.text, term) for q in found):
+            raise EvalError(f"{rid} has no found quote that names it: quote a passage containing its name or an alias")
         return rid
-    # a relation: the source TERM holds a relation of the finding's type, to a live term, quoting the finding's passage
+    # a relation: the source TERM holds a relation of the finding's type, to a live term, quoting the finding's passage,
+    # and its two ends are the finding's two entities (by entity_key)
     parts = rest.split(":")
     rtype = parts[1] if prefix == "N" and len(parts) == 3 else None
+    if len(f.ends) != 2:
+        raise EvalError("this finding does not name the two entities of its relation: run the evaluation again")
+    source_names, target_names = (_names_of(e) for e in f.ends)
     live = live_ids(repo)
+    joined = False
     for r in term.relations:
         target = repo.records.get(r.target)
         if r.type != rtype or r.target not in live or not isinstance(target, Term):
             continue
         quoted = [(src, a, b) for _, src, a, b in located_quotes(repo, Evidence(quotes=[r.quote]))]
-        if spans and _overlaps(spans, quoted) and mentions(f.text, term) and mentions(f.text, target):
+        if not (spans and _overlaps(spans, quoted) and mentions(f.text, term) and mentions(f.text, target)):
+            continue
+        if entity_key(term) & source_names and entity_key(target) & target_names:
             return rid
+        joined = True
+    if joined:
+        raise EvalError(f"{rid}'s relation does not join the finding's two entities: its source and target must be "
+                        "the terms the finding names")
     raise EvalError(f"{rid} holds no relation of this finding's type to the term its passage names, quoting that "
                     "passage: add the relation on the source TERM, then decide again")
 
 
 def _check_fixed(root: Path, repo: KbRepo, summary: Summary, f: SummaryFinding, rid: str | None) -> str:
     named = finding_records(f)
+    if not named:
+        raise EvalError("this finding names no record kb can check: it cannot be decided --as fixed")
     if rid is not None:
         if not _RECORD_ID.fullmatch(rid):
             raise EvalError("`--record` is not a record id")
-        if named and rid not in named:
+        if rid not in named:
             raise EvalError(f"{rid} is not a record this finding is about")
     candidates = [rid] if rid is not None else named
-    if not candidates:
-        raise EvalError("this decision needs `--record`: the record that was fixed")
-    try:
-        if rev_parse(Path(root), summary.commit) != summary.commit:
-            raise EvalError(f"the evaluated commit of {SUMMARY} is not in this repository")
-        base = KbRepo.at_ref(Path(root), summary.commit)
-    except GitError as e:
-        raise EvalError(f"cannot read the evaluated commit of {SUMMARY}") from e
+    base = _evaluated(root, summary)
     for c in candidates:
-        before = base.raw.get(base.paths[c]) if c in base.paths else None
-        now = repo.raw.get(repo.paths[c]) if c in repo.paths else None
-        if before != now:
+        now = record_bytes(repo, c)
+        if now is not None and record_bytes(base, c) != now:  # changed; a deleted record is retired, never deleted
             return c
     raise EvalError(f"{' '.join(candidates)}: not changed since the evaluated commit {summary.commit[:12]}; fix the "
                     "record first, then decide again")
@@ -466,7 +618,7 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
         day = _iso(date or datetime.date.today().isoformat())
     except ValueError as e:
         raise EvalError("--date must be a date, YYYY-MM-DD") from e
-    why = _reason(reason, decision == "not_a_rule")
+    why = _reason(reason, decision in ("not_a_rule", "product_decision"))
     decisions = read_decisions(root)
     repo = KbRepo.load(root)
     if fid == CATEGORIES:
@@ -480,21 +632,30 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
     if decision not in ALLOWED[kind]:
         raise EvalError(f"this finding takes one of: {', '.join(ALLOWED[kind])}")
     rid = record
-    if kind == "categories":
+    if decision in ("not_a_rule", "product_decision", "correct", "ok"):
         if record is not None:
-            raise EvalError("`categories` takes no `--record`")
+            raise EvalError(f"`--as {decision}` takes no `--record`")
     elif decision == "added":
-        rid = _check_added(repo, kind, f, record)  # type: ignore[arg-type]
+        rid = _check_added(root, repo, summary, kind, f, record)  # type: ignore[arg-type]
     elif decision == "covered":
         rid = _live(repo, record, "TERM" if kind in ("entity", "relation") else "record")
         if kind in ("entity", "relation") and not isinstance(repo.records[rid], Term):
             raise EvalError(f"{rid} is not a glossary term (TERM)")
     elif decision == "fixed":
         rid = _check_fixed(root, repo, summary, f, record)  # type: ignore[arg-type]
-    elif record is not None and (not _RECORD_ID.fullmatch(record) or record not in repo.records):
-        raise EvalError("`--record` is not a record of this knowledge base")
+    if rid is not None:
+        sha = records_sha256(repo, [rid])
+    elif f is not None and decision in ("correct", "ok"):
+        sha = records_sha256(repo, finding_records(f)) if finding_records(f) else None
+    else:
+        sha = None
     entry = Decision(finding=fid, canonical=canonical, sentence_key=finding_sentence_key(repo, f) if f else None,
-                     decision=decision, record=rid, reason=why, by=by, date=day)  # type: ignore[arg-type]
+                     decision=decision, record=rid, record_sha256=sha, reason=why, by=by, date=day)  # type: ignore[arg-type]
+    if summary is not None:
+        standing, _ = decisions_of(repo)
+        if not is_fresh(root, repo, summary, [*standing, entry]):
+            raise EvalError(f"the knowledge base or its documents changed since {SUMMARY} was written (beyond what this "
+                            "and earlier decisions name): run the evaluation again (`kb todo`)")
     check_target(root, DECISIONS, "file")  # never through a symlink (kb/, kb/eval/ or the file)
     data = [d.model_dump() for d in [*decisions, entry]]
     write_atomic(root, DECISIONS, dump_yaml({"decisions": data}))
