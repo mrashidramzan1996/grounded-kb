@@ -2,6 +2,7 @@
 
 import datetime
 import re
+import shutil
 import unicodedata
 from pathlib import Path
 
@@ -44,6 +45,25 @@ def _plain(name: str, value: str, limit: int) -> str:
     return value
 
 
+def _roll_back(root: Path, config, old: bytes | None, stored_id: str | None, was_stored: bool) -> None:
+    """Put the file, and the store under kb/sources, back as they were before the failed clarify."""
+    if old is None:
+        (root / CLARIFICATIONS).unlink(missing_ok=True)
+    else:
+        write_atomic(root, CLARIFICATIONS, old.decode("utf-8"))
+    if stored_id is None:
+        return  # add_source replaces the store atomically: it failed before changing anything
+    target = root / "kb/sources" / stored_id
+    if not was_stored:
+        if not target.is_symlink() and target.is_dir():
+            shutil.rmtree(target)
+    elif old is not None:
+        try:
+            add_source(root, CLARIFICATIONS, config)  # re-store from the restored bytes
+        except Exception:  # keep the original error; kb check will report the store
+            pass
+
+
 def clarify(root: Path, topic: str, text: str, by: str, date: str) -> tuple[str, str]:
     """Append a section to docs/clarifications.md and (re)store it as a source. Returns (source id, ref of the new
     section, SRC-x#seg-NN)."""
@@ -79,17 +99,16 @@ def clarify(root: Path, topic: str, text: str, by: str, date: str) -> tuple[str,
     else:
         new = old.decode("utf-8").rstrip("\r\n") + nl + nl + section
     kb = KbRepo.load(root)
-    previous = {s.id for sid, src in kb.sources.items() if src.original == CLARIFICATIONS for s in kb.segments(sid)}
+    stored = [sid for sid, src in kb.sources.items() if src.original == CLARIFICATIONS]
+    previous = {s.id for sid in stored for s in kb.segments(sid)}
     write_atomic(root, CLARIFICATIONS, new)
+    source = None
     try:
         source = add_source(root, CLARIFICATIONS, config)
         segments = KbRepo.load(root).segments(source.id)
         if not segments or segments[-1].id in previous:  # the appended section is the last one, and a new one
             raise ClarifyError(f"the new section {topic!r} was not stored as a segment")
     except Exception:
-        if old is None:
-            (root / CLARIFICATIONS).unlink(missing_ok=True)
-        else:
-            write_atomic(root, CLARIFICATIONS, old.decode("utf-8"))
+        _roll_back(root, config, old, source.id if source else None, bool(stored))
         raise
     return source.id, f"{source.id}#{segments[-1].id}"

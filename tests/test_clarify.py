@@ -191,3 +191,33 @@ def test_failed_first_sync_removes_the_new_file(tmp_path):
     with pytest.raises(Exception):
         do(root)
     assert not (root / CLARIFICATIONS).exists()
+
+
+@pytest.mark.parametrize("preexisting", [False, True])
+def test_failure_after_store_leaves_store_matching_file(tmp_path, monkeypatch, preexisting):
+    root = repo(tmp_path)
+    if preexisting:
+        do(root)
+    before = (root / CLARIFICATIONS).read_bytes() if preexisting else None
+    monkeypatch.setattr("kb.clarify.KbRepo", type("R", (), {"load": staticmethod(_failing_second_load(KbRepo.load))}))
+    with pytest.raises(Exception, match="boom"):
+        do(root, topic="More", text="x")
+    monkeypatch.undo()
+    if preexisting:
+        assert (root / CLARIFICATIONS).read_bytes() == before
+    else:
+        assert not (root / CLARIFICATIONS).exists() and not (root / "kb/sources/SRC-clarifications").exists()
+    r = invoke(root, "check")
+    assert "source.tampered" not in r.output and "source.outdated" not in r.output, r.output
+
+
+def _failing_second_load(real):
+    calls = []
+
+    def load(root, *a, **k):
+        calls.append(1)
+        if len(calls) == 2:  # clarify's own lookup right after add_source stored the source
+            raise RuntimeError("boom")
+        return real(root, *a, **k)
+
+    return load
