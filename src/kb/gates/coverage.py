@@ -84,7 +84,7 @@ def coverage_gate(ctx: GateContext) -> list[Issue]:
 
     repo = ctx.repo
     rules, spans = _normative(repo), quote_spans(repo)
-    decisions, invalid = decisions_of(repo)  # an entry that does not stand settles nothing, and is an error
+    decisions, invalid = decisions_of(repo, ctx.root)  # an entry that does not stand settles nothing, and is an error
     issues: list[Issue] = list(invalid)
     for s in _uncovered(rules, spans, suppressed_keys(decisions)):
         src = s.ref.partition("#")[0]

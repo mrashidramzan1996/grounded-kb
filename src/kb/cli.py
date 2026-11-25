@@ -47,6 +47,7 @@ from kb.eval.judge import (
 )
 from kb.eval.decisions import DECISIONS, decide as record_decision, eval_status
 from kb.eval.sample import DEFAULT_N, build_sample
+from kb.textfmt import inline_code
 from kb.gates.coverage import coverage_stats
 from kb.graph import build_graph, render_mermaid
 from kb.testrun import TestRunError
@@ -796,6 +797,17 @@ def eval_status_cmd(ctx: typer.Context) -> None:
                f"entity F1 {_f1(agr.get('entity_f1'))}; relation F1 {_f1(agr.get('relation_f1'))}")
     typer.echo(f"findings: {len(st.open)} open, {len(s.open_findings) - len(st.open)} decided")
     typer.echo("up to date" if st.fresh else "stale: the knowledge base or its documents changed since; run `kb eval extract`")
+    # every decision that stands, with the sentences it silences, for the reviewer of kb/eval/decisions.yaml
+    typer.echo(f"decisions ({len(st.decisions)}):" if st.decisions else "decisions: none")
+    for d in st.decisions:
+        parts = [f"- {inline_code(d.finding)} {d.decision} by {d.by} on {d.date}"]
+        if d.record:
+            parts.append(f"record {d.record}")
+        if d.reason:
+            parts.append(f"reason {inline_code(d.reason)}")
+        if d.sentences:
+            parts.append("sentences " + "; ".join(inline_code(x.text) for x in d.sentences))
+        typer.echo(" · ".join(parts))
 
 
 agents_app = typer.Typer(help="Wire kb into coding agents.", no_args_is_help=True)

@@ -72,7 +72,8 @@ def test_decide_added_requires_quoting_record(tmp_path):
     assert fid in r.stdout and "S:" not in r.output
     data = load_yaml_strict((root / DECISIONS).read_text())
     assert data == {"decisions": [{
-        "finding": fid, "canonical": f"S:{key_of(root, INVOICES)}", "sentence_key": key_of(root, INVOICES),
+        "finding": fid, "canonical": f"S:{key_of(root, INVOICES)}",
+        "sentences": [{"key": key_of(root, INVOICES), "text": INVOICES}],
         "decision": "added", "record": "REQ-F-003",
         "record_sha256": hashlib.sha256((root / "kb/requirements/REQ-F-003.yaml").read_bytes()).hexdigest(),
         "reason": None, "by": "@pm", "date": "2026-11-26",

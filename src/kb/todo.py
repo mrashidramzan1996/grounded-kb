@@ -490,7 +490,7 @@ def _eval_status(root: Path, repo: KbRepo) -> EvalStatus | None:
     try:
         return eval_status(root, repo)
     except (EvalError, UnsafePath, OSError):
-        return EvalStatus(None, decisions_of(repo)[0], False, [])
+        return EvalStatus(None, decisions_of(repo, root)[0], False, [])
 
 
 def _cache_file(root: Path, rel: str) -> bool:

@@ -1,6 +1,7 @@
 """`kb todo` and the extraction evaluation: the eval do items in order, then one blocking ask per open finding."""
 
 import datetime
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -278,16 +279,20 @@ def test_inconsistent_decisions_are_dropped(tmp_path):
     root = drafted(tmp_path)
     evaluate(root)
     key = key_of(root, INVOICES)
-    base = {"canonical": f"S:{key}", "sentence_key": key, "record": None, "reason": "A note.", "by": "@alice",
+    sentence = [{"key": key, "text": INVOICES}]
+    base = {"canonical": f"S:{key}", "sentences": sentence, "record": None, "reason": "A note.", "by": "@alice",
             "date": "2026-11-26"}
     entries = [
-        {"finding": "categories", "canonical": "categories", "sentence_key": key, "decision": "not_a_rule",
-         "record": None, "reason": "None apply.", "by": "@alice", "date": "2026-11-26"},  # categories carries no key
+        {"finding": "categories", "canonical": "categories", "sentences": sentence, "decision": "not_a_rule",
+         "record": None, "reason": "None apply.", "by": "@alice", "date": "2026-11-26"},  # categories carries none
         base | {"finding": "F-aaaaaaaaaa", "decision": "correct", "reason": None},  # not a decision for an omission
         base | {"finding": "F-bbbbbbbbbb", "decision": "added", "record": "REQ-F-404"},  # no such record
         base | {"finding": "F-cccccccccc", "decision": "not_a_rule", "by": "@jöhn"},  # not an ASCII handle
         base | {"finding": "F-dddddddddd", "decision": "not_a_rule", "reason": "# A heading"},  # not plain text
-        base | {"finding": "F-eeeeeeeeee", "decision": "not_a_rule", "sentence_key": "0" * 12},  # not the S finding's key
+        base | {"finding": "F-eeeeeeeeee", "decision": "not_a_rule",
+                "sentences": [{"key": "0" * 12, "text": INVOICES}]},  # the key is not its text's
+        base | {"finding": "F-ffffffffff", "decision": "not_a_rule",
+                "sentences": [{"key": key, "text": "Invoices are due whenever."}]},  # nor the S finding's sentence
     ]
     put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": entries}))
     commit(root, "hand-written")
@@ -344,3 +349,81 @@ def test_fixed_needs_a_finding_about_records(tmp_path):
     put(root, "kb/requirements/REQ-F-001.yaml", reworded)
     r = decide(root, "F-1111111111", "--as", "fixed", "--record", "REQ-F-001", "--by", "@alice")
     assert r.exit_code == 2, r.output
+
+
+# --- fix round 2: the re-review's probes ---------------------------------------------------------------------------
+
+def hand_written(root: Path, *entries: dict) -> None:
+    base = {"record": None, "record_sha256": None, "reason": "None.", "by": "@alice", "date": "2026-11-26"}
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [base | e for e in entries]}))
+    commit(root, "hand-written")
+
+
+def test_multi_sentence_b_passage_needs_every_sentence_decided(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (b_finding("F-1111111111", INVOICES),))
+    ok(root, "eval", "decide", "F-1111111111", "--as", "not_a_rule", "--reason", "Not one.", "--by", "@alice")
+    commit(root, "decided")
+    # cycle 2: a run B item quotes two sentences; the second one is undecided
+    evaluate(root, (b_finding("F-2222222222", f"{INVOICES} {LISTED}"),))
+    t = todo_json(root)
+    assert "finding:F-2222222222" in ask_ids(t) and t["state"]["blocking_asks"] == 1
+    # a decision on both sentences settles it
+    ok(root, "eval", "decide", "F-2222222222", "--as", "not_a_rule", "--reason", "Neither is a rule.", "--by", "@alice")
+    commit(root, "decided both")
+    decisions = load_yaml_strict((root / "kb/eval/decisions.yaml").read_text())["decisions"]
+    assert decisions[1]["sentences"] == [{"key": key_of(root, INVOICES), "text": INVOICES},
+                                         {"key": key_of(root, LISTED), "text": LISTED}]
+    evaluate(root, (b_finding("F-3333333333", f"{INVOICES} {LISTED}"),))
+    assert "finding:F-3333333333" not in ask_ids(todo_json(root))
+
+
+def test_handwritten_b_entry_must_show_its_sentences(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root)
+    key = key_of(root, INVOICES)
+
+    def check() -> str:
+        return invoke(root, "check").output
+
+    # the old form: a key and no text
+    hand_written(root, {"finding": "F-0000000000", "canonical": "B:B-REQ-F-999", "sentence_key": key,
+                        "decision": "not_a_rule"})
+    assert "eval.decisions_invalid" in check() and "Invoices must be paid" in check()
+    # a key that is not the text's
+    hand_written(root, {"finding": "F-0000000000", "canonical": "B:B-REQ-F-999", "decision": "not_a_rule",
+                        "sentences": [{"key": key, "text": LISTED}]})
+    assert "eval.decisions_invalid" in check() and "sentence.uncovered" in check()
+    # readable and consistent: it stands without a summary finding, and silences exactly the sentence it shows
+    hand_written(root, {"finding": "F-0000000000", "canonical": "B:B-REQ-F-999", "decision": "not_a_rule",
+                        "sentences": [{"key": key, "text": INVOICES}]})
+    assert "eval.decisions_invalid" not in check() and "sentence.uncovered" not in check()
+    status = ok(root, "eval", "status").stdout
+    assert f"`{INVOICES}`" in status and "B:B-REQ-F-999" not in status
+    # the document changes: the sentence is gone, the entry is stale and skipped quietly
+    put(root, "docs/n.md", DOC.replace(INVOICES, "Invoices must be paid within 45 days."))
+    ok(root, "source", "sync")
+    commit(root, "45 days")
+    out = check()
+    assert "eval.decisions_invalid" not in out and "within 45 days" in out
+
+
+def test_mismatched_canonical_never_closes_a_finding(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (unfaithful("F-1111111111"),))
+    key = key_of(root, LISTED)
+    hand_written(root, {"finding": "F-1111111111", "canonical": f"S:{key}", "decision": "not_a_rule",
+                        "sentences": [{"key": key, "text": LISTED}]})
+    t = todo_json(root)
+    assert "finding:F-1111111111" in ask_ids(t) and t["state"]["blocking_asks"] == 1
+
+
+def test_handwritten_added_must_quote_its_sentence(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root)
+    key = key_of(root, INVOICES)
+    sha = hashlib.sha256((root / "kb/requirements/REQ-F-001.yaml").read_bytes()).hexdigest()
+    hand_written(root, {"finding": "F-0000000000", "canonical": f"S:{key}", "decision": "added", "record": "REQ-F-001",
+                        "record_sha256": sha, "reason": None, "sentences": [{"key": key, "text": INVOICES}]})
+    out = invoke(root, "check").output
+    assert "eval.decisions_invalid" in out and "Invoices must be paid" in out  # REQ-F-001 quotes another sentence

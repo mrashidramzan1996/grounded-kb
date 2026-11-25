@@ -33,7 +33,7 @@ from kb.records.models import Evidence, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.safewrite import check_target, write_atomic
-from kb.sources.sentences import sentence_key, sentences
+from kb.sources.sentences import Sentence, sentence_key, sentences, text_key
 from kb.textfmt import inline_code
 from kb.yamlio import YamlError, dump_yaml, load_yaml_strict
 
@@ -72,12 +72,21 @@ def _iso(value) -> str:
     return value
 
 
+class SentenceRef(BaseModel):
+    """A sentence a decision settles, by its key and its text: the reviewer of kb/eval/decisions.yaml reads the text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(pattern=rf"^{_KEY.pattern}$")
+    text: str
+
+
 class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     finding: str = Field(pattern=rf"^(?:{PUBLIC_ID.pattern}|{CATEGORIES})$")
     canonical: str
-    sentence_key: str | None = Field(default=None, pattern=rf"^{_KEY.pattern}$")
+    sentences: list[SentenceRef] = []  # an S or B omission's: every sentence it settles
     decision: Literal["added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok"]
     record: str | None = Field(default=None, pattern=rf"^{_RECORD_ID.pattern}$")
     # the sha256 of the record file's bytes when the person decided: of `record`, or (a correct or ok on a record's
@@ -226,14 +235,14 @@ def _inconsistency(repo: KbRepo, d: Decision, live: set[str]) -> str | None:
     kind = canonical_kind(d.canonical)
     if (d.finding == CATEGORIES) != (d.canonical == CATEGORIES) or kind is None:
         return "its finding and canonical id do not name one finding"
-    if kind == "categories" and (d.sentence_key or d.record or d.record_sha256):
+    if kind == "categories" and (d.sentences or d.record or d.record_sha256):
         return "`categories` carries no sentence key and no record"
     if d.decision not in ALLOWED[kind]:
         return f"`{d.decision}` is not a decision this finding takes"
     prefix, _, rest = d.canonical.partition(":")
-    if prefix == "S" and d.sentence_key != rest:
+    if prefix == "S" and [x.key for x in d.sentences] != [rest]:
         return "its sentence key is not its finding's"
-    if prefix != "S" and prefix != "B" and d.sentence_key is not None:
+    if prefix != "S" and prefix != "B" and d.sentences:
         return "only a sentence's finding carries a sentence key"
     if d.decision in ("added", "covered"):
         if d.record is None or d.record not in repo.records or d.record not in live:
@@ -257,31 +266,103 @@ def _inconsistency(repo: KbRepo, d: Decision, live: set[str]) -> str | None:
     return None
 
 
-def check_decisions(repo: KbRepo, entries: list[Decision | str]) -> tuple[list[Decision], list[Issue]]:
+def _sentence_index(repo: KbRepo) -> dict[str, list[Sentence]]:
+    """Every sentence of the stored documents, by key."""
+    out: dict[str, list[Sentence]] = {}
+    for s in _all_sentences(repo):
+        out.setdefault(sentence_key(s), []).append(s)
+    return out
+
+
+def _sentence_spans(index: dict[str, list[Sentence]], keys: Iterable[str]) -> list[tuple[str, int, int]]:
+    return [(s.ref.partition("#")[0], s.start, s.end) for k in keys for s in index.get(k, ())]
+
+
+def _added_problem(repo: KbRepo, d: Decision, index: dict[str, list[Sentence]], live: set[str]) -> str | None:
+    """What keeps an `added` entry from showing what `kb eval decide` checks: the record quotes one of its sentences
+    (through found quotes), or the TERM carries the entity and a quote naming it, or holds a relation of that type."""
+    kind = canonical_kind(d.canonical)
+    rec = repo.records.get(d.record or "")
+    _, _, rest = d.canonical.partition(":")
+    if kind == "omission":
+        if not isinstance(rec, COVERING_TYPES) or rec.evidence is None:
+            return "the record it names records no rule"
+        quoted = [(src, a, b) for _, src, a, b in located_quotes(repo, rec.evidence)]
+        if not _overlaps(_sentence_spans(index, [x.key for x in d.sentences]), quoted):
+            return "the record it names does not quote its sentence"
+        return None
+    if not isinstance(rec, Term):
+        return "the record it names is not a glossary term"
+    if kind == "entity":
+        found = [q for q, *_ in located_quotes(repo, rec.evidence)] if rec.evidence is not None else []
+        if normalise_name(rest) not in names(rec) or not any(mentions(q.text, rec) for q in found):
+            return "the term it names does not carry the entity's name in a found quote"
+        return None
+    parts = rest.split(":")
+    rtype = parts[1] if len(parts) == 3 else None
+    for r in rec.relations:
+        if r.type == rtype and r.target in live and isinstance(repo.records.get(r.target), Term) \
+                and located_quotes(repo, Evidence(quotes=[r.quote])):
+            return None
+    return "the term it names holds no quoted relation of that type"
+
+
+def _evaluated_records(root: Path | None, repo: KbRepo) -> tuple[Summary | None, set[str] | None]:
+    """(the summary `repo` holds, the record ids at its evaluated commit), each None when it cannot be read."""
+    data = repo.raw.get(SUMMARY)
+    if data is None or root is None:
+        return None, None
+    try:
+        summary = parse_summary(data)
+        if rev_parse(Path(root), summary.commit) != summary.commit:
+            return summary, None
+        return summary, set(KbRepo.at_ref(Path(root), summary.commit).records)
+    except (EvalError, GitError):
+        return None, None
+
+
+def check_decisions(repo: KbRepo, entries: list[Decision | str],
+                    root: Path | None = None) -> tuple[list[Decision], list[Issue]]:
     """(the decisions that stand, an eval.decisions_invalid error per entry that does not: malformed, inconsistent
-    with itself or the knowledge base, or a second decision on one finding). A dropped entry settles nothing."""
+    with itself or the knowledge base, a sentence whose key is not its text's, an `added` record that does not show
+    it, or a second decision on one finding). A dropped entry settles nothing. An entry one of whose sentences is no
+    longer in the documents is stale: skipped quietly. With `root`, an `added` on an omission of the current summary
+    must name a record new since its evaluated commit."""
     live = live_ids(repo)
+    index = _sentence_index(repo)
+    summary, before = _evaluated_records(root, repo)
+    current = {(f.id, f.canonical) for f in summary.open_findings} if summary else set()
     out: list[Decision] = []
     issues: list[Issue] = []
     seen: set[str] = set()
     for n, d in enumerate(entries, 1):
+        stale = False
         if isinstance(d, str):
             why = f"invalid: {inline_code(d)}"
         elif d.finding in seen:
             why = f"{_shown_id(d.finding)} is decided twice; only the first counts"
         else:
             why = _inconsistency(repo, d, live)
+            if why is None and any(text_key(x.text) != x.key for x in d.sentences):
+                why = "a sentence's key is not the key of its text"
+            stale = why is None and any(x.key not in index for x in d.sentences)
+            if why is None and not stale and d.decision == "added":
+                why = _added_problem(repo, d, index, live)
+                if (why is None and canonical_kind(d.canonical) == "omission" and (d.finding, d.canonical) in current
+                        and before is not None and d.record in before):
+                    why = "the record it names existed when the evaluation ran"
             if why is not None:
                 why = f"{_shown_id(d.finding)}: {why}"
         if why is not None:
             issues.append(_invalid(f"{DECISIONS}: decision {n} is dropped, it settles nothing: {why}"))
             continue
         seen.add(d.finding)  # type: ignore[union-attr]
-        out.append(d)  # type: ignore[arg-type]
+        if not stale:  # its sentence changed in the document: nothing to settle any more
+            out.append(d)  # type: ignore[arg-type]
     return out, issues
 
 
-def decisions_of(repo: KbRepo) -> tuple[list[Decision], list[Issue]]:
+def decisions_of(repo: KbRepo, root: Path | None = None) -> tuple[list[Decision], list[Issue]]:
     """(the decisions kb/eval/decisions.yaml holds in `repo` that stand, an eval.decisions_invalid error per entry
     that does not, or for the whole file). A repository loaded from a ref or the working tree carries the file in
     `raw`; the gates read it from there."""
@@ -292,17 +373,17 @@ def decisions_of(repo: KbRepo) -> tuple[list[Decision], list[Issue]]:
         entries = _entries(data)
     except EvalError as e:
         return [], [_invalid(f"{e}; no decision in it counts")]
-    return check_decisions(repo, entries)
+    return check_decisions(repo, entries, root)
 
 
 def suppressed_keys(decisions: Iterable[Decision]) -> set[str]:
-    return {d.sentence_key for d in decisions if d.decision in SUPPRESSING and d.sentence_key}
+    return {x.key for d in decisions if d.decision in SUPPRESSING for x in d.sentences}
 
 
 def decided_keys(repo_root: Path) -> set[str]:
     """The sentence keys whose decision (one that stands) is added, covered or not_a_rule: `uncovered()` leaves them
     out, so a decided sentence stops warning. kb check reports the entries that do not stand."""
-    return suppressed_keys(decisions_of(KbRepo.load(Path(repo_root)))[0])
+    return suppressed_keys(decisions_of(KbRepo.load(Path(repo_root)), Path(repo_root))[0])
 
 
 def record_bytes(repo: KbRepo, rid: str) -> bytes | None:
@@ -371,29 +452,33 @@ def finding_spans(repo: KbRepo, f: SummaryFinding) -> list[tuple[str, int, int]]
     return out
 
 
-def span_sentence_key(repo: KbRepo, spans: Iterable) -> str | None:
-    """The sentence key of the first sentence (in document order) the spans ([src, start, end]) overlap, or None."""
-    spans = [tuple(s) for s in spans]
+def span_sentences(repo: KbRepo, spans: Iterable) -> list[Sentence]:
+    """Every sentence the spans ([src, start, end]) overlap, in document order, once per key."""
     by_src: dict[str, list] = {}
     for s in spans:
-        by_src.setdefault(s[0], []).append(s)
+        by_src.setdefault(s[0], []).append(tuple(s))
+    bad = set(bad_segment_ids(repo))
+    out: dict[str, Sentence] = {}
     for src in sorted(by_src):
-        if src not in repo.sources or src in set(bad_segment_ids(repo)):
+        if src not in repo.sources or src in bad:
             continue
         for s in sentences(repo, src):
             if any(max(s.start, a) < min(s.end, b) for _, a, b in by_src[src]):
-                return sentence_key(s)
-    return None
+                out.setdefault(sentence_key(s), s)
+    return list(out.values())
 
 
-def finding_sentence_key(repo: KbRepo, f: SummaryFinding) -> str | None:
-    """The sentence a decision on an S or B omission settles; None for other findings."""
+def finding_sentences(repo: KbRepo, f: SummaryFinding | None) -> list[Sentence]:
+    """The sentences a decision on an S or B omission settles: an S finding's sentence, every sentence a B finding's
+    passages overlap; none for other findings."""
+    if f is None:
+        return []
     prefix, _, rest = f.canonical.partition(":")
     if prefix == "S" and _KEY.fullmatch(rest):
-        return rest
+        return next(([s] for s in _all_sentences(repo) if sentence_key(s) == rest), [])
     if prefix == "B" and f.kind == "omission":
-        return span_sentence_key(repo, finding_spans(repo, f))
-    return None
+        return span_sentences(repo, finding_spans(repo, f))
+    return []
 
 
 def _carries(repo: KbRepo, d: Decision, f: SummaryFinding) -> bool:
@@ -413,14 +498,18 @@ def _carries(repo: KbRepo, d: Decision, f: SummaryFinding) -> bool:
 
 
 def is_decided(repo: KbRepo, f: SummaryFinding, decisions: list[Decision], keys: set[str] | None = None) -> bool:
-    """Whether a person has decided `f`: by its public id (this cycle); by an earlier cycle's decision on its canonical
-    id where that carries over (_carries); or, for an S or B omission, by a decision that settled its sentence."""
-    if any(d.finding == f.id or _carries(repo, d, f) for d in decisions):
-        return True
-    if f.kind != "omission" or finding_kind(f) != "omission":
+    """Whether a person has decided `f`: by a decision on its canonical id, of a kind `f` takes, naming its public id
+    (this cycle) or carrying over from an earlier cycle (_carries); or, for an S or B omission, when every sentence it
+    covers is settled by a decision (added, covered, not a rule) listing that sentence."""
+    kind = finding_kind(f)
+    for d in decisions:
+        if d.canonical == f.canonical and d.decision in ALLOWED[kind] and (d.finding == f.id or _carries(repo, d, f)):
+            return True
+    if kind != "omission":
         return False
-    key = finding_sentence_key(repo, f)
-    return key is not None and key in (suppressed_keys(decisions) if keys is None else keys)
+    found = [sentence_key(s) for s in finding_sentences(repo, f)]
+    settled = suppressed_keys(decisions) if keys is None else keys
+    return bool(found) and all(k in settled for k in found)
 
 
 def open_findings(repo: KbRepo, summary: Summary, decisions: list[Decision]) -> list[SummaryFinding]:
@@ -464,7 +553,7 @@ def eval_status(root: Path, repo: KbRepo) -> EvalStatus:
     """The summary, the decisions that stand (kb/eval/decisions.yaml as `repo` holds it), whether the summary is
     current and its findings no one has decided. EvalError when the summary is unusable."""
     summary = read_summary(root)
-    decisions, _ = decisions_of(repo)  # those that stand; kb check reports the others
+    decisions, _ = decisions_of(repo, root)  # those that stand; kb check reports the others
     if summary is None:
         return EvalStatus(None, decisions, False, [])
     return EvalStatus(summary, decisions, is_fresh(root, repo, summary, decisions), open_findings(repo, summary, decisions))
@@ -649,10 +738,11 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
         sha = records_sha256(repo, finding_records(f)) if finding_records(f) else None
     else:
         sha = None
-    entry = Decision(finding=fid, canonical=canonical, sentence_key=finding_sentence_key(repo, f) if f else None,
+    settles = [SentenceRef(key=sentence_key(x), text=x.text) for x in finding_sentences(repo, f)]
+    entry = Decision(finding=fid, canonical=canonical, sentences=settles,
                      decision=decision, record=rid, record_sha256=sha, reason=why, by=by, date=day)  # type: ignore[arg-type]
     if summary is not None:
-        standing, _ = decisions_of(repo)
+        standing, _ = decisions_of(repo, root)
         if not is_fresh(root, repo, summary, [*standing, entry]):
             raise EvalError(f"the knowledge base or its documents changed since {SUMMARY} was written (beyond what this "
                             "and earlier decisions name): run the evaluation again (`kb todo`)")

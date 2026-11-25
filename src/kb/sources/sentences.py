@@ -56,9 +56,14 @@ def is_normative(s: Sentence) -> bool:
     return bool(s.cues)
 
 
-def sentence_key(s: Sentence) -> str:
-    body = _MARKER.sub("", s.text, count=1)
+def text_key(text: str) -> str:
+    """The sentence key of a sentence's text: what sentence_key gives for a sentence of that text."""
+    body = _MARKER.sub("", text, count=1)
     return hashlib.sha256(fold(body)[0].strip().encode()).hexdigest()[:12]
+
+
+def sentence_key(s: Sentence) -> str:
+    return text_key(s.text)
 
 
 def _blocks(text: str, start: int, end: int) -> list[tuple[int, int]]:

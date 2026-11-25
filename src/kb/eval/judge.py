@@ -148,7 +148,7 @@ def _records(repo: KbRepo, live: set[str]) -> list[dict]:
 
 def _gaps(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str]) -> list[dict]:
     """S: every uncovered rule-like sentence (one item per sentence key: the same sentence twice is one question, as a
-    decision on it is); B: every run B record no kb record matches, unless a person decided its (first) sentence. Both
+    decision on it is); B: every run B record no kb record matches, unless a person decided every sentence it quotes. Both
     are shown alike: the passage, its segment ref and heading, nothing else (never run B's statement)."""
     out: dict[str, dict] = {}
     for s in uncovered(repo, decided):
@@ -157,12 +157,13 @@ def _gaps(repo: KbRepo, alignment: Alignment, decided: set[str] | frozenset[str]
         if iid not in out:
             out[iid] = _item(iid, "uncovered", s.ref, [s.text], _headings(repo, spans), spans)
     # imported here: kb.eval.decisions imports kb.eval.findings, which imports this module
-    from kb.eval.decisions import span_sentence_key
+    from kb.eval.decisions import span_sentences
 
     for b in alignment.only_b:
         if b.spans:  # run B items are validated: each has a found quote
             spans = [list(x) for x in b.spans]
-            if decided and span_sentence_key(repo, spans) in decided:  # a person decided that sentence already
+            keys = [sentence_key(s) for s in span_sentences(repo, spans)]
+            if decided and keys and all(k in decided for k in keys):  # a person decided every sentence it quotes
                 continue
             _add(out, _item(f"B:{b.id}", "only_b", _seg_ref(repo, spans[0][0], spans[0][1]), _passages(repo, spans),
                             _headings(repo, spans), spans))
