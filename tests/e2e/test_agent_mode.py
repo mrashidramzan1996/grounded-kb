@@ -11,7 +11,9 @@ import re
 import shlex
 from pathlib import Path
 
-from helpers import commit, invoke, make_git_repo, write
+from helpers import commit, git, invoke, make_git_repo, write
+
+from kb.rules import PLAYBOOK
 
 SPEC = (
     "# Checkout\n\nCustomers pay by card.\n\n"
@@ -176,3 +178,185 @@ def test_new_document_after_freeze_is_detected(tmp_path):
 
     out = kb(repo, "check")
     assert "warning source.not_ingested" in out.output and "docs/refund-policy.md" in out.output
+
+
+# --- the playbook, followed to the letter (final review, Critical 1) ---------------------------------------------
+
+SPEC3 = SPEC + "\n# Search\n\nSearch must be quick.\n"
+# the playbook sentences the agent acts on; it does nothing (and commits nowhere) the playbook does not say
+STEPS = {
+    "commit after report": "After `kb ingest --report` or `kb redraft --report` passes, commit the changes",
+    "owners first": "Answer owner and approver questions first: write the handles into kb.config.yaml and commit that "
+                    "file on its own before running any `kb redraft`.",
+    "one redraft": "When the user answered several questions, record every answer with `kb clarify` first, then run "
+                   "one `kb redraft <ID> <ID> … --new` for all of them.",
+    "by": "`--by` is the handle of the person who answered.",
+    "stop": "Repeat until there are no `do` items and no ask you have not yet put to the user in this session, then "
+            "run `kb check --strict`.",
+}
+SEARCH_TARGET = "Search answers in under 1 second."
+USER = "@acme/product"  # who answers, as the person says in their reply
+MAX_ROUNDS = 8
+
+
+class LiteralAgent:
+    """Runs only what the playbook (src/kb/rules.py PLAYBOOK) names, and commits only where it says to:
+    step 3 (after a passing report), step 7 (kb.config.yaml on its own) and the freeze option's `then`. Drafting
+    and redrafting stand in for the agent following the brief; the person's answers are fixed strings."""
+
+    def __init__(self, repo: Path):
+        playbook = "\n".join(PLAYBOOK)
+        missing = [name for name, sentence in STEPS.items() if sentence not in playbook]
+        assert not missing, f"the playbook does not say: {missing}"
+        self.repo = repo
+        self.asked: set[str] = set()  # step 5: never ask the same thing twice in a session
+        self.commits: list[str] = []
+        self.pull_requests: list[str] = []
+
+    def commit(self, message: str, *paths: str) -> None:
+        git(self.repo, "add", *(paths or ("-A",)))
+        git(self.repo, "commit", "-qm", message)
+        self.commits.append(message)
+
+    def report(self, flow: str) -> None:
+        """Step 2: run the report; step 3: commit once it passes. Every report must pass."""
+        out = kb(self.repo, flow, "--report", "--strict").stdout
+        assert "## Rejected (0)" in out, out
+        assert f"report:{flow}" in do_ids(todo(self.repo))  # kb todo, too, says the result is not committed yet
+        self.commit(f"kb {flow}: report passed")
+
+    # -- step 2: the do items ---------------------------------------------------------------------------------
+
+    def do(self, item: dict) -> None:
+        if item["id"] == "commit":
+            self.commit("kb: commit the knowledge-base changes")
+            return
+        assert item["command"], item
+        argv = shlex.split(item["command"])
+        assert argv[0] == "kb", item
+        kb(self.repo, *argv[1:])
+        if item["id"] == "ingest:all":
+            self.follow_ingest_brief()
+            self.report("ingest")
+        elif item["id"].startswith("report:"):
+            self.report(item["id"].split(":")[1])
+        else:
+            assert item["id"] == "init", item
+
+    def follow_ingest_brief(self) -> None:
+        brief = (self.repo / ".kb/cache/ingest/brief.md").read_text()
+        for seg in ("seg-01", "seg-02", "seg-03"):
+            assert f"### SRC-spec#{seg}" in brief
+        kb(self.repo, "module", "add", "MOD-checkout", "--owner", "TODO", "--title", "Checkout")  # no owner in the docs
+        vague = "flags:\n- vague\n"
+        for rid, text, seg, flags in [
+            ("REQ-F-001", "Customers pay by card.", "seg-01", ""),
+            ("REQ-NF-001", "The checkout page must be fast.", "seg-02", vague),
+            ("REQ-NF-002", "Search must be quick.", "seg-03", vague),
+        ]:
+            write(self.repo, f"kb/requirements/{rid}.yaml", req(rid, text, [(f"SRC-spec#{seg}", text)], flags=flags))
+        write(self.repo, "kb/sources/SRC-spec/triage.yaml",
+              "segments:\n  seg-01:\n  - REQ-F-001\n  seg-02:\n  - REQ-NF-001\n  seg-03:\n  - REQ-NF-002\n")
+
+    # -- steps 4 to 10: the asks ------------------------------------------------------------------------------
+
+    def ask(self, asks: list[dict], reply: dict[str, tuple[str, str]]) -> None:
+        """Ask every item in one message; `reply` is the person's answer: {ask id: (option key, the fact)}."""
+        assert sorted(reply) == sorted(a["id"] for a in asks), "the person answers every question asked"
+        self.asked |= set(reply)
+        by_id = {a["id"]: a for a in asks}
+        # step 7: owner and approver answers first, committed on their own
+        owners = [i for i in reply if by_id[i]["kind"] == "owner"]
+        for ask_id in owners:
+            key, handle = reply[ask_id]
+            assert key == "handle"
+            answer_owner(self.repo, {"ask": asks}, ask_id.removeprefix("owner:"), handle)
+        if owners:
+            self.commit("kb.config.yaml: owners and approvers", "kb.config.yaml")
+        # step 8 to 10: record every fact with kb clarify, then one redraft for all of them
+        refs = {}
+        for ask_id in sorted(set(reply) - set(owners)):
+            key, fact = reply[ask_id]
+            option = next(o for o in by_id[ask_id]["options"] if o["key"] == key)
+            if ask_id.startswith("freeze:"):
+                assert key == "freeze" and "never merge it yourself" in option["then"]
+                self.freeze(ask_id.removeprefix("freeze:"))
+                continue
+            assert key == "target" and "one `kb redraft" in option["then"] and "then commit" in option["then"]
+            out = kb(self.repo, "clarify", "--topic", f"{ask_id} target", "--text", fact, "--by", USER,
+                     "--date", "2026-11-25").stdout
+            refs[ask_id.removeprefix("vague:")] = re.search(r"SRC-clarifications#seg-\d+", out).group(0)
+        if refs:
+            kb(self.repo, "redraft", *sorted(refs), "--new")
+            self.follow_redraft_brief(refs, {rid: reply[f"vague:{rid}"][1] for rid in refs})
+            self.report("redraft")
+
+    def follow_redraft_brief(self, refs: dict[str, str], facts: dict[str, str]) -> None:
+        brief = (self.repo / ".kb/cache/redraft/brief.md").read_text()
+        quoted = {
+            "REQ-NF-001": ("SRC-spec#seg-02", "The checkout page must be fast."),
+            "REQ-NF-002": ("SRC-spec#seg-03", "Search must be quick."),
+        }
+        for rid, ref in refs.items():
+            assert f"## {rid}" in brief and f"### {ref}" in brief and facts[rid] in brief
+            write(self.repo, f"kb/requirements/{rid}.yaml", req(rid, facts[rid], [quoted[rid], (ref, facts[rid])], brief="redraft"))
+        cited = {ref.split("#")[1]: rid for rid, ref in refs.items()}
+        segs = sorted(set(re.findall(r"### SRC-clarifications#(seg-\d+)", brief)))
+        write(self.repo, "kb/sources/SRC-clarifications/triage.yaml", "segments:\n" + "".join(
+            f"  {s}:\n  - {cited[s]}\n" if s in cited else f"  {s}: 'none: heading of the clarifications file'\n"
+            for s in segs
+        ))
+
+    def freeze(self, version: str) -> None:
+        """The freeze option's `then`: freeze, commit the file on a new branch and open a pull request."""
+        kb(self.repo, "baseline", "freeze", version)
+        git(self.repo, "checkout", "-qb", f"baseline-{version}")
+        self.commit(f"kb baseline {version}", f"kb/baseline/{version}.yaml")
+        self.pull_requests.append(f"baseline-{version}")
+
+
+def test_agent_follows_playbook_literally(tmp_path):
+    repo = make_git_repo(None, tmp_path, extra={"docs/spec.md": SPEC3})
+    agent = LiteralAgent(repo)
+    replies = [  # what the person says each time the agent asks
+        {"owner:policy.approvers.decisions": ("handle", "@acme/architects"),
+         "owner:policy.approvers.intent": ("handle", "@acme/product")},
+        {"owner:modules.MOD-checkout.owner": ("handle", "@acme/checkout"),  # "1a, 2a, 3a ... I am @acme/product"
+         "vague:REQ-NF-001": ("target", TARGET),
+         "vague:REQ-NF-002": ("target", SEARCH_TARGET)},
+        {"freeze:v1": ("freeze", "")},
+    ]
+    rounds = 0
+    while True:
+        rounds += 1
+        assert rounds <= MAX_ROUNDS, f"the agent loops: {agent.commits}"
+        t = todo(repo)  # steps 1 and 11
+        pending = [a for a in t["ask"] if a["id"] not in agent.asked]
+        if not t["do"] and not pending:  # step 11: no do items and no ask not yet put to the user
+            break
+        for item in t["do"]:
+            agent.do(item)
+        if pending:
+            agent.ask(pending, replies.pop(0))
+    kb(repo, "check", "--strict")
+
+    assert replies == [] and rounds == 5
+    assert agent.commits == [
+        "kb ingest: report passed",
+        "kb.config.yaml: owners and approvers",
+        "kb.config.yaml: owners and approvers",
+        "kb redraft: report passed",
+        "kb baseline v1",
+    ]
+    assert agent.pull_requests == ["baseline-v1"]
+    assert git(repo, "status", "--porcelain") == ""
+    assert (repo / "kb/baseline/v1.yaml").is_file()
+    clarifications = (repo / "docs/clarifications.md").read_text()
+    assert TARGET in clarifications and SEARCH_TARGET in clarifications and "Decided by @acme/product" in clarifications
+
+    # the person (never the agent) merges the pull request: the baseline is in place and nothing is left
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "baseline-v1", "-m", "Merge baseline v1")
+    t = todo(repo)
+    assert (t["do"], t["ask"]) == ([], [])
+    assert t["state"]["clean"] is True and t["state"]["baseline"] == "v1"

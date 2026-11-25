@@ -16,12 +16,16 @@ You can leave the kb commands to your coding agent. Run `kb init` and `kb agents
 > Set up the knowledge base from the documents in docs/.
 
 The playbook in `AGENTS.md` (and the `kb` skill for Claude Code) tells the agent to run `kb todo`, do every `do` item
-itself (ingest, draft, triage, sync, redraft, fix), and ask you every `ask` item in one message, with evidence and
-lettered options. Expect questions like these: who approves requirements and decisions, who owns each module, what
+itself (ingest, draft, triage, sync, redraft, fix, and commit once `kb ingest --report` or `kb redraft --report`
+passes), and ask you every `ask` item in one message, with evidence and lettered options. Expect questions like these: who approves requirements and decisions, who owns each module, what
 measurable target a vague line such as "The checkout page must be fast." should have, whether to remove a secret
 from a document, and whether to freeze the baseline. Short answers are enough ("1a @acme/product, 2a under 2
-seconds"). The agent records each new fact with `kb clarify`, so a redrafted requirement can quote your answer. kb
-never answers a question itself, and approval is still a merged pull request. Later, "I added docs/x.md" or "I
+seconds", and your handle so the agent can record who decided). The agent writes handles into `kb.config.yaml` and
+commits that file on its own, records each other fact with `kb clarify` so a redrafted requirement can quote your
+answer, and redrafts every answered requirement in one `kb redraft`. Neither kb nor the agent answers a question for
+you. On "freeze" the agent commits `kb/baseline/v1.yaml` on a new branch and opens a pull request; approval is still
+a merged pull request, and the agent never merges it. A repository set up before 0.3.0 gets the playbook from
+`kb agents install <name>`. Later, "I added docs/x.md" or "I
 updated the pricing spec" is enough: `kb todo` lists the ingest, sync and redraft work. The walk-through is in
 [`docs/phases/agent-mode-demo.md`](docs/phases/agent-mode-demo.md).
 
@@ -54,8 +58,8 @@ grant `pull-requests: write` for the comment (the template does).
 | `kb ingest --report [--strict]` | Gate what the agent drafted since `kb ingest` ran: accepted, rejected, flagged, sources, untriaged segments, proposed modules. |
 | `kb redraft [IDs] [--flagged] [--changed [--base REF]] [--new]` | Write a brief to `.kb/cache/redraft/brief.md` for redrafting only the named records, the flagged requirements, or the records citing text a `kb source sync` changed (changed text no record cites is offered to draft from); run it before committing the sync, or pass `--base <commit before the sync>` with `--changed` after. `--new` adds the segments with no triage entry that no record cites, to draft new records from. |
 | `kb redraft --report [--strict] [--base REF]` | Gate the redraft against the brief's commit (or `--base REF`): redrafted, drafted (new records quoting only the new or changed segments), rejected (out of scope, changed ids, `vague` removed without a target the statement quotes from its own or the offered text, edited ADRs/INVs), flagged (including new segments left untriaged, and untriaged segments a record cites, to triage by hand), sources, still flagged, not redrafted. |
-| `kb todo [--format json]` | What your coding agent does next (`do` items, most with the command to run) and what it must ask you (`ask` items, with evidence and options). Exit 0 whatever is listed; `state.clean` is true when there are no errors, no `do` items and no blocking questions. |
-| `kb clarify --topic T --text "…" --by @handle [--date YYYY-MM-DD]` | Record a person's answer as a section of `docs/clarifications.md`, stored as a source, and print the segment to quote (`SRC-clarifications#seg-NN`). Refuses emails, secrets, markup and answers over 1500 characters. |
+| `kb todo [--format json]` | What your coding agent does next (`do` items, most with the command to run) and what it must ask you (`ask` items, with evidence and options). It also lists `report:ingest` / `report:redraft` while a brief's result is not committed, `commit` while `kb/`, `kb.config.yaml` or `docs/clarifications.md` has uncommitted changes, and an `unreadable:` question for a document `kb ingest` cannot read. Exit 0 whatever is listed; `state.clean` is true when there are no errors, no `do` items and no blocking questions. |
+| `kb clarify --topic T --text "…" --by @handle [--date YYYY-MM-DD]` | Record a person's answer as a section of `docs/clarifications.md`, stored as a source, and print the segment to quote (`SRC-clarifications#seg-NN`). Refuses emails, secrets, markup, answers over 1500 characters, topics over 200 or containing ` > `, and handles over 64 characters. |
 | `kb module add MOD-x --owner <@handle\|TODO>` | Add a module without paths. |
 | `kb module paths MOD-x --accept` | Write the paths suggested from `r[impl ID]` markers (or `--set GLOB`). |
 | `kb check [--strict] [--changed] [--base REF]` | Run every gate: config, records, quotes, anchors, sources (re-derived from the originals), modules, triage. |
@@ -63,7 +67,7 @@ grant `pull-requests: write` for the comment (the template does).
 | `kb trace <ID>` | The evidence chain of a record, its quotes re-checked. |
 | `kb status` | Per module: how many live requirements are built (`r[impl]`) and tested (`r[verify]`). |
 | `kb baseline freeze v1` | Record the agreed requirement set on the default branch's tip (refused while `kb check` reports errors). |
-| `kb agents install claude-code / codex / generic` | Wire the session-start and stop hooks, or a git pre-commit hook. |
+| `kb agents install claude-code / codex / generic` | Wire the session-start and stop hooks, or a git pre-commit hook, and update the kb block (rules and playbook) in `AGENTS.md`. |
 | `kb hook <event>` | The hook entry point the agents call; it blocks only on errors new since the default branch. |
 
 Exit codes: 0 ok, 1 policy failure, 2 usage, config or tool error. `--format json` goes to stdout, messages to stderr.
