@@ -14,7 +14,7 @@ from kb.config.codeowners import parse_codeowners
 from kb.gitfiles import GitError, default_branch
 from kb.issues import Issue
 from kb.rules import render
-from kb.safewrite import check_target, read_text, write_atomic
+from kb.safewrite import WriteRefused, check_target, read_text, write_atomic
 from kb.textblocks import upsert_block
 
 CODEOWNERS_LOCATIONS = ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]
@@ -123,6 +123,28 @@ def _render_config(modules: list[dict[str, str]], has_docs: bool) -> str:
     return "\n".join(out) + "\n"
 
 
+def agents_block() -> str:
+    """The kb block of AGENTS.md: the working rules and the playbook."""
+    return render(_template("agents_block.md"))
+
+
+def upsert_agents_md(root: Path) -> str:
+    """Set AGENTS.md's kb block to agents_block(), as `kb init` writes it, creating the file when it is missing and
+    leaving everything outside the block alone. Raises WriteRefused (nothing written) for a symlinked or
+    non-regular AGENTS.md, one that cannot be read, or unbalanced kb markers."""
+    root = Path(root)
+    exists = check_target(root, "AGENTS.md", "file")
+    current = read_text(root, "AGENTS.md") if exists else ""
+    try:
+        text = upsert_block(current, "kb", agents_block(), "html")
+    except ValueError as e:
+        raise WriteRefused(f"AGENTS.md: {e}") from e
+    if exists and text == current:
+        return "AGENTS.md is up to date"
+    write_atomic(root, "AGENTS.md", text)
+    return "updated AGENTS.md (kb block)"
+
+
 def _codeowners_block() -> str:
     lines = [
         "# kb: approvals for the knowledge base. Set policy.approvers in kb.config.yaml, then",
@@ -181,7 +203,7 @@ def init_repo(
 
     files: dict[str, str] = {"kb.config.yaml": _render_config(modules, has_docs)}
     for rel, name, content, style in [
-        ("AGENTS.md", "kb", render(_template("agents_block.md")), "html"),
+        ("AGENTS.md", "kb", agents_block(), "html"),
         ("CLAUDE.md", "kb", "@AGENTS.md", "html"),
         (codeowners_rel, "kb", _codeowners_block(), "hash"),
         (".gitignore", "kb", ".kb/", "hash"),  # A-11: caches and the drafting brief are never committed
