@@ -21,6 +21,7 @@ from kb.gitfiles import (
     head_commit,
     is_dirty,
     rev_parse,
+    tag_exists,
 )
 from kb.ingest.redraft import changed_segments, citing, new_text, unfound
 from kb.issues import Issue
@@ -52,16 +53,17 @@ class Option:
 class AskItem:
     id: str  # stable, e.g. "vague:REQ-NF-001", "owner:policy.approvers.intent", "freeze:v1"
     kind: str  # vague | conflicting | untestable | owner | secret | freeze
-    question: str
+    question: str  # raw, for JSON
     evidence: dict  # {} or {"record": id, "statement": ..., "source": "SRC-x#seg-NN", "quote": ..., ...}
     options: tuple[Option, ...]
+    question_text: str  # the question for text output: its untrusted parts as inline code; not in JSON
 
 
 @dataclass(frozen=True)
 class Todo:
     do: tuple[DoItem, ...]  # sorted by id
     ask: tuple[AskItem, ...]  # sorted by id
-    state: dict  # initialized, sources, records, errors, warnings, baseline ("vN" or None), clean
+    state: dict  # initialized, sources, records, errors, warnings, baseline ("vN" or None), clean, blocking_asks
 
 
 # errors that become `ask` items: only the person can settle them
@@ -181,8 +183,14 @@ _APPROVER_QUESTIONS = {
     "policy.approvers.decisions":
         "Who approves decisions and invariants? Give a forge handle such as @org/team or @user.",
 }
-_MODULE_TAIL = ")? Give a forge handle."
 _OWNER_TODO_SUFFIX = ": owner is still TODO"  # kb.config.validate: f"{where}: owner is still TODO"
+
+
+def _question(template: str, quoted: bool = False, **untrusted: str) -> tuple[str, str]:
+    """(JSON form, text form) of `template` filled with untrusted values: raw in the JSON form (in double quotes
+    when `quoted`), as inline code in the text form. The template itself is trusted text."""
+    raw = {k: f'"{v}"' if quoted else v for k, v in untrusted.items()}
+    return template.format(**raw), template.format(**{k: inline_code(v) for k, v in untrusted.items()})
 
 
 def _evidence(rid: str, rec: Requirement, repo: KbRepo) -> dict:
@@ -199,18 +207,19 @@ def _evidence(rid: str, rec: Requirement, repo: KbRepo) -> dict:
 
 def _flag_ask(flag: str, rid: str, rec: Requirement, repo: KbRepo) -> AskItem:
     if flag == "vague":
-        question = f'{rid} says "{rec.statement}" but gives no measurable target. What should it be?'
+        question = _question(f"{rid} says {{statement}} but gives no measurable target. What should it be?",
+                             quoted=True, statement=rec.statement)
         answer = Option("target", "Give a measurable target (a number and a unit)",
                         f"record the answer with `kb clarify`, then `kb redraft {rid} --new` and quote the new sentence")
     elif flag == "conflicting":
-        question = f"{rid} contradicts another requirement. Which document is right?"
+        question = _question(f"{rid} contradicts another requirement. Which document is right?")
         answer = Option("decide", "Say which is right",
                         "record it with `kb clarify`, update or retire the other requirement with `kb redraft`")
     else:  # untestable
-        question = f"{rid} cannot be tested as written. How should it be checked?"
+        question = _question(f"{rid} cannot be tested as written. How should it be checked?")
         answer = Option("define", "Describe how to check it", f"record it with `kb clarify`, then `kb redraft {rid} --new`")
     retire = Option("retire", "It is not a real requirement", f"set `status: rejected` on {rid}; never delete the file")
-    return AskItem(f"{flag}:{rid}", flag, question, _evidence(rid, rec, repo), (answer, _KEEP, retire))
+    return AskItem(f"{flag}:{rid}", flag, question[0], _evidence(rid, rec, repo), (answer, _KEEP, retire), question[1])
 
 
 def _flag_asks(repo: KbRepo) -> list[AskItem]:
@@ -234,12 +243,14 @@ def _owner_asks(issues: list[Issue], config: KbConfig) -> list[AskItem]:
         if i.record:  # a module
             where = f"modules.{i.record}.owner"
             title = titles.get(i.record)
-            question = f"Who owns {i.record} ({title}{_MODULE_TAIL}" if title else f"Who owns {i.record}? Give a forge handle."
+            question = (_question(f"Who owns {i.record} ({{title}})? Give a forge handle.", title=title) if title
+                        else _question(f"Who owns {i.record}? Give a forge handle."))
         else:
             where = i.message.removesuffix(_OWNER_TODO_SUFFIX)
-            question = _APPROVER_QUESTIONS.get(where, f"Who should be the owner at {where}? Give a forge handle.")
+            question = _question(_APPROVER_QUESTIONS.get(where, "Who should be the owner at {where}? Give a forge handle."),
+                                 where=where)
         handle = Option("handle", "Give a handle", f"write it into kb.config.yaml at {where}")
-        out[f"owner:{where}"] = AskItem(f"owner:{where}", "owner", question, {}, (handle,))
+        out[f"owner:{where}"] = AskItem(f"owner:{where}", "owner", question[0], {}, (handle,), question[1])
     return list(out.values())
 
 
@@ -250,16 +261,17 @@ def _secret_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
             continue
         src = repo.sources.get(i.record)
         document = src.original if src else i.record
+        question = _question("{document} contains a secret (the stored copy is masked). Remove it from the original?",
+                             document=document)
         out[i.record] = AskItem(
-            f"secret:{i.record}", "secret",
-            f"{document} contains a secret (the stored copy is masked). Remove it from the original?",
-            {"document": document, "source": i.record},
+            f"secret:{i.record}", "secret", question[0], {"document": document, "source": i.record},
             (
                 Option("remove", "Remove it from the document",
                        f"delete that paragraph from {inline_code(document)} (or ask the person to, for PDF or Word), then "
                        "`kb source sync`; tell the person to rotate the key"),
                 Option("self", "I will handle it", "leave it; kb check keeps reporting it"),
             ),
+            question[1],
         )
     return list(out.values())
 
@@ -273,11 +285,15 @@ def _baseline_requirements(root: Path, version: str) -> object:
     return data.get("requirements") if isinstance(data, dict) else None
 
 
-def _freeze_asks(root: Path, repo: KbRepo, errors: int, pending: bool) -> list[AskItem]:
+def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pending: bool) -> list[AskItem]:
     """Offer the next baseline when nothing else is left (no error, no do item, no ask but flag asks: keeping a
     flag is a valid answer), there is a live requirement, HEAD is the tip of the default branch with kb/ and
-    kb.config.yaml committed, and the live requirements differ from the latest baseline (or there is none)."""
+    kb.config.yaml committed, the live requirements differ from the `latest` baseline (or there is none), and
+    `kb baseline freeze` would accept the next version (kb and kb/baseline are no symlinks, its tag is free)."""
     if errors or pending or not has_commits(root):
+        return []
+    folder = root / "kb/baseline"
+    if (root / "kb").is_symlink() or folder.is_symlink() or (folder.exists() and not folder.is_dir()):
         return []
     reqs = requirement_hashes(repo)
     if not reqs or is_dirty(root, "kb/") or is_dirty(root, "kb.config.yaml"):
@@ -285,16 +301,19 @@ def _freeze_asks(root: Path, repo: KbRepo, errors: int, pending: bool) -> list[A
     branch = find_default_branch(root)
     if branch is None or rev_parse(root, branch) != head_commit(root):
         return []
-    latest = _baseline(root)
     if latest is not None and _baseline_requirements(root, latest) == reqs:
         return []
     version = f"v{int(latest[1:]) + 1}" if latest else "v1"
+    if tag_exists(root, f"kb-baseline-{version}"):  # frozen already, its file not merged yet
+        return []
+    question = _question(f"The knowledge base has no errors. Freeze baseline {version}?")
     return [AskItem(
-        f"freeze:{version}", "freeze", f"The knowledge base has no errors. Freeze baseline {version}?", {},
+        f"freeze:{version}", "freeze", question[0], {},
         (
             Option("freeze", "Freeze it", f"`kb baseline freeze {version}`, commit, and open a PR for review"),
             Option("later", "Not yet", "leave it"),
         ),
+        question[1],
     )]
 
 
@@ -303,7 +322,10 @@ def build_todo(root: Path) -> Todo:
     root = Path(root)
     if not (root / "kb.config.yaml").exists():
         init = DoItem("init", "kb.init", "kb.config.yaml not found; set up the knowledge base", "kb init", None, None)
-        state = {"initialized": False, "sources": 0, "records": 0, "errors": 0, "warnings": 0, "baseline": None, "clean": False}
+        state = {
+            "initialized": False, "sources": 0, "records": 0, "errors": 0, "warnings": 0, "baseline": None,
+            "clean": False, "blocking_asks": 0,
+        }
         return Todo((init,), (), state)
     issues = run_check(root).issues
     config = load_config(root / "kb.config.yaml")
@@ -314,33 +336,22 @@ def build_todo(root: Path) -> Todo:
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head) + _fix_items(issues, repo, outdated, broken) + _triage_items(issues)
+    # owners and secrets block; flag and freeze asks are optional decisions ("keep it flagged" and "not yet" are
+    # answers), so they never make the KB unclean
     blocking = _owner_asks(issues, config) + _secret_asks(issues, repo)
     errors = sum(i.severity == "error" for i in issues)
-    ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, errors, bool(do or blocking))
+    latest = _baseline(root)
+    ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, latest, errors, bool(do or blocking))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
-        "warnings": len(issues) - errors, "baseline": _baseline(root), "clean": not errors and not do and not ask,
+        "warnings": len(issues) - errors, "baseline": latest, "clean": not errors and not do and not blocking,
+        "blocking_asks": len(blocking),
     }
     return Todo(tuple(sorted(do, key=lambda d: d.id)), tuple(sorted(ask, key=lambda a: a.id)), state)
 
 
 def _line(text: str) -> str:
     return " ".join(text.split())
-
-
-def _question_text(a: AskItem) -> str:
-    """The question with the untrusted text it embeds (a statement, a document path, a module title) as inline
-    code."""
-    q, ev = a.question, a.evidence
-    if (statement := ev.get("statement")) is not None:
-        return q.replace(f'"{statement}"', inline_code(statement), 1)
-    if a.kind == "secret" and (document := ev.get("document")) and q.startswith(document):
-        return inline_code(document) + q.removeprefix(document)
-    if a.id.startswith("owner:modules."):
-        head = f"Who owns {a.id.removeprefix('owner:modules.').removesuffix('.owner')} ("
-        if q.startswith(head) and q.endswith(_MODULE_TAIL):
-            return head + inline_code(q[len(head):-len(_MODULE_TAIL)]) + _MODULE_TAIL
-    return q
 
 
 def _evidence_text(ev: dict) -> str:
@@ -366,7 +377,7 @@ def render_todo_text(t: Todo) -> str:
         lines.append("- nothing")
     lines += ["", "Ask the user:"]
     for n, a in enumerate(t.ask, 1):
-        lines.append(f"{n}. {_line(_question_text(a))}")
+        lines.append(f"{n}. {_line(a.question_text)}")
         if a.evidence:
             lines.append(f"   evidence: {_evidence_text(a.evidence)}")
         lines.extend(f"   ({chr(ord('a') + k)}) {_line(o.label)}" for k, o in enumerate(a.options))
@@ -376,7 +387,8 @@ def render_todo_text(t: Todo) -> str:
 
 
 def render_todo_json(t: Todo) -> str:
-    data = {"do": [asdict(d) for d in t.do], "ask": [asdict(a) for a in t.ask], "state": t.state}
+    ask = [{k: v for k, v in asdict(a).items() if k != "question_text"} for a in t.ask]
+    data = {"do": [asdict(d) for d in t.do], "ask": ask, "state": t.state}
     return json.dumps(data, sort_keys=True, indent=2) + "\n"
 
 

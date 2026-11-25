@@ -162,7 +162,9 @@ def test_todo_json_is_deterministic_and_sorted(tmp_path):
     assert ids == sorted(ids) and len(ids) == len(set(ids))
     assert {"ingest:docs/c.md", "sync", "triage:SRC-b", "triage:SRC-n"} <= set(ids)
     assert first.stderr.strip() == f"{len(ids)} to do, 0 questions for the user"
-    assert set(data["state"]) == {"initialized", "sources", "records", "errors", "warnings", "baseline", "clean"}
+    assert set(data["state"]) == {
+        "initialized", "sources", "records", "errors", "warnings", "baseline", "clean", "blocking_asks",
+    }
 
 
 def test_todo_bad_format_is_usage_error(tmp_path):
@@ -179,9 +181,10 @@ def test_todo_bad_config_exits_2(tmp_path):
 def test_clean_repo_is_clean(tmp_path):
     root = drafted(tmp_path)
     t = build_todo(root)
-    assert t.do == () and [a.id for a in t.ask] == ["freeze:v1"]  # the one thing left: freezing a baseline
+    assert t.do == () and [a.id for a in t.ask] == ["freeze:v1"]  # optional: it does not make the KB unclean
     assert t.state == {
-        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": None, "clean": False,
+        "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": None, "clean": True,
+        "blocking_asks": 0,
     }
     ok(root, "baseline", "freeze", "v1")
     commit(root, "baseline v1")
@@ -189,6 +192,7 @@ def test_clean_repo_is_clean(tmp_path):
     assert t.do == () and t.ask == ()
     assert t.state == {
         "initialized": True, "sources": 1, "records": 1, "errors": 0, "warnings": 0, "baseline": "v1", "clean": True,
+        "blocking_asks": 0,
     }
     r = ok(root, "todo")
     assert r.stderr.strip() == "0 to do, 0 questions for the user"

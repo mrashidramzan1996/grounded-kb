@@ -175,7 +175,7 @@ def test_freeze_offered_only_when_everything_is_clean(tmp_path):
     root = todo_drafted(tmp_path)
     t = todo_json(root)
     assert (t["do"], t["ask"]) == ([], [FREEZE_V1])
-    assert t["state"]["clean"] is False and t["state"]["errors"] == 0
+    assert t["state"]["clean"] is True and t["state"]["errors"] == 0
 
     git(root, "checkout", "-qb", "feature")
     git(root, "commit", "-q", "--allow-empty", "-m", "wip")  # HEAD is not the tip of the default branch
@@ -215,6 +215,40 @@ def test_freeze_offered_alongside_flag_asks(tmp_path):
     t = todo_json(root)
     assert t["do"] == []
     assert [a["id"] for a in t["ask"]] == ["secret:SRC-keys", "untestable:REQ-F-002", "vague:REQ-NF-001"]
+
+
+def test_clean_with_kept_flag_and_pending_freeze(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
+    t = todo_json(root)
+    assert [a["id"] for a in t["ask"]] == ["freeze:v1", "vague:REQ-NF-001"]
+    assert (t["state"]["clean"], t["state"]["blocking_asks"]) == (True, 0)  # both are optional decisions
+
+    put(root, "kb.config.yaml", TODO_CONFIG + "  - id: MOD-b\n    owner: TODO\n")
+    t = todo_json(root)
+    assert (t["state"]["clean"], t["state"]["blocking_asks"]) == (False, 1)  # only the person can name an owner
+
+
+def test_no_freeze_when_tag_exists(tmp_path):
+    root = todo_drafted(tmp_path)
+    ok(root, "baseline", "freeze", "v1")  # tags HEAD kb-baseline-v1
+    git(root, "checkout", "-qb", "baseline-v1")
+    commit(root, "baseline v1")  # the file goes to a PR branch
+    git(root, "checkout", "-q", "main")
+    assert not (root / "kb/baseline/v1.yaml").exists()
+    t = todo_json(root)
+    assert (t["do"], t["ask"], t["state"]["errors"]) == ([], [], 0)
+
+
+def test_no_freeze_when_baseline_folder_is_not_a_directory(tmp_path):
+    root = todo_drafted(tmp_path)
+    put(root, "kb/baseline", "not a folder\n")
+    commit(root, "file")
+    assert todo_json(root)["ask"] == []
+    (root / "kb/baseline").unlink()
+    (tmp_path / "elsewhere").mkdir()
+    (root / "kb/baseline").symlink_to(tmp_path / "elsewhere")
+    commit(root, "symlink")
+    assert todo_json(root)["ask"] == []
 
 
 def test_no_freeze_without_requirements(tmp_path):
