@@ -16,9 +16,12 @@ def _governing_ids(pack: ContextPack) -> set[str]:
 
 
 def stale_context(
-    root: Path, config: KbConfig, repo: KbRepo, base_branch: str, merge_base_ref: str, changed: list[str]
+    root: Path, config: KbConfig, repo: KbRepo, base_branch: str, merge_base_ref: str, changed: list[str],
+    *, tip: str | None = None,
 ) -> list[Issue]:
-    tip = rev_parse(root, base_branch)
+    """`tip`: the base branch's tip commit, already resolved (kb verify looks the branch up among branches only);
+    left out, `base_branch` is resolved here."""
+    tip = tip or rev_parse(root, base_branch)
     if tip is None:
         raise GitError(f"base branch '{base_branch}' does not resolve to a commit")
     if tip == rev_parse(root, merge_base_ref):

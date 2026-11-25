@@ -268,3 +268,49 @@ def test_pr_cannot_loosen_its_own_policy(repo, tmp_path):
     r = invoke(repo, "verify", "--base", "main", "--forge", both, "--format", "markdown")
     assert r.exit_code == 0, r.output
     assert "All required owners approved." in r.stdout
+
+
+def _loosened_pr(repo: Path) -> None:
+    """On `feature`: the PR turns enforcement off, empties `intent` and edits REQ-F-001 (main enforces)."""
+    set_mode(repo, "enforce")
+    commit(repo, "enforce")
+    branch(repo)
+    cfg = repo / "kb.config.yaml"
+    cfg.write_text(cfg.read_text().replace("    intent:\n    - product-owners\n", "    intent: []\n").replace(
+        "  mode: enforce\n", "  mode: warn-only\n  fail_on: []\n"
+    ))
+    req = repo / "kb/requirements/REQ-F-001.yaml"
+    req.write_text(req.read_text().replace("statement: A removed seat", "statement: A deleted seat", 1))
+    commit(repo, "loosen the policy and change a requirement")
+
+
+def test_tag_named_like_the_base_branch_is_refused(repo, tmp_path):
+    """git resolves refs/tags/<name> before refs/remotes/<name>: a tag the PR author pushes (actions/checkout with
+    fetch-depth 0 fetches tags) named like the base branch and pointing at the PR head would make the merge-base HEAD
+    and the policy the PR's own. A shadowing tag is exit 2; a full ref names the branch unambiguously."""
+    _loosened_pr(repo)
+    git(repo, "update-ref", "refs/remotes/origin/main", "refs/heads/main")  # as a CI checkout has it
+    unapproved = f"local:{forge_file(tmp_path, repo, teams=TEAMS)}"
+
+    git(repo, "tag", "origin/main", "HEAD")
+    r = invoke(repo, "verify", "--base", "origin/main", "--forge", unapproved)
+    assert r.exit_code == 2, r.output
+    assert "a tag named 'origin/main' shadows the branch; delete it or pass a full ref" in r.stderr
+    git(repo, "tag", "-d", "origin/main")
+
+    git(repo, "tag", "main", "HEAD")
+    for args in (["--base", "main"], [], ["--all"]):  # given, the default branch, and --all's policy branch
+        r = invoke(repo, "verify", *args, "--forge", unapproved)
+        assert r.exit_code == 2, (args, r.output)
+        assert "a tag named 'main' shadows the branch" in r.stderr, args
+    pr_base = forge_file(tmp_path, repo, teams=TEAMS, pr={"number": 7, "head_sha": head(repo), "author": "alice",
+                                                          "base": "main"})
+    r = invoke(repo, "verify", "--all", "--forge", f"local:{pr_base}")  # the PR's own base branch, by name
+    assert r.exit_code == 2 and "a tag named 'main' shadows the branch" in r.stderr, r.output
+
+    for ref in ("refs/heads/main", "refs/remotes/origin/main"):  # a full ref is not ambiguous: the base's policy
+        r = invoke(repo, "verify", "--base", ref, "--forge", unapproved, "--format", "json")
+        assert r.exit_code == 1, (ref, r.output)
+        data = json.loads(r.stdout)
+        assert "missing_owner_approval" in blocking_codes(data)
+        assert any("requirement REQ-F-001 changed" in i["message"] for i in data["issues"])

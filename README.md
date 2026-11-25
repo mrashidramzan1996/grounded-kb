@@ -57,7 +57,9 @@ requirements; otherwise `kb check` warns `claim.number_not_in_requirement`. The 
 (`policy.approvers`, `teams`, `bots`, module owners, `fail_on` and `mode`) and CODEOWNERS are read from the current tip
 of the target branch (`--base`, else the default branch), not from the pull request and not from the merge-base, so a
 change cannot loosen the rules it is checked against, not even by branching from an old commit; the Approvals section
-of the report says where they came from (`Policy from base main at <sha>.`). A change to `kb.config.yaml` or to a
+of the report says where they came from (`Policy from base main at <sha>.`). `--base` and the pull request's target name a
+branch, looked up among local and remote-tracking branches only: a tag with the same name is an error (exit 2);
+delete it, or pass a full ref such as `refs/remotes/origin/main`. A change to `kb.config.yaml` or to a
 CODEOWNERS file (`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) also needs the decision approvers. With
 `kb verify --all` and a pull request, the policy comes from the branch the pull request targets (or the default
 branch); a base branch that cannot be found is an error (exit 2). Without a pull request and without a base the working

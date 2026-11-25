@@ -87,3 +87,23 @@ def test_tag_and_commit_helpers(tmp_path):
     assert is_dirty(repo, "kb/")
     with pytest.raises(GitError):
         head_commit(repo / "nowhere")
+
+
+def test_branch_tip_looks_only_among_branches(tmp_path):
+    from kb.gitfiles import branch_tip
+
+    repo = make_git_repo(None, tmp_path, extra={"a.txt": "1"})
+    main = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "update-ref", "refs/remotes/origin/release", main)
+    assert branch_tip(repo, "main") == ("main", main)
+    assert branch_tip(repo, "release") == ("origin/release", main)  # a CI checkout: origin's branch
+    assert branch_tip(repo, "origin/release") == ("origin/release", main)
+    assert branch_tip(repo, "refs/remotes/origin/release") == ("refs/remotes/origin/release", main)
+    assert branch_tip(repo, "nope") is None and branch_tip(repo, "-x") is None
+    assert branch_tip(repo, "HEAD") is None and branch_tip(repo, main) is None  # not branches
+    git(repo, "tag", "v1")
+    assert branch_tip(repo, "v1") is None  # a tag is not a branch
+    git(repo, "tag", "origin/release")
+    with pytest.raises(GitError, match="a tag named 'origin/release' shadows the branch"):
+        branch_tip(repo, "release")  # found as origin/release, which the tag shadows
+    assert branch_tip(repo, "refs/remotes/origin/release") == ("refs/remotes/origin/release", main)

@@ -203,3 +203,13 @@ def test_verify_takes_the_policy_from_the_tip_when_branched_from_before_kb(tmp_p
     assert report.policy_source == f"base main at {sha(root, 'main')[:7]}"
     assert report.required == {"@acme/tech-leads": ["kb.config.yaml changed"]}
     assert "missing_owner_approval" in {i.code for i in report.blocking}
+
+
+def test_a_tag_shadowing_the_base_branch_is_an_error(tmp_path):
+    root = _loosened_feature(tmp_path)
+    git(root, "tag", "main", "HEAD")  # the PR head, named like the target branch
+    with pytest.raises(GitError, match="a tag named 'main' shadows the branch"):
+        load_policy(root, "main", head_cfg(root))
+    policy = load_policy(root, "refs/heads/main", head_cfg(root))  # a full ref is not ambiguous
+    assert policy.config.policy.mode == "enforce"
+    assert policy.source == f"base refs/heads/main at {sha(root, 'refs/heads/main')[:7]}"

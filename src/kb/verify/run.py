@@ -8,10 +8,10 @@ from kb.check import run_check
 from kb.config.load import load_config
 from kb.gitfiles import (
     GitError,
+    branch_tip,
     find_default_branch,
     head_commit,
-    merge_base,
-    rev_parse,
+    merge_base_of,
 )
 from kb.issues import Issue
 from kb.ports.forge import Forge, PullRequest
@@ -26,38 +26,48 @@ from kb.verify.policy import load_policy
 from kb.verify.report import VerifyReport, blocking_issues
 from kb.verify.stale_context import stale_context
 
+Branch = tuple[str, str]  # (the branch as shown, its tip commit): gitfiles.branch_tip
 
-def _bases(root: Path, base: str | None, all_: bool) -> tuple[str | None, str | None]:
-    """(base branch name, merge-base commit). No base given: the default branch, unless --all; with no default
+
+def _branch(root: Path, name: str) -> Branch:
+    """branch_tip, or the GitError (with the fetch-depth hint) when no branch has that name."""
+    found = branch_tip(root, name)
+    if found is None:
+        raise GitError(f"cannot find the base branch '{name}'; check the base name, fetch the base branch, "
+                       "or use fetch-depth: 0 in CI")
+    return found
+
+
+def _bases(root: Path, base: str | None, all_: bool) -> tuple[Branch | None, str | None]:
+    """(base branch, merge-base commit). No base given: the default branch, unless --all; with no default
     branch at all, (None, None) and every claim is checked. A default branch without a merge-base (a shallow
-    clone) is a GitError with the fetch-depth hint, not a silent full run."""
+    clone) is a GitError with the fetch-depth hint, not a silent full run. The branch is looked up among branches
+    only (a tag of the same name is a GitError) and everything after uses its commit, never the name."""
     if base:
-        ref = merge_base(root, base)  # GitError, with the fetch-depth hint, when there is none
-        # merge_base falls back to origin/<base> (a CI checkout has no local base branch): so do we
-        return (base if rev_parse(root, base) is not None else f"origin/{base}"), ref
-    if not all_:
-        branch = find_default_branch(root)
-        if branch is not None:
-            return branch, merge_base(root, branch)
-    return None, None
+        branch = _branch(root, base)
+    elif not all_ and (default := find_default_branch(root)) is not None:
+        branch = _branch(root, default)
+    else:
+        return None, None
+    return branch, merge_base_of(root, branch[1], branch[0])
 
 
-def _policy_branch(root: Path, base_branch: str | None, pr: PullRequest | None) -> str | None:
+def _policy_branch(root: Path, base_branch: Branch | None, pr: PullRequest | None) -> Branch | None:
     """The branch whose tip holds the approval policy: the base branch; with none (--all, or no default branch) and a
     pull request, the branch it targets (as the forge names it, else the default branch). None: no PR and no base,
     the working tree's policy. A PR whose target cannot be found is a GitError, never the working tree's policy."""
     if base_branch is not None or pr is None:
         return base_branch
     if pr.base is not None:
-        for name in (pr.base, f"origin/{pr.base}"):
-            if not pr.base.startswith("-") and rev_parse(root, name) is not None:
-                return name
-        raise GitError(f"cannot find the pull request's base branch {pr.base!r} to read the approval policy; fetch it")
+        found = branch_tip(root, pr.base)
+        if found is None:
+            raise GitError(f"cannot find the pull request's base branch {pr.base!r} to read the approval policy; fetch it")
+        return found
     branch = find_default_branch(root)
     if branch is None:
         raise GitError("a pull request is checked but there is no base branch to read the approval policy from; "
                        "fetch the default branch or pass --base")
-    return branch
+    return _branch(root, branch)
 
 
 def verdict_issues(verdicts: list[Verdict], repo: KbRepo) -> list[Issue]:
@@ -90,7 +100,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     # working tree's config drives everything else. The merge-base stays the base of the diff.
     policy = load_policy(root, _policy_branch(root, base_branch, pr), config)
 
-    check = run_check(root, base=base_branch)  # the schema gates, and decision_guard when there is a base
+    check = run_check(root, base=base_branch[1] if base_branch else None)  # the schema gates, and decision_guard when there is a base
     repo = KbRepo.load(root)
     base_repo = KbRepo.at_ref(root, base_ref) if base_ref else None
     changes = compute_changes(root, base_ref, head_repo=repo) if base_ref else None
@@ -98,7 +108,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     write_cache(root, INDEX_PATH, index.to_json())
     hit = affected(None if all_ else changes, config, repo, index, base_repo)
     stale = (
-        stale_context(root, config, repo, base_branch, base_ref, list(changes.files))
+        stale_context(root, config, repo, base_branch[0], base_ref, list(changes.files), tip=base_branch[1])
         if base_branch and base_ref and changes is not None else []
     )
     # The project's tests are untrusted code: everything read from the tree or the forge's event is read first

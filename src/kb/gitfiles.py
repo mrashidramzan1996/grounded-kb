@@ -104,6 +104,45 @@ def require_commit(root: Path) -> None:
         raise GitError(NO_COMMITS)
 
 
+# Where a branch named by its short name is looked for, in this order: a local branch, a remote-tracking branch named
+# with its remote ("origin/main"), then origin's (a CI checkout has no local base branch).
+_BRANCH_PREFIXES = ("refs/heads/", "refs/remotes/", "refs/remotes/origin/")
+
+
+def branch_tip(root: Path, name: str) -> tuple[str, str] | None:
+    """(the branch as shown, its tip commit) for branch `name`, looked up only among branches: refs/heads/<name>, then
+    refs/remotes/<name>, then refs/remotes/origin/<name>; a full ref under refs/heads/ or refs/remotes/ is taken as
+    given. None when no such branch exists. A tag of the same short name is a GitError: git resolves refs/tags/<name>
+    before refs/remotes/<name>, so whoever can push a tag could otherwise choose the commit a short name means."""
+    if not name or name.startswith("-"):
+        return None
+    if name.startswith(("refs/heads/", "refs/remotes/")):
+        tip = rev_parse(root, name)
+        return (name, tip) if tip is not None else None
+    for prefix in _BRANCH_PREFIXES:
+        if (tip := rev_parse(root, prefix + name)) is None:
+            continue
+        shown = (prefix + name).removeprefix("refs/heads/").removeprefix("refs/remotes/")
+        for short in dict.fromkeys((name, shown)):  # "main" found as origin/main: neither name may be a tag
+            if tag_exists(root, short):
+                raise GitError(f"a tag named {short!r} shadows the branch; delete it or pass a full ref "
+                               "(refs/heads/<branch> or refs/remotes/<remote>/<branch>)")
+        return shown, tip
+    return None
+
+
+def merge_base_of(root: Path, commit: str, shown: str) -> str:
+    """The merge-base of `commit` (a SHA) and HEAD, with no fallback to another name; `shown` names it in the error."""
+    require_commit(root)
+    r = _git(root, "merge-base", commit, "HEAD", check=False)
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.decode().strip()
+    raise GitError(
+        f"cannot compute merge-base of '{shown}' and HEAD; check the base name, "
+        "fetch the base branch, or use fetch-depth: 0 in CI"
+    )
+
+
 def merge_base(root: Path, base: str) -> str:
     require_commit(root)
     for ref in (base, f"origin/{base}"):

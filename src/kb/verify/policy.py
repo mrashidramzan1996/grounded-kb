@@ -7,7 +7,7 @@ from pathlib import Path
 
 from kb.config.load import config_at
 from kb.config.schema import KbConfig
-from kb.gitfiles import GitError, rev_parse
+from kb.gitfiles import GitError, branch_tip
 from kb.verify.approvals import CodeownersRules, codeowners_rules, codeowners_rules_at
 
 
@@ -18,18 +18,21 @@ class Policy:
     source: str  # where it came from, for the report: "base <branch> at <sha7>" or "working tree…"
 
 
-def load_policy(root: Path, branch: str | None, head_config: KbConfig) -> Policy:
-    """The policy at the tip of `branch` (the target branch: "main" or "origin/main"). No branch: the working tree's,
-    as before. A tip without kb.config.yaml (kb is new in this change): the working tree's config, with the tip's
-    CODEOWNERS. A branch that does not resolve is a GitError, and a tip config that does not parse a ConfigError:
-    never a fallback to the working tree."""
+def load_policy(root: Path, branch: "str | tuple[str, str] | None", head_config: KbConfig) -> Policy:
+    """The policy at the tip of `branch` (the target branch: "main" or "origin/main", looked up among branches only,
+    or an already resolved (name, tip commit) pair). No branch: the working tree's, as before. A tip without
+    kb.config.yaml (kb is new in this change): the working tree's config, with the tip's CODEOWNERS. A branch that
+    does not resolve, or that a tag of the same name shadows, is a GitError, and a tip config that does not parse a
+    ConfigError: never a fallback to the working tree."""
     root = Path(root)
     if branch is None:
         return Policy(head_config, codeowners_rules(root), "working tree")
-    if branch.startswith("-") or (tip := rev_parse(root, branch)) is None:
+    found = branch_tip(root, branch) if isinstance(branch, str) else branch
+    if found is None:
         raise GitError(f"cannot resolve the base branch {branch!r} to read the approval policy; fetch it first")
+    name, tip = found
     config = config_at(root, tip)
     rules = codeowners_rules_at(root, tip)
     if config is None:
         return Policy(head_config, rules, "working tree (kb.config.yaml is new in this change)")
-    return Policy(config, rules, f"base {branch} at {tip[:7]}")
+    return Policy(config, rules, f"base {name} at {tip[:7]}")
