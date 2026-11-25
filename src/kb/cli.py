@@ -612,10 +612,14 @@ def graph(
         raise typer.Exit(2)
     root = Path(ctx.obj["root"])
     try:
-        g = build_graph(KbRepo.load(root), load_config(root / "kb.config.yaml"))
+        repo = KbRepo.load(root)
+        g = build_graph(repo, load_config(root / "kb.config.yaml"))
     except TOOL_ERRORS as e:
         raise _fail(e) from e
     typer.echo(json.dumps(g, indent=2, sort_keys=True, ensure_ascii=False) + "\n" if format == "json" else render_mermaid(g), nl=False)
+    if repo.errors:  # the graph is still printed, but it may be incomplete
+        failed = sorted({i.path for i in repo.errors if i.path})
+        typer.echo(f"{len(failed)} KB files failed to load (run `kb check`): {', '.join(failed[:3])}", err=True)
 
 
 @app.command()

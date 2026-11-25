@@ -150,7 +150,7 @@ CANDIDATE_DOC = """\
 
 "Billing Admin" means the person who pays. The Seat Pool holds unused seats.
 
-## Monthly Reports
+## Usage
 
 Each account draws from the Seat Pool. Monthly Reports are sent on the first day.
 
@@ -166,6 +166,8 @@ def test_entity_candidates():
     assert [(phrase, ref) for phrase, ref, _ in got] == [
         ("acme ledger", "SRC-spec#seg-02"), ("billing admin", "SRC-spec#seg-01"), ("seat pool", "SRC-spec#seg-01"),
     ]
+    # "Monthly Reports" occurs twice, both times at the start of a sentence; "Acme Ledger Spec" is the document title
+    assert "monthly reports" not in [p for p, *_ in got] and "acme ledger spec" not in [p for p, *_ in got]
     assert [s.text for *_, s in got] == ["Acme Ledger is the system of record.", '"Billing Admin" means the person who pays.',
                                          "The Seat Pool holds unused seats."]
     # once a term names it (here through an alias) it is no longer a candidate
@@ -175,3 +177,30 @@ def test_entity_candidates():
     # a rejected term covers nothing
     repo = stored_repo(CANDIDATE_DOC, {"kb/glossary/TERM-billing-admin.yaml": admin + "status: rejected\n"})
     assert [phrase for phrase, *_ in entity_candidates(repo)] == ["acme ledger", "billing admin", "seat pool"]
+
+
+def test_entity_candidates_keep_section_headings():
+    # only the document title is suppressed: a term with its own section is still a candidate
+    doc = '# Spec\n\n## Billing Admin\n\n"Billing Admin" means the person who pays. The Billing Admin approves each change.\n'
+    assert [p for p, *_ in entity_candidates(stored_repo(doc, {}))] == ["billing admin"]
+    glossary = "# Glossary\n\n## Seat Pool\n\nThe Seat Pool holds unused seats.\n\n## Usage\n\nEach account draws from the Seat Pool.\n"
+    assert [p for p, *_ in entity_candidates(stored_repo(glossary, {}))] == ["seat pool"]
+    # the file stem is a title too
+    titled = "# Notes\n\nThe Spec Sheet lists prices. Read the Spec Sheet first.\n"
+    assert entity_candidates(stored_repo(titled, {}, src="SRC-spec-sheet")) == []
+
+
+def test_single_word_is_a_needs_another_mention():
+    assert entity_candidates(stored_repo("# Notes\n\nSecurity is a priority.\n", {})) == []
+    got = entity_candidates(stored_repo("# Notes\n\nAcme is a vendor. We pay Acme monthly.\n", {}))
+    assert [(p, s.text) for p, _, s in got] == [("acme", "Acme is a vendor.")]
+
+
+def test_graph_cli_warns_about_files_that_failed_to_load(tmp_path):
+    config = 'version: 1\nsources:\n  - paths: ["docs/**"]\nmodules:\n  - id: MOD-a\n    owner: "@alice"\n'
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": config, "docs/spec.md": DOC})
+    ok(root, "ingest")
+    write(root, "kb/glossary/TERM-bad.yaml", "id: TERM-bad\nname: [\n")
+    r = invoke(root, "graph")
+    assert r.exit_code == 0 and json.loads(r.stdout)["nodes"] == [{"id": "MOD-a", "type": "module", "label": "MOD-a"}]
+    assert "1 KB files failed to load (run `kb check`): kb/glossary/TERM-bad.yaml" in r.stderr

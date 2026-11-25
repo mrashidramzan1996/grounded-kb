@@ -165,14 +165,14 @@ _NOT_NAMES = {"it", "this", "that", "there", "these", "those", "here", "what", "
               "you", "each", "every", "all", "any", "no", "one", "our", "your", "its", "their"}
 
 
-def _skipped_phrases(repo: KbRepo, src_ids: list[str]) -> set[str]:
-    """Headings (every part of every segment's heading path) and each document's file name: the documents' titles."""
+def _titles(repo: KbRepo, src_ids: list[str]) -> set[str]:
+    """Each document's title: the root heading of its first headed segment, and its file name. Other headings are not
+    skipped (a glossary gives each term its own section); sentences() already leaves heading lines out."""
     out: set[str] = set()
     for src in src_ids:
-        for seg in repo.segments(src):
-            out.update(normalise_name(part) for part in seg.heading.split(" > "))
+        root = next((seg.heading.split(" > ")[0] for seg in repo.segments(src) if seg.heading.strip()), "")
         stem = repo.sources[src].original.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        out.add(normalise_name(re.sub(r"[-_]+", " ", stem)))
+        out.update({normalise_name(root), normalise_name(re.sub(r"[-_]+", " ", stem))} - {""})
     return out
 
 
@@ -190,14 +190,17 @@ def entity_candidates(repo: KbRepo) -> list[tuple[str, str, Sentence]]:
     """(normalised phrase, segment ref, first sentence) for each phrase the documents treat as a named thing and no live
     term names (by name or alias), sorted by phrase. Deterministic; only three patterns: a quoted defined term
     (`"X" means`, `(the "X")`), `X is a|an|the …` at the start of a sentence, and a Title Case phrase of 2 to 5 words
-    that occurs at least twice, not only at the start of a sentence. Headings, kb ids and document titles are skipped."""
+    that occurs at least twice, not only at the start of a sentence. A one-word `X is a …` counts only when X occurs
+    again elsewhere in the documents. Kb ids and document titles are skipped; heading lines are not sentences."""
     live = live_ids(repo)
     covered = {n for rid, rec in repo.records.items() if isinstance(rec, Term) and rid in live for n in names(rec)}
     src_ids = sorted(set(repo.sources) - set(bad_segment_ids(repo)))
-    skipped = _skipped_phrases(repo, src_ids)
+    skipped = _titles(repo, src_ids)
     first: dict[str, Sentence] = {}  # phrase -> first sentence it was seen in
     definite: set[str] = set()  # phrases from the first two patterns
     seen: dict[str, list[bool]] = {}  # Title Case phrase -> per occurrence, whether at the start of the sentence
+    single: dict[str, str] = {}  # one-word `X is a` phrase -> X as written
+    corpus: list[str] = []  # every sentence, folded, kb ids blanked
 
     def note(phrase: str, s: Sentence) -> str | None:
         key = normalise_name(phrase)
@@ -209,6 +212,7 @@ def entity_candidates(repo: KbRepo) -> list[tuple[str, str, Sentence]]:
     for src in src_ids:
         for s in sentences(repo, src):
             text = _KB_ID.sub("  ", fold(s.text)[0])
+            corpus.append(text)
             start = _start(text)
             for pattern in _DEFINED:
                 for m in pattern.finditer(text):
@@ -217,10 +221,16 @@ def entity_candidates(repo: KbRepo) -> list[tuple[str, str, Sentence]]:
             if (m := _IS_A.match(text, start)) is not None:
                 phrase = _strip_article(m.group(1))
                 if phrase and (key := note(phrase, s)) is not None:
-                    definite.add(key)
+                    if " " in phrase:
+                        definite.add(key)
+                    else:
+                        single.setdefault(key, phrase)
             for m in _TITLE_RUN.finditer(text):
                 phrase = _strip_article(m.group())
                 if 2 <= len(phrase.split()) <= 5 and (key := note(phrase, s)) is not None:
                     seen.setdefault(key, []).append(m.start() == start)
     repeated = {k for k, starts in seen.items() if len(starts) >= 2 and not all(starts)}
-    return [(k, first[k].ref, first[k]) for k in sorted(definite | repeated)]
+    # "Security is a priority." alone is not a name; "Acme is a vendor. We pay Acme." is
+    again = {k for k, word in single.items()
+             if sum(len(re.findall(rf"(?<![\w-]){re.escape(word)}(?![\w-])", t)) for t in corpus) >= 2}
+    return [(k, first[k].ref, first[k]) for k in sorted(definite | repeated | again)]

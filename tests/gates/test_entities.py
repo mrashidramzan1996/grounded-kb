@@ -60,7 +60,7 @@ def test_entity_name_must_be_in_quote():
            "kb/glossary/TERM-acct.yaml": term("TERM-acct", "account", seg="seg-02", quote="Accounts are billed monthly.")}
     issues = found(run(entity_gate, bad), "entity.name_not_in_quote")
     assert [(i.record, i.severity) for i in issues] == [("TERM-acct", "warning"), ("TERM-billing", "warning")]
-    assert issues[1].message == "TERM-billing: neither the name nor an alias appears in its quotes; quote a passage that names it"
+    assert issues[1].message == "TERM-billing: neither the name nor an alias appears in its found quotes; quote a passage that names it"
     assert issues[1].path == "kb/glossary/TERM-billing.yaml"
     # case-insensitive, on word boundaries, through an alias
     alias = {"kb/glossary/TERM-acct.yaml": term("TERM-acct", "account", aliases=["ACCOUNTS"], seg="seg-02",
@@ -68,7 +68,9 @@ def test_entity_name_must_be_in_quote():
     assert run(entity_gate, alias) == []
     # an unfound evidence quote is quote.not_found; a kind without evidence is entity.unquoted
     gone = {"kb/glossary/TERM-invoice.yaml": term("TERM-invoice", "invoice", quote="Every invoice is paid by card.")}
-    assert [(i.code, i.severity) for i in run(entity_gate, gone)] == [("quote.not_found", "error")]
+    # (an unfound quote names nothing, so the name check fails too)
+    assert sorted((i.code, i.severity) for i in run(entity_gate, gone)) == [("entity.name_not_in_quote", "warning"),
+                                                                            ("quote.not_found", "error")]
     unquoted = run(entity_gate, {"kb/glossary/TERM-invoice.yaml": term("TERM-invoice", "invoice")})
     assert [(i.code, i.severity) for i in unquoted] == [("entity.unquoted", "warning")]
     # a 0.3 term (no kind, no evidence) is fine
@@ -164,3 +166,101 @@ def test_drafted_relation_errors_are_rejected_in_report(tmp_path):
     out = invoke(root, "check")
     assert out.exit_code == 0 and "relation.entities_not_in_quote" in out.output and "entity.name_not_in_quote" in out.output
     assert ingest_report(root, "HEAD").rejected == []
+
+
+# --- fix round 1: aliases that cannot name anything, overlapping ends, found quotes only -----------
+
+def codes_of(issues):
+    return sorted((i.code, i.severity, i.record) for i in issues)
+
+
+def test_punctuation_alias_is_ignored():
+    # an alias with fewer than 2 alphanumeric characters would match any quote
+    files = {"kb/glossary/TERM-account.yaml": account(("owns", "TERM-ledger", "seg-02", "Accounts are billed monthly.")),
+             "kb/glossary/TERM-ledger.yaml": term("TERM-ledger", "ledger", aliases=["'.'"], seg="seg-02", quote="Accounts are billed monthly.")}
+    issues = run(entity_gate, files)
+    assert codes_of(issues) == [
+        ("entity.alias_invalid", "warning", "TERM-ledger"),
+        ("entity.name_not_in_quote", "warning", "TERM-ledger"),
+        ("relation.entities_not_in_quote", "warning", "TERM-account"),
+    ]
+    (bad,) = found(issues, "entity.alias_invalid")
+    assert bad.message == "TERM-ledger: `.` is ignored as a name or alias: it needs 2 letters or digits and must not be a stop word"
+
+
+def test_stop_word_alias_is_ignored():
+    files = {"kb/glossary/TERM-ledger.yaml": term("TERM-ledger", "ledger", aliases=["a", "The"], quote="An account is a customer of Acme.")}
+    assert codes_of(run(entity_gate, files)) == [
+        ("entity.alias_invalid", "warning", "TERM-ledger"),
+        ("entity.alias_invalid", "warning", "TERM-ledger"),
+        ("entity.name_not_in_quote", "warning", "TERM-ledger"),
+    ]
+
+
+def test_relation_ends_must_not_overlap():
+    # "account" is found only inside "customer account": one occurrence cannot name both ends
+    doc_quote = "An account is a customer of Acme."
+    files = {"kb/glossary/TERM-account.yaml": account(("owns", "TERM-customer", "seg-01", doc_quote)),
+             "kb/glossary/TERM-customer.yaml": term("TERM-customer", "account is a customer", quote=doc_quote)}
+    assert codes_of(run(entity_gate, files)) == [("relation.entities_not_in_quote", "warning", "TERM-account")]
+    # with both named apart it passes
+    files["kb/glossary/TERM-customer.yaml"] = term("TERM-customer", "customer", quote=doc_quote)
+    assert run(entity_gate, files) == []
+
+
+def test_alias_conflict_with_another_term():
+    # the target declares the source's name as its alias: a conflict, and no longer a double mention
+    quote = "An account is a customer of Acme."
+    files = {"kb/glossary/TERM-account.yaml": account(("owns", "TERM-ledger", "seg-01", quote)),
+             "kb/glossary/TERM-ledger.yaml": term("TERM-ledger", "ledger", aliases=["Account"], quote=quote)}
+    issues = run(entity_gate, files)
+    assert codes_of(issues) == [
+        ("entity.alias_conflict", "warning", "TERM-account"),
+        ("entity.alias_conflict", "warning", "TERM-ledger"),
+        ("relation.entities_not_in_quote", "warning", "TERM-account"),
+    ]
+    assert [i.message for i in found(issues, "entity.alias_conflict")] == [
+        "TERM-account: `account` is also a name or alias of TERM-ledger",
+        "TERM-ledger: `account` is also a name or alias of TERM-account",
+    ]
+    # a rejected term conflicts with nothing
+    files["kb/glossary/TERM-ledger.yaml"] += "status: rejected\n"
+    assert found(run(entity_gate, files), "entity.alias_conflict") == []
+
+
+def test_name_must_be_in_a_found_quote():
+    any_mode = ("id: TERM-ledger\nname: ledger\ndefinition: d\nkind: data\nevidence:\n  mode: any\n  quotes:\n"
+                f"  - source: {SRC}#seg-02\n    text: Accounts are billed monthly.\n"
+                f"  - source: {SRC}#seg-02\n    text: The ledger is billed monthly.\n")
+    issues = run(entity_gate, {"kb/glossary/TERM-ledger.yaml": any_mode})
+    assert codes_of(issues) == [("entity.name_not_in_quote", "warning", "TERM-ledger"), ("quote.not_found", "warning", "TERM-ledger")]
+
+
+def test_drafted_term_without_evidence_is_unquoted():
+    by = "drafted_by: agent:test via kb ingest brief v1\n"
+    issues = run(entity_gate, {"kb/glossary/TERM-invoice.yaml": term("TERM-invoice", "invoice", kind=None) + by})
+    assert codes_of(issues) == [("entity.unquoted", "warning", "TERM-invoice")]
+    assert run(entity_gate, {"kb/glossary/TERM-invoice.yaml": term("TERM-invoice", "invoice", kind=None)}) == []
+
+
+def test_drafted_alias_and_unquoted_errors_are_rejected_in_report(tmp_path):
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": CONFIG, "docs/spec.md": DOC})
+    ok(root, "ingest")
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "ingest")
+    by = "drafted_by: agent:test via kb ingest brief v1\n"
+    write(root, "kb/glossary/TERM-account.yaml", account() + by)
+    write(root, "kb/glossary/TERM-invoice.yaml", term("TERM-invoice", "invoice", kind=None) + by)
+    write(root, "kb/glossary/TERM-ledger.yaml",
+          term("TERM-ledger", "ledger", aliases=["a", "account"], quote="An account is a customer of Acme.") + by)
+    r = ingest_report(root, "HEAD")
+    assert sorted((i.record, i.code, i.severity) for i in r.rejected) == [
+        ("TERM-account", "entity.alias_conflict", "error"),
+        ("TERM-invoice", "entity.unquoted", "error"),
+        ("TERM-ledger", "entity.alias_conflict", "error"),
+        ("TERM-ledger", "entity.alias_invalid", "error"),
+    ]
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "terms")
+    out = invoke(root, "check")
+    assert out.exit_code == 0 and "entity.alias_invalid" in out.output and "entity.unquoted" in out.output

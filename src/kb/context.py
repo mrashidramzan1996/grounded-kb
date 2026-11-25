@@ -107,10 +107,12 @@ def _anchor_file(ref: str | None, sep: str) -> str | None:
 
 
 def _flagged(repo: KbRepo, rec: Requirement | Exclusion | Decision | Invariant | Term, texts: list[str]) -> bool:
-    """Instruction-like text in the record, in its quotes, or in a guard-flagged segment it cites."""
+    """Instruction-like text in the record, in its quotes (a term's relation quotes too), or in a guard-flagged segment
+    one of them cites."""
     if any(has_injection(t) for t in texts):
         return True
-    for q in rec.evidence.quotes if rec.evidence else []:
+    relation_quotes = [r.quote for r in rec.relations] if isinstance(rec, Term) else []
+    for q in [*(rec.evidence.quotes if rec.evidence else []), *relation_quotes]:
         src, _, seg = q.source.partition("#")
         source = repo.sources.get(src)
         if has_injection(q.text) or (source is not None and seg in source.guard.injection_segments):
@@ -211,8 +213,7 @@ def _select(ix: _Index, paths: Iterable[str], modules: Iterable[str], features: 
     flagged |= {d.id for d in decisions if _flagged(repo, d, [d.title, d.body])}
     flagged |= {i.id for i in invariants if _flagged(repo, i, [i.statement, i.body])}
     flagged |= {c.id for c in picked_claims if has_injection(c.claim)}
-    flagged |= {t.id for t in entities
-                if _flagged(repo, t, [t.name, t.definition, *t.aliases, *(r.quote.text for r in t.relations)])}
+    flagged |= {t.id for t in entities if _flagged(repo, t, [t.name, t.definition, *t.aliases])}
     mods = sorted(m for m in gov if m in ix.modules)
     return ContextPack(
         modules=mods,
