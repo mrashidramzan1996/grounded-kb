@@ -314,3 +314,31 @@ def test_tag_named_like_the_base_branch_is_refused(repo, tmp_path):
         data = json.loads(r.stdout)
         assert "missing_owner_approval" in blocking_codes(data)
         assert any("requirement REQ-F-001 changed" in i["message"] for i in data["issues"])
+
+
+def _approvals(markdown: str) -> dict[str, str]:
+    """{owner handle: its reasons} from the report's Approvals section."""
+    section = markdown.split("### Approvals\n", 1)[1].split("\n### ", 1)[0]
+    return {ln.split("`")[1]: ln.split("`: ", 1)[1] for ln in section.splitlines() if ln.startswith("- `")}
+
+
+def test_renaming_codeowners_away_needs_decision_approval(repo, tmp_path):
+    """git diff detects renames and lists only the new path: `git mv .github/CODEOWNERS elsewhere` must still count as
+    a CODEOWNERS change, and a file moved out of an owned directory still needs its old owners."""
+    write(repo, ".github/CODEOWNERS", "/services/billing/ @acme/billing\n/kb/requirements/ @acme/product\n")
+    write(repo, "services/billing/notes.py", "X = 1\n")
+    set_mode(repo, "enforce")
+    commit(repo, "CODEOWNERS, enforce")
+    branch(repo)
+    (repo / "notes").mkdir()
+    git(repo, "mv", ".github/CODEOWNERS", "notes/old-owners.txt")
+    git(repo, "mv", "services/billing/notes.py", "notes/notes.py")
+    commit(repo, "move CODEOWNERS and a billing file away")
+
+    unapproved = f"local:{forge_file(tmp_path, repo, teams=TEAMS)}"
+    r = invoke(repo, "verify", "--base", "main", "--forge", unapproved, "--format", "markdown")
+    assert r.exit_code == 1, r.output
+    required = _approvals(r.stdout)
+    assert ".github/CODEOWNERS changed" in required["@acme/tech-leads"]
+    assert "changes services/billing/notes.py" in required["@acme/billing"]
+    assert "missing_owner_approval" in r.stdout

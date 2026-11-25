@@ -160,15 +160,17 @@ def changed_files(root: Path, base: str | None = None) -> list[str]:
 
 
 def changed_since(root: Path, commit: str) -> list[str]:
-    """Files changed in the working tree against `commit`, plus untracked files."""
-    changed = _split(_git(root, "diff", "--name-only", "-z", commit).stdout)
+    """Files changed in the working tree against `commit`, plus untracked files. A rename lists both paths (no rename
+    detection, whatever diff.renames says): the old path's owners must approve a file moved away, and a CODEOWNERS
+    file moved elsewhere is a CODEOWNERS change."""
+    changed = _split(_git(root, "diff", "--no-renames", "--name-only", "-z", commit).stdout)
     untracked = _split(_git(root, "ls-files", "-z", "--others", "--exclude-standard").stdout)
     return sorted(set(changed) | set(untracked))
 
 
 def diff_names(root: Path, a: str, b: str, prefix: str) -> list[str]:
-    """Paths under `prefix` that differ between commits `a` and `b` (added, edited or deleted)."""
-    return _split(_git(root, "diff", "--name-only", "-z", a, b, "--", prefix).stdout)
+    """Paths under `prefix` that differ between commits `a` and `b` (added, edited or deleted; a rename is both)."""
+    return _split(_git(root, "diff", "--no-renames", "--name-only", "-z", a, b, "--", prefix).stdout)
 
 
 def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:

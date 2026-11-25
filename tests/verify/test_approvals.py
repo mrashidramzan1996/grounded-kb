@@ -206,7 +206,20 @@ def test_codeowners_change_needs_decision_approvers(tmp_path):
 
 
 def test_moving_codeowners_needs_decision_approval(tmp_path):
-    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes("CODEOWNERS", ".github/CODEOWNERS"), [])
+    """A real `git mv`: git's rename detection would list only the new path; both count as CODEOWNERS changes."""
+    from helpers import commit, git, make_git_repo
+
+    from kb.gitfiles import merge_base
+    from kb.verify.changes import compute_changes
+
+    root = make_git_repo(None, tmp_path, {"CODEOWNERS": "/src/ @acme/core\n"})
+    git(root, "checkout", "-q", "-b", "feature")
+    (root / ".github").mkdir()
+    git(root, "mv", "CODEOWNERS", ".github/CODEOWNERS")
+    commit(root, "move CODEOWNERS")
+    moved = compute_changes(root, merge_base(root, "main"), head_repo=KbRepo.load(root))
+    assert set(moved.files) == {"CODEOWNERS", ".github/CODEOWNERS"}
+    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, moved, [], rules=None)
     assert {"CODEOWNERS changed", ".github/CODEOWNERS changed"} <= set(req["@acme/tech-leads"])
 
 
