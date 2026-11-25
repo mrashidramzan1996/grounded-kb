@@ -208,3 +208,26 @@ def test_playbook_says_write_records_with_file_tools():
 
 def test_playbook_says_when_to_start_the_branch():
     assert PLAYBOOK[-1] == f"{len(PLAYBOOK)}. {BRANCH_STEP}"
+
+
+# 0.4.0: the extraction evaluation, after the commit rules and before the asks
+EVAL_STEPS = [
+    "Before freezing a baseline, and after adding or changing documents, evaluate the extraction: when `kb todo` lists "
+    "`eval:` items, follow them in order; do the blind extraction in a fresh session or subagent that does not read the "
+    "existing records.",
+    "Judge each evaluation item on its own and over-flag; never decide a finding yourself — ask the user, then record "
+    "their answer with `kb eval decide --by <their handle>`.",
+    "Put the output of `kb eval sample` in every pull-request description after the baseline.",
+]
+
+
+def test_playbook_has_eval_steps(tmp_path, acme_repo):
+    assert PLAYBOOK[3] == f"4. {NEVER_COMMIT_REJECTED}"  # inserted after step 4
+    assert PLAYBOOK[4:7] == [f"{n}. {line}" for n, line in enumerate(EVAL_STEPS, start=5)]
+    assert PLAYBOOK[7].startswith("8. Collect every `ask` item.")
+    (tmp_path / "plain").mkdir()
+    agents = _agents_md(tmp_path / "plain")
+    get_agent("claude-code").install(acme_repo)
+    skill = (acme_repo / SKILL).read_text()
+    for line in EVAL_STEPS:
+        assert line in agents and line in skill

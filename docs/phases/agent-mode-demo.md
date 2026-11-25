@@ -1,24 +1,26 @@
-# Agent-driven mode demo, 0.3.0 (to be run by the user)
+# Agent-driven mode demo, 0.4.0 (to be run by the user)
 
 Status: **to be run by the user.** None of the steps below has been run against `/Users/dev/projects/acme-billing`. The
 same flow runs automatically in `tests/e2e/test_agent_mode.py`: a scripted agent sets up a docs-only repository using
 only the commands the playbook names (`kb todo` and the commands it lists, the ingest brief, `kb clarify`,
-`kb redraft`, `kb baseline freeze`), and `test_agent_follows_playbook_literally` checks that it commits only where the
-playbook says. Run the steps by hand, then fill in the tables.
+`kb redraft`, the `kb eval` steps, `kb baseline freeze`), and `test_agent_follows_playbook_literally` checks that it
+commits only where the playbook says. `tests/e2e/test_eval.py` runs the evaluation loop of step 4 on its own, with the
+real commands. Run the steps by hand, then fill in the tables.
 
 In agent-driven mode you talk only to your coding agent. You type no `kb` commands after the setup in step 1. The
 agent runs `kb todo`, does every `do` item itself, and brings you the `ask` items, the decisions only a person can
 make. You answer them in a few words.
 
-## 0. Install 0.3.0
+## 0. Install 0.4.0
 
 ```sh
 cd /Users/dev/projects/kb
 uv build --wheel --out-dir /tmp/kb-dist
-uv tool install --force /tmp/kb-dist/grounded_kb-0.3.0-py3-none-any.whl
-kb version                      # prints 0.3.0
+uv tool install --force /tmp/kb-dist/grounded_kb-0.4.0-py3-none-any.whl
+kb version                      # prints 0.4.0
 kb todo --help                  # lists --format
 kb clarify --help               # lists --topic, --text, --by, --date
+kb eval --help                  # lists extract, judge, report, decide, sample, status
 ```
 
 ## 1. Reset the sample repo to its documents, and set it up
@@ -107,6 +109,33 @@ What the agent should do with the answers:
 - `kb todo` again until there are no `do` items and no question it has not yet asked you in this session, then
   `kb check --strict`. It must not ask a question you already answered in this session.
 
+## 4. The evaluation
+
+Once the answers are recorded and nothing else is left to do, `kb todo` lists `eval:extract`. The agent evaluates its
+own extraction, without asking you:
+
+- `kb eval extract`, then a fresh session or subagent follows `.kb/cache/eval/extract.md` (the `eval:run-b` item). That
+  subagent reads only the brief and `kb.config.yaml`, never `kb/` or the first brief, and writes a second extraction
+  under `.kb/cache/eval/run-b/`. The agent then runs `kb eval judge`.
+- Another fresh session or subagent follows `.kb/cache/eval/judge.md` (the `eval:verdicts` item). It judges each item on
+  its own, flags an item whenever it is unsure, and writes `.kb/cache/eval/verdicts.yaml`.
+- `kb eval report --write`, then it commits `kb/eval/summary.yaml` (the `commit` item).
+
+Then it brings you the findings, one question each, together with any other open question. Expect some of these:
+
+| Ask id | Question (roughly) | Example answer |
+| --- | --- | --- |
+| `finding:F-…` (omission) | Finding F-…: no record states this rule-like text (requirement). What is it? (a) add it as a new record, (b) already covered by a record, (c) not a rule, (d) needs a product decision | `a`, or `c: it is an example` |
+| `finding:F-…` (entity or relation) | Finding F-…: this text may name an entity no glossary term records. Add it? (a) add it, (b) already recorded as TERM-x, (c) not an entity | `c` |
+| `finding:F-…` (unfaithful) | Finding F-…: REQ-… may not say what its quote says (…). Is the record right? (a) fix the record, (b) it is correct | `b` |
+| `categories` (optional) | None of the documents state security, privacy or availability requirements. Is that right? (a) correct, none apply, (b) I will give them | `a: an internal tool` |
+
+The agent does what each option's `then` says and records your answer with `kb eval decide F-… --as … --by <your
+handle>`. For (a), it first writes the record (or the TERM) quoting the text and runs `kb ingest --report`. It commits
+`kb/eval/decisions.yaml` with the records, and it never runs `kb eval decide` for an answer you did not give. While a
+finding is open, `kb todo` does not offer the freeze. `kb eval status` shows the evaluation, every decision and the
+sentences each one silences.
+
 The last question is the optional freeze:
 
 | Ask id | Question | Example answer |
@@ -117,7 +146,7 @@ On "freeze it" the agent runs `kb baseline freeze v1`, commits `kb/baseline/v1.y
 `kb-baseline-v1`, which is the freeze's tag) and (with a forge) opens a pull request. It never merges it. Once you
 merge it, `kb todo` on `main` should list nothing: no `do` items, no questions.
 
-## 4. Add a new document later
+## 5. Add a new document later
 
 Add a document, for example `docs/refund-policy.md` with a heading and the line "Refunds are paid within 14 days.",
 and say:
@@ -127,12 +156,14 @@ and say:
 Expect `kb check` to warn `source.not_ingested` for it, and `kb todo` on `main` to list `branch` first
 (`git switch -c kb/update-<date>`: a baseline exists, so the work goes on a new branch), then
 `ingest:docs/refund-policy.md` (`kb ingest docs/refund-policy.md`). The agent starts that branch, drafts from the new
-document with its file-editing tool, runs `kb ingest --report`, commits on the branch and opens a pull request. It
-never merges it, and `kb todo` does not offer "Freeze baseline v2?" until the pull request is merged into `main`.
+document with its file-editing tool, runs `kb ingest --report` and commits on the branch. The documents changed, so it
+runs the evaluation again (step 4) and asks you about what it finds; decisions you made before still stand while their
+records are unchanged. It opens a pull request with the output of `kb eval sample` in its description. It never merges
+it, and `kb todo` does not offer "Freeze baseline v2?" until the pull request is merged into `main`.
 
-## 5. A document changed
+## 6. A document changed
 
-Change a line the knowledge base quotes. For example, in `docs/refund-policy.md` from step 4 (once its records are
+Change a line the knowledge base quotes. For example, in `docs/refund-policy.md` from step 5 (once its records are
 merged), change "within 14 days" to "within 30 days". Then say:
 
 > I updated docs/refund-policy.md; update the knowledge base.
@@ -145,11 +176,11 @@ for a pull request.
 
 ## Results (fill in)
 
-Setup (steps 1 to 3):
+Setup (steps 1 to 4):
 
 | Check | Expected | Observed |
 | --- | --- | --- |
-| `kb version` | 0.3.0 | |
+| `kb version` | 0.4.0 | |
 | `## kb to-do` at session start | present | |
 | `kb` commands you typed after step 1 | none | |
 | Questions asked in one message, numbered, with evidence and options | yes | |
@@ -159,16 +190,21 @@ Setup (steps 1 to 3):
 | `kb redraft --report --strict` exit code | 0 | |
 | A question asked twice in the session | no | |
 | `kb check --strict` exit code at the end | 0 | |
+| `eval:` items done before the freeze question, blind extraction and judging each in a fresh session or subagent | yes | |
+| The agent decided a finding itself (`kb eval decide` without your answer) | no | |
+| Findings asked, and how many were real gaps | | |
+| `kb eval status` after your answers | 0 open, up to date | |
 | Commits the agent made that the playbook does not name | none | |
 | `kb todo` after you merge the freeze pull request | nothing to do, no questions | |
 
-Later changes (steps 4 and 5):
+Later changes (steps 5 and 6):
 
 | Check | Expected | Observed |
 | --- | --- | --- |
 | `kb check` on the new document | warning `source.not_ingested` | |
 | `kb todo` items for it, on `main` | `branch`, then `ingest:docs/refund-policy.md` | |
 | Work done on a branch with a PR, not merged by the agent; `main` unchanged | yes | |
+| The evaluation ran again on the branch, and the PR description holds the `kb eval sample` output | yes | |
 | The agent wrote or ran a script to generate records | no | |
 | After the refund-policy change, `kb todo` lists `sync`, then `redraft:changed` | yes | |
 | Records redrafted keep their ids; ADR/INV superseded, not edited | yes | |

@@ -148,7 +148,7 @@ def test_config_change_outside_modules_is_rejected(acme_repo_ingested, fixtures)
     assert r.rejected == [] and r.proposed_modules == ["MOD-tax"]
 
 
-# --- owner and approver answers committed before the drafts (playbook step 8) ---------------------------------
+# --- owner and approver answers committed before the drafts (playbook step 11) --------------------------------
 
 TODO_OWNERS = (
     "version: 1\n"

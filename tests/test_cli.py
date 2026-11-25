@@ -84,3 +84,27 @@ def test_readme_covers_install_every_command_and_posix():
     kb_readme = (Path(__file__).parents[1] / "src/kb/init/templates/kb_readme.md").read_text()
     assert "2. Before committing, run the `kb redraft` it suggests" in kb_readme
     assert "run `kb redraft --changed --base <commit before it>`" in kb_readme
+
+
+def test_readme_covers_the_evaluation_and_the_040_upgrade():
+    from pathlib import Path
+
+    from kb import __version__
+
+    root = Path(__file__).parents[1]
+    readme = (root / "README.md").read_text()
+    assert "## Evaluate the extraction\n" in readme
+    for cmd in ("kb eval extract", "kb eval judge", "kb eval report", "kb eval decide", "kb eval status",
+                "kb eval sample", "kb graph"):
+        assert f"`{cmd}" in readme, cmd
+    upgrade = readme.split("## Upgrading to 0.4.0\n", 1)[1].split("\n## ", 1)[0]
+    for text in ("cuts a word or number", "triage.none_uncoded", "`modality`", "`actor`", "`category`", "`origin`",
+                 "/kb/exclusions/", "/kb/sources/*/triage.yaml", "/kb/eval/", "/.github/workflows/kb-claims.yml",
+                 "kb-policy", "teams.<name>.members", "unreadable_teams: defer"):
+        assert text in upgrade, text
+    assert f"grounded-kb=={__version__}" in readme and f"grounded-kb@v{__version__}" in readme
+    kb_readme = (root / "src/kb/init/templates/kb_readme.md").read_text()
+    assert "## Evaluating the extraction\n" in kb_readme and "eval.decisions_invalid" in kb_readme
+    for cmd in ("kb eval extract", "kb eval judge", "kb eval report --write", "kb eval decide", "kb eval status",
+                "kb eval sample"):
+        assert f"`{cmd}" in kb_readme, cmd

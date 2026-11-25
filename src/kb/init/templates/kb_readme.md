@@ -9,10 +9,24 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 - `kb source add <doc>` / `kb source sync` store and re-read product documents under `kb/sources/`.
 - `kb ingest` prepares a drafting brief; drafted records are reviewed in a pull request.
 - `kb check` runs every gate; `kb context` and `kb trace` read the KB; `kb graph [--format json|mermaid]` exports the records and their links.
+- `kb eval extract`, `kb eval judge`, `kb eval report --write` and `kb eval decide` evaluate the extraction (see "Evaluating the extraction" below); `kb eval status` shows the last evaluation and `kb eval sample` prints a QC checklist for a pull request.
 
 ## Agent-driven mode
 
 You can leave all of this to your coding agent: tell it, for example, "Set up the knowledge base from the documents in docs/." The playbook in `AGENTS.md` has it run `kb todo`, do every `do` item itself, and ask you every `ask` item (approvers, module owners, a target for a vague line, a secret in a document, freezing the baseline) in one message. It records each new fact you give with `kb clarify`, which appends it to `docs/clarifications.md` as a source the records can quote. kb never answers a question for you, and approval is still a merged pull request.
+
+## Evaluating the extraction
+
+`kb check` proves that each record quotes its documents; the evaluation measures whether the extraction is complete and faithful. kb calls no model: the coding agent extracts and judges by following briefs, kb checks what it writes, and only a person decides.
+
+1. `kb eval extract` writes a blind brief (`.kb/cache/eval/extract.md`): every stored segment, nothing of the knowledge base. A fresh session or subagent follows it and writes a second extraction under `.kb/cache/eval/run-b/` with `B-` ids. kb sets aside what it cannot verify (`eval.run_b_invalid`) and copies nothing into `kb/`.
+2. `kb eval judge` aligns that run with the knowledge base and writes `.kb/cache/eval/judge.md`: one item per record, unquoted rule-like sentence, unmatched run B record, split or merge, term, relation and missing entity or relation, each named by an opaque `F-` id. Another fresh session judges each item on its own and writes `.kb/cache/eval/verdicts.yaml`.
+3. `kb eval report` checks every verdict (its span word for word in the item's text, its values from the listed sets, the ids it names live) and prints coverage, agreement and the ranked findings; it exits 1 when a verdict is missing or invalid. `kb eval report --write` also writes `kb/eval/summary.yaml`; commit it.
+4. Each open finding is a blocking question in `kb todo` (`finding:F-…`), and an open finding blocks the freeze. The person's answer is recorded with `kb eval decide F-… --as <added|covered|not_a_rule|product_decision|correct|fixed|ok> --by @handle [--record ID] [--reason "…"]`, which checks that the knowledge base shows it (an `added` record must be new and quote the finding's text) and appends it to `kb/eval/decisions.yaml`. Commit it with the records it names.
+
+`kb todo` lists these steps as `eval:extract`, `eval:run-b`, `eval:judge` and `eval:verdicts` when nothing else is left to do, and again after the records or documents change (except records added or fixed for a decision). A sentence decided `added`, `covered` or `not_a_rule` no longer warns `sentence.uncovered`; a decision on a record stops applying when the record changes. `kb eval status` lists every decision with the sentences it silences. After the baseline, put the output of `kb eval sample` in each pull request's description.
+
+`kb/eval/decisions.yaml` must be byte for byte what `kb eval decide` writes, so its diff is plain text. `kb check` reports `eval.decisions_invalid` (an error) for a file that is not, and for each entry that does not stand (inconsistent with its finding or with the knowledge base, or naming a record that no longer shows it); such an entry silences nothing. Fix or remove the entry, or record the decision again with `kb eval decide`.
 
 ## When a document changes
 
@@ -73,6 +87,7 @@ then passes is reported as flaky.
 | `kb/decisions/ADR-*.md` | Architecture decisions. |
 | `kb/invariants/INV-*.md` | Invariants. |
 | `kb/glossary/TERM-*.yaml` | Glossary terms: the entities of the domain model and how they relate. |
+| `kb/eval/` | The last evaluation (`summary.yaml`, written by `kb eval report --write`) and the person's decisions on its findings (`decisions.yaml`, written by `kb eval decide`). |
 
 The file name is the record id. Records hold only human-owned fields; verification state, approvals and whether a record is superseded are derived by `kb`, never stored.
 
@@ -125,7 +140,7 @@ A decision or invariant drafted from documents (`drafted_by` set) must quote the
 
 Quotes must be verbatim and aligned to word and number boundaries: `seat` does not match inside `seats`, nor `2` inside `25`. A quote shorter than 12 non-space characters is rejected (`quote.too_short`). `evidence.mode` is `all` by default (every quote must be found); with `mode: any` an unfound quote is only a warning (`quote.not_found`) while at least one quote is found, and an error when none is.
 
-Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/exclusions/`, `kb/features/`, `kb/glossary/` and every `kb/sources/SRC-<name>/triage.yaml`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
+Approvers by directory: the intent approvers cover `kb/requirements/`, `kb/exclusions/`, `kb/features/`, `kb/glossary/`, `kb/eval/` and every `kb/sources/SRC-<name>/triage.yaml`; the decisions approvers cover `kb/decisions/`, `kb/invariants/` and `kb/components/`. A number in a feature's claim must appear in the requirement the claim links (or, without one, the feature's requirements), statement or quote; a number in its title or body must appear in one of its linked requirements. Otherwise `kb check` warns `claim.number_not_in_requirement`.
 
 Term (`TERM-seat.yaml`): `id`, `name`, `aliases`, `definition`; with `kind`, `evidence` and `relations` it is a grounded entity of the domain model.
 

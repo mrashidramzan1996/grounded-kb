@@ -11,6 +11,26 @@ You do the kb work; the user only decides. `kb todo` separates the two: `do` ite
 
 {{playbook}}
 
+## Evaluating the extraction
+
+Once nothing else is left to do, `kb todo` lists the evaluation's `eval:` items, one at a time:
+
+- `eval:extract`: run `kb eval extract`.
+- `eval:run-b`: start a fresh session or subagent and have it follow `.kb/cache/eval/extract.md`. It must not read
+  the existing records under `kb/`, the triage files or `.kb/cache/ingest/`; it writes only under
+  `.kb/cache/eval/run-b/`. Then run `kb eval judge`.
+- `eval:judge`: run `kb eval judge`.
+- `eval:verdicts`: have another fresh session or subagent follow `.kb/cache/eval/judge.md`, judging each item on its
+  own and flagging whenever it is unsure. It writes `.kb/cache/eval/verdicts.yaml`. Then run
+  `kb eval report --write` and commit `kb/eval/summary.yaml`.
+
+Each finding the report keeps is then an `ask` item (`finding:F-…`), and an open finding blocks the freeze. Put them
+to the user with the other questions. Do what the chosen option's `then` says: for "Add it as a new record", write
+the record, run `kb ingest --report`, then run `kb eval decide F-… --as added --record <new id> --by <their handle>`.
+Commit `kb/eval/decisions.yaml` with the records. Never run `kb eval decide` for an answer the user did not give.
+After the baseline, paste the output of `kb eval sample` into each pull request's description, so the reviewer can
+check a few records against their quotes.
+
 ## Example exchange
 
 After doing the `do` items (and committing once `kb ingest --report` passed), the agent asks every `ask` item in one

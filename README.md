@@ -29,17 +29,65 @@ a merged pull request, and the agent never merges it. A repository set up before
 updated the pricing spec" is enough: `kb todo` lists the ingest, sync and redraft work. The walk-through is in
 [`docs/phases/agent-mode-demo.md`](docs/phases/agent-mode-demo.md).
 
+## Evaluate the extraction
+
+`kb check` proves that every record rests on a verbatim quote. It cannot tell whether the agent extracted every
+requirement, or whether each record says what its quote says. The evaluation measures both, and a person decides what
+it finds. kb still calls no model: your coding agent does the extraction and the judging, following briefs, and kb
+checks everything they write.
+
+1. `kb eval extract` writes a blind brief, `.kb/cache/eval/extract.md`. It holds every stored segment and nothing of
+   the knowledge base. A fresh session or subagent follows it and writes a second extraction ("run B") under
+   `.kb/cache/eval/run-b/`, with `B-` ids. kb sets aside any run B file whose quotes it cannot verify
+   (`eval.run_b_invalid`) and never copies anything from run B into `kb/`.
+2. `kb eval judge` aligns run B with the knowledge base by quote spans. It writes one item per question to
+   `.kb/cache/eval/judge.md`: each live requirement and exclusion (does it say what its text says?), each rule-like
+   sentence no record quotes, each run B record that matches no kb record, splits and merges, and the glossary's terms
+   and relations along with the entities and relations run B or kb's detector found that the glossary lacks. Items
+   are named by opaque ids (`F-` and ten hex digits, new for each judge run) and never say which extraction they came
+   from. Another fresh session or subagent judges each item on its own and writes `.kb/cache/eval/verdicts.yaml`. It
+   should flag an item whenever it is unsure.
+3. `kb eval report` checks every verdict: the span must appear word for word in the item's text, every value must be
+   one the item allows, and every id named must be live. It prints coverage, the agreement with run B (span,
+   entity and relation F1) and the ranked findings: omissions, unfaithful records, records to split or merge.
+   Each finding lists its supporters among kb's coverage gate (or entity detector), run B and the judge. A missing or
+   invalid verdict exits 1. `--write` also writes `kb/eval/summary.yaml`, which you commit.
+4. Each open finding becomes a blocking `ask` item in `kb todo` (`finding:F-…`), with evidence and options, and an
+   open finding blocks the freeze. The person answers, and the agent records each answer with
+   `kb eval decide F-… --as <decision> --by @handle`: `added --record <new id>` (a new record, or a TERM, that quotes
+   the text; run `kb ingest --report` first), `covered --record <id>`, `not_a_rule --reason "…"`,
+   `product_decision --reason "…"`, `correct`, `fixed --record <id>` (redrafted since the evaluation) or `ok`. kb
+   checks that the knowledge base shows the decision and refuses one it cannot verify. Decisions go to
+   `kb/eval/decisions.yaml`. A sentence decided `added`, `covered` or `not_a_rule` stops warning `sentence.uncovered`
+   and is not asked again in later evaluations. A decision on a record stops applying once the record changes. Once
+   there is an evaluation and no live REQ-NF has the category security, privacy or availability, `kb todo` also asks
+   whether none apply (`categories`, optional; `kb eval decide categories --as not_a_rule --reason "…" --by @handle`).
+
+`kb todo` lists the steps as `eval:extract`, `eval:run-b`, `eval:judge` and `eval:verdicts`, one at a time. They come
+only when there is no other `do` item and no blocking question, and again whenever the records or the documents change
+(records added or fixed for a decision excepted). The playbook tells the agent to follow them in order, to run the
+blind extraction in a fresh session, and never to decide a finding itself. `kb eval status` shows the last
+evaluation: coverage, agreement, open and decided findings, whether it is current, and every decision with the
+sentences it silences. `kb eval sample [--n 10]` prints a QC checklist for a pull-request description: records with
+their quotes, and unquoted sentences, picked at random but the same for the same commit. A change under `kb/eval/`
+needs the intent approvers ("evaluation decisions changed").
+
+`kb/eval/decisions.yaml` must be exactly what `kb eval decide` writes (kb's canonical YAML), so a reviewer sees plain
+text in the pull-request diff. `kb check` reports `eval.decisions_invalid` (an error) for a file that is not, and for
+each entry that does not stand: one inconsistent with its finding or with the knowledge base. Such an entry silences
+nothing.
+
 ## Install
 
 Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Either from PyPI or from a pinned git tag:
 
 ```sh
 uv tool install grounded-kb                                                       # from PyPI
-uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.3.1'     # a pinned tag
+uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.4.0'     # a pinned tag
 kb version
 ```
 
-For CI, `kb init --install-spec 'grounded-kb==0.3.1'` (or the pinned git spec above) writes it into the workflow;
+For CI, `kb init --install-spec 'grounded-kb==0.4.0'` (or the pinned git spec above) writes it into the workflow;
 without `--install-spec` the CI job only warns.
 
 The generated GitHub setup has two workflows (`kb.yml` and `kb-claims.yml`), so the approval gate never runs pull-request code. `kb-policy` runs
@@ -55,7 +103,7 @@ exists. `kb verify --skip-tests` runs no project test: claims that need tests ar
 
 On a pull request, `kb verify` reports `missing_owner_approval` until the right people approve the head commit:
 CODEOWNERS (or, without one, the module owners) for the files changed, `policy.approvers.intent` for changed or stale
-requirements, features and glossary terms, and `policy.approvers.decisions` for changed decisions, invariants and
+requirements, exclusions, features and glossary terms, triage files and evaluation decisions (`kb/eval/`), and `policy.approvers.decisions` for changed decisions, invariants and
 components. Numbers in a live feature's claims, title and body must appear in the statements or quotes of its linked
 requirements; otherwise `kb check` warns `claim.number_not_in_requirement`. The approval policy
 (`policy.approvers`, `teams`, `bots`, module owners, `fail_on` and `mode`) and CODEOWNERS are read from the current tip
@@ -106,9 +154,34 @@ Set `policy.unreadable_teams: defer` to restore the old behaviour (any approval 
 
 ## Upgrading to 0.4.0
 
-Quotes must now align to word and number boundaries: a quote that cuts a word or number in half (for example `seat` inside
-`seats`, or `2` inside `25`) now counts as not found. Quotes shorter than 12 non-space characters are reported as
-`quote.too_short` (a warning, and an error for records drafted in the current ingest or redraft range).
+A 0.3.x knowledge base still passes `kb check`, with warnings. The new rules are errors only for records drafted in the
+current ingest or redraft range.
+
+- Quotes must now align to word and number boundaries: a quote that cuts a word or number in half (for example `seat`
+  inside `seats`, or `2` inside `25`) now counts as not found. Quotes shorter than 12 non-space characters are reported
+  as `quote.too_short` (a warning, and an error for records drafted in the current ingest or redraft range).
+- A triage `none:` entry takes a reason code: `none: <code>[: free text]`, with `heading`, `background`, `contact`,
+  `boilerplate`, `example`, `duplicate`, `out-of-scope` or `other`. An entry without one warns `triage.none_uncoded`,
+  and `out-of-scope` warns `triage.use_exclusion` (record an `EXCL` record instead). A triage list must name a live
+  record that quotes the segment (`triage.not_quoted`).
+- Requirements have new fields: `modality` (must, must_not, should or may), `actor`, `category` (REQ-NF only) and
+  `origin` (stated or implied). A requirement without them warns `requirement.fields_missing`. Add them when you next
+  redraft (`kb redraft <ID>`). An `implied` requirement needs a confirming quote from `docs/clarifications.md`.
+- CODEOWNERS: the block an older `kb init` wrote lacks `/kb/exclusions/`, `/kb/sources/*/triage.yaml` and `/kb/eval/`
+  (for the intent approvers) and the workflow file `/.github/workflows/kb-claims.yml` (for the decision approvers). A
+  block from before 0.3.1 also lacks `/.github/workflows/kb.yml`, `/.gitlab-ci.yml` and the CODEOWNERS files. `kb init`
+  does not run on a set-up repository, so replace your kb block with the one `kb init` writes now (run it in an empty
+  scratch repository to see it), or add those lines to yours.
+- GitHub CI is now two workflows. `kb.yml` runs the `kb-policy` job (approvals, schema, stale context, the decision
+  guard; no project test, no dependency install), and `kb-claims.yml` runs your project's tests for claim
+  verification. `kb init` leaves an existing workflow alone, so replace `.github/workflows/kb.yml` with the new template
+  (in an empty scratch repository, `kb init --install-spec '<your spec>'` writes both files) and add
+  `.github/workflows/kb-claims.yml`. Then make `kb-policy`, not the old `check` job, the required status check.
+- Team approvers (`@org/team`) fail closed since 0.3.1: list each team's members under `teams.<name>.members`, or set
+  `policy.unreadable_teams: defer` (see [Upgrading to 0.3.1](#upgrading-to-031)).
+- The evaluation is new: `kb todo` lists `eval:extract` once the knowledge base is otherwise settled, and open findings
+  block the freeze. See [Evaluate the extraction](#evaluate-the-extraction). Run `kb agents install <name>` to update
+  the playbook in `AGENTS.md` (and the Claude Code skill).
 
 ## Upgrading to 0.3.1
 
@@ -144,6 +217,13 @@ does not rewrite an existing setup), and see the prerequisites under [Approvals]
 | `kb check [--strict] [--changed] [--base REF]` | Run every gate: config, records, quotes, anchors, sources (re-derived from the originals), modules, triage. |
 | `kb context --paths F / --module M / --id X` | The live requirements, decisions and invariants governing what you are about to touch. |
 | `kb trace <ID>` | The evidence chain of a record, its quotes re-checked. |
+| `kb graph [--format json\|mermaid]` | The live records, modules and their links (entity relations, governs, belongs_to) as JSON or a Mermaid diagram. |
+| `kb eval extract` | Write the blind brief for a second extraction (run B) to `.kb/cache/eval/extract.md`, clearing the last run B. |
+| `kb eval judge` | Align run B with the knowledge base and write the judge brief (`.kb/cache/eval/judge.md`), one item per question. |
+| `kb eval report [--write]` | Check the verdicts and print coverage, agreement and the ranked findings; `--write` writes `kb/eval/summary.yaml`. Exit 1 when a verdict is missing or invalid. |
+| `kb eval decide F-… --as <decision> --by @handle [--record ID] [--reason "…"]` | Record a person's decision on a finding in `kb/eval/decisions.yaml`, after checking the knowledge base shows it. |
+| `kb eval status` | The last evaluation: coverage, agreement, open and decided findings, whether it is current, and the decisions. |
+| `kb eval sample [--n 10]` | A QC checklist for the pull-request description: records with their quotes and unquoted sentences, seeded by HEAD. |
 | `kb status` | Per module: how many live requirements are built (`r[impl]`) and tested (`r[verify]`). |
 | `kb baseline freeze v1` | Record the agreed requirement set on the default branch's tip (refused while `kb check` reports errors). |
 | `kb agents install claude-code / codex / generic` | Wire the session-start and stop hooks, or a git pre-commit hook, and update the kb block (rules and playbook) in `AGENTS.md`. |
