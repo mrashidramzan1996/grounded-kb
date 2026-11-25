@@ -105,18 +105,12 @@ def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], pat
         missing.append("category")
     if missing:
         issues.append(Issue("requirement.fields_missing", f"{rid}: missing {', '.join(missing)}; set them from the quote", "warning", path, rid))
-    if rec.origin == "implied" and not any(q.source.partition("#")[0] == "SRC-clarifications" for q in rec.evidence.quotes):
+    # only a quote that exists confirms an implied requirement: an unfound one proves nothing
+    if rec.origin == "implied" and not any(q.source.partition("#")[0] == "SRC-clarifications" for q in found):
         issues.append(Issue("requirement.implied_unconfirmed",
-                            f"{rid}: origin is implied and no quote cites SRC-clarifications; a person must confirm it", "warning", path, rid))
-    if not found:
-        return issues
+                            f"{rid}: origin is implied and no found quote cites SRC-clarifications; a person must confirm it", "warning", path, rid))
     seen = {_MODALITY_CUES[c] for q in found for c in cues(q.text) if c in _MODALITY_CUES}
-    if not seen:
-        if rec.origin == "stated":
-            issues.append(Issue("requirement.no_rule_word",
-                                f"{rid}: origin is stated but the quote has no rule word (must, should, may); if the document implies it, set origin: implied",
-                                "warning", path, rid))
-    elif rec.modality is not None and rec.modality not in seen:
+    if seen and rec.modality is not None and rec.modality not in seen:
         issues.append(Issue("requirement.modality_mismatch",
                             f"{rid}: modality {rec.modality} but the quote says {', '.join(sorted(seen))}", "warning", path, rid))
     return issues

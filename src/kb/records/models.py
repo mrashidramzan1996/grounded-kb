@@ -51,7 +51,7 @@ class Requirement(_Record):
     modules: list[str] = []
     flags: list[Literal["vague", "conflicting", "untestable"]] = []
     modality: Literal["must", "must_not", "should", "may"] | None = None
-    actor: str | None = None  # who the rule binds: plain text (or a TERM id), at most 60 characters
+    actor: str | None = None  # who the rule binds: plain text, at most 60 characters
     category: Literal["performance", "security", "privacy", "availability", "reliability", "usability",
                       "compliance", "compatibility", "maintainability", "portability"] | None = None
     origin: Literal["stated", "implied"] = "stated"
@@ -61,7 +61,7 @@ class Requirement(_Record):
     def _plain_actor(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        if not v.strip() or len(v) > 60 or _MARKUP.search(v):
+        if not v.strip() or len(v) > 60 or _MARKUP.search(v) or not all(ch.isprintable() for ch in v):
             raise ValueError("actor must be plain text of 1 to 60 characters without markup")
         return v
 

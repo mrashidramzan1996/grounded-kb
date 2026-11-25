@@ -263,3 +263,14 @@ def test_session_brief_is_capped_and_keeps_ids_on_every_line(acme_repo_drafted):
     data = [l for l in lines if not l.startswith(("#", "…")) and l.strip() and l not in AGENT_RULES]
     assert data and all(CITES_ID.match(l) for l in data)
     assert lines[-len(AGENT_RULES):] == AGENT_RULES
+
+
+def test_requirement_shows_classification_fields(acme_repo_drafted):
+    p = governing(*args(acme_repo_drafted), modules=["MOD-billing"])
+    md = render_pack(p, "md")
+    line = next(l for l in md.splitlines() if l.startswith("[REQ-NF-002] "))
+    assert "modality must" in line and "actor `the billing system`" in line and "category compliance" in line
+    assert "implied" not in line
+    data = {r["id"]: r for r in json.loads(render_pack(p, "json"))["requirements"]}
+    assert data["REQ-NF-002"]["modality"] == "must" and data["REQ-NF-002"]["origin"] == "stated"
+    assert data["REQ-NF-002"]["actor"] == "the billing system" and data["REQ-NF-002"]["category"] == "compliance"

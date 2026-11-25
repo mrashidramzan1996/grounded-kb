@@ -1,6 +1,6 @@
 import json
 
-from helpers import quiet, break_ref, edit, git, invoke, make_git_repo, set_mode, write, GitCtx
+from helpers import break_ref, edit, git, invoke, make_git_repo, set_mode, write, GitCtx
 from kb.check import DEFAULT_GATES, run_check
 from kb.gates.anchors import anchor_gate
 from kb.gates.ids import id_gate
@@ -58,7 +58,7 @@ def test_json_shape_and_text_format(valid_git_repo):
     r = invoke(valid_git_repo, "check")
     line = r.stdout.splitlines()[0]
     assert line.startswith("error ref.missing kb/requirements/REQ-F-001.yaml REQ-F-001: ")
-    assert "1 errors, 3 warnings (mode: warn-only)" in r.stderr
+    assert "1 errors, 0 warnings (mode: warn-only)" in r.stderr
 
 
 def test_unknown_format_exits_2(valid_git_repo):
@@ -88,7 +88,7 @@ def test_changed_limits_file_level_checks(valid_git_repo):
 
 
 def test_valid_repo_has_no_warnings(valid_git_repo):
-    assert quiet(run_check(valid_git_repo).issues) == []  # the fixture quotes carry no rule word: implied, unconfirmed
+    assert run_check(valid_git_repo).issues == []
 
 
 def test_changed_widens_when_kb_changes(valid_git_repo):

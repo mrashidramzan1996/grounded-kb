@@ -10,4 +10,4 @@ modules:
 
 modality: must
 actor: the billing system
-origin: implied
+origin: stated

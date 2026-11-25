@@ -116,7 +116,7 @@ def test_changed_and_new_text_redrafted_and_drafted(tmp_path):
 
     # 1. the cited sentence gains a target, the uncited "Support" text now states one, and a section is added;
     #    sync names the record and both segments with no records
-    support, refunds = "Support should answer within 24 hours.", "Refunds should be paid within 14 days."
+    support, refunds = "Support answers within 24 hours.", "Refunds are paid within 14 days."
     write(repo, "docs/product.md", doc.replace("load fast.", "load in under 2 seconds.")
           .replace("Support is friendly.", support) + f"\n# Refunds\n\n{refunds}\n")
     out = invoke(repo, "source", "sync")

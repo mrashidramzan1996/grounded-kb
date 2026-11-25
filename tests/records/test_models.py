@@ -61,7 +61,7 @@ def test_classification_fields_default_and_validate(spec_req):
 
 @pytest.mark.parametrize("bad", [
     {"modality": "shall"}, {"origin": "guessed"}, {"actor": "x" * 61}, {"actor": "the `admin`"}, {"actor": "<b>admin</b>"},
-    {"actor": "line\nbreak"}, {"category": "performance"}, {"id": "REQ-NF-001", "category": "speed"},
+    {"actor": "line\nbreak"}, {"actor": "tab\there"}, {"actor": "bell\x07"}, {"actor": "zero\u200bwidth"}, {"category": "performance"}, {"id": "REQ-NF-001", "category": "speed"},
 ])
 def test_classification_fields_rejected(spec_req, bad):
     with pytest.raises(ValidationError):

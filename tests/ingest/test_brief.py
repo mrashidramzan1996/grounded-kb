@@ -183,3 +183,43 @@ def test_brief_examples_show_fields(acme_repo):
     rules = _section(brief, "## The rules")
     for needle in ("modality", "must_not", "actor", "category", "origin", "implied", "confirmed by the user"):
         assert needle in rules
+
+
+def test_brief_examples_pass_the_field_checks(acme_repo):
+    from kb.gates.quotes import requirement_field_issues
+    from kb.ingest.brief import _example_records
+    from kb.records.io import parse_record
+    from kb.sources.sentences import cues
+
+    seen = {}
+    for path, data in _example_records():
+        if "/requirements/" not in path:
+            continue
+        text = data.decode()
+        rec = parse_record(path, data)
+        seen[rec.id] = text
+        assert "origin:" in text and "modality:" in text and "actor:" in text
+        # the quote's own cue agrees with the example's modality
+        found = rec.evidence.quotes
+        assert not [i for i in requirement_field_issues(rec.id, rec, found, path) if i.code in ("requirement.fields_missing", "requirement.modality_mismatch")]
+        assert any(c in cues(found[0].text) for c in (rec.modality,))
+    assert "category:" in seen["REQ-NF-012"] and "category:" not in seen["REQ-F-034"]
+
+
+def test_rule_3b_maps_wording_to_modality(acme_repo):
+    invoke(acme_repo, "ingest", "docs/")
+    rules = _section(brief_of(acme_repo), "## The rules")
+    for needle in ("3b.", "shall", "required", "never", "prohibited", "recommended", "optional", "declarative"):
+        assert needle in rules
+
+
+def test_redraft_templates_teach_the_fields():
+    from pathlib import Path
+
+    import kb.ingest
+
+    templates = Path(kb.ingest.__file__).parent / "templates"
+    for name in ("redraft_new.md", "redraft_records.md"):
+        text = (templates / name).read_text()
+        assert "3b." in text and "modality" in text and "origin" in text
+    assert "keep or add the four fields" in (templates / "redraft_records.md").read_text()

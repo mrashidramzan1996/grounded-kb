@@ -8,4 +8,3 @@ modules:
 - MOD-billing
 modality: must
 actor: the billing system
-origin: implied

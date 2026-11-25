@@ -14,9 +14,12 @@ shape of the examples. The gates then check what you wrote: when you are done, r
 3. Never invent numbers, targets or details. Every number in a statement must appear in one of its
    quotes. When a line is vague (for example "must be fast"), draft it as written and flag it
    `flags: [vague]` instead of making up a target.
-3b. Give every requirement `modality` (must, must_not, should, may), `actor` (who it binds), `category` for
-   REQ-NF, and `origin` (stated, or implied when the document implies it without saying it). An implied
-   requirement must later be confirmed by the user.
+3b. Give every requirement `modality`, `actor` (who it binds), `category` for REQ-NF, and `origin`:
+   - `modality` is `must` (must, shall, required, is to), `must_not` (must not, shall not, never, no X is, prohibited,
+     cannot), `should` (should, recommended) or `may` (may, can, optional). A declarative statement of what the
+     system does is `must`, with `origin: stated`.
+   - `origin` is `stated`, or `implied` when the document implies the requirement without saying it. An implied
+     requirement must later be confirmed by the user.
 4. Draft passages that record a choice as ADRs (`kb/decisions/ADR-*.md`) with quotes, and must-keep
    rules as INVs (`kb/invariants/INV-*.md`) with quotes.
 5. Link each requirement to a module or feature (`modules:` or `features:`).

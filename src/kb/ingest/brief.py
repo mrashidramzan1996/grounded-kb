@@ -149,7 +149,7 @@ def _example_records() -> list[tuple[str, bytes]]:
     records = [
         ("kb/requirements/REQ-F-034.yaml", Requirement(
             id="REQ-F-034", drafted_by=by, statement="No refund is given when a seat is removed.",
-            evidence=quote("seg-08", "No refund is given."), modules=["MOD-billing"],
+            evidence=quote("seg-08", "Refunds are never given for a removed seat."), modules=["MOD-billing"],
             modality="must_not", actor="the billing system",
         )),
         ("kb/requirements/REQ-NF-012.yaml", Requirement(
@@ -178,8 +178,8 @@ def _example_records() -> list[tuple[str, bytes]]:
             id="TERM-seat", drafted_by=by, name="seat", definition="A paid place for one user on a subscription.",
         )),
     ]
-    # origin defaults to stated, which render_record omits; the example spells it out
-    out = [(path, render_record(rec) + (b"origin: stated\n" if isinstance(rec, Requirement) else b"")) for path, rec in records]
+    # origin defaults to stated, which render_record omits; the examples spell it out
+    out = [(path, render_record(rec, keep=("origin",) if isinstance(rec, Requirement) else ())) for path, rec in records]
     triage = {"segments": {"seg-01": "none: heading: document title", "seg-08": ["REQ-F-034"]}}
     out.append((f"kb/sources/{src}/triage.yaml", dump_yaml(triage).encode()))
     return out

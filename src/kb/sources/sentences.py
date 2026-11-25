@@ -22,7 +22,7 @@ _HEADING_LINE = re.compile(r"#{1,6} ")
 NORMATIVE_CUES: dict[str, re.Pattern] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
-        "must": r"\b(?:must|shall|required|requires|is required to|has to|needs to)\b",
+        "must": r"\b(?:must(?!\s+not\b)|shall(?!\s+not\b)|required|requires|is required to|has to|needs to)\b",
         "must_not": r"\b(?:must not|shall not|may not|cannot|can not|never|prohibited|not allowed|no longer)\b",
         "should": r"\b(?:should|recommended)\b",
         "may": r"\bmay\b(?!\s+not\b)",

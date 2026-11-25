@@ -10,4 +10,4 @@ modules:
 
 modality: must
 actor: the web app
-origin: implied
+origin: stated

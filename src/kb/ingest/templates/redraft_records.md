@@ -3,6 +3,11 @@
 1. Edit only the records listed under "Records to redraft".
 2. Keep every record's ID and file.
 3. Quote word for word from the current segment text below.
+3b. Keep or add the four fields when you edit a record: keep or add the four fields (`modality`, `actor`, `category`
+   for REQ-NF, `origin`) so that a record redrafted from 0.3 is not rejected. `modality` is `must` (must, shall,
+   required, is to), `must_not` (must not, shall not, never, no X is, prohibited, cannot), `should` (should,
+   recommended) or `may` (may, can, optional); a declarative statement of what the system does is `must`.
+   `origin` is `stated`, or `implied` when the document only implies it, which the user must later confirm.
 4. Never invent numbers. Every number in a statement must be in a quote.
 5. Remove `vague` only when the statement now states a measurable target whose number is in a quote
    from the record's own segments or the new text below. If the document is still vague, keep the flag

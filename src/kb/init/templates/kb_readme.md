@@ -96,7 +96,7 @@ category: performance  # REQ-NF only: performance | security | privacy | availab
 origin: stated         # stated | implied (implied needs a confirming quote from SRC-clarifications)
 ```
 
-`kb check` warns `requirement.fields_missing` (modality, actor or category absent), `requirement.modality_mismatch` (the quote's rule word differs from `modality`), `requirement.no_rule_word` (stated, but the quote has no rule word) and `requirement.implied_unconfirmed`. For a requirement drafted in the current ingest or redraft range, the first two are errors.
+`kb check` warns `requirement.fields_missing` (modality, actor or category absent), `requirement.modality_mismatch` (the quote's rule word differs from `modality`), and `requirement.implied_unconfirmed`. For a requirement drafted in the current ingest or redraft range, the first two are errors.
 
 Feature (`FEAT-001.md`): front matter with `id`, `title`, `module`, `requirements`, `claims` (each `id`, `claim`, and optional `requirement`, `code`, `test`); the Markdown body follows.
 

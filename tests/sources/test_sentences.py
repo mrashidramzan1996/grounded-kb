@@ -58,6 +58,7 @@ def test_list_items_and_table_rows_are_units():
 def test_cues():
     assert cues("Refunds must be paid within 14 days.") == {"must", "limit", "number"}
     assert cues("Seats cannot be removed.") == {"must_not"}
+    assert cues("Seats must not be removed.") == {"must_not"} and cues("Seats shall not be removed.") == {"must_not"}
     assert cues("Users may export data.") == {"may"}
     assert cues("Users may not export data.") == {"must_not"}
     assert cues("The product helps teams.") == set()

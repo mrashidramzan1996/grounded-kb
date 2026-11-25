@@ -306,7 +306,8 @@ def _json(pack: ContextPack) -> str:
         ],
         "requirements": [
             {"id": r.id, "statement": r.statement, "status": pack.status[r.id], "modules": r.modules,
-             "features": r.features, "flags": r.flags, "quotes": _quotes(r), "instruction_like": r.id in pack.flagged}
+             "features": r.features, "flags": r.flags, "modality": r.modality, "actor": r.actor,
+             "category": r.category, "origin": r.origin, "quotes": _quotes(r), "instruction_like": r.id in pack.flagged}
             for r in pack.requirements
         ],
         "claims": [

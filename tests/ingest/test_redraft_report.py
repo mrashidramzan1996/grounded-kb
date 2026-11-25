@@ -1,5 +1,5 @@
 import pytest
-from helpers import adr_md, git, invoke, put, quiet, req_yaml
+from helpers import adr_md, git, invoke, put, req_yaml
 
 from kb.ingest.redraft import REDRAFT_BASE, REDRAFT_BRIEF, REDRAFT_IDS, RedraftError
 from kb.ingest.redraft_report import RedraftReport, redraft_report, render_redraft_report
@@ -57,7 +57,7 @@ def test_good_redraft_accepted_and_vague_cleared(kb):
     r = redraft_report(kb, None)
     assert r.base == git(kb, "rev-parse", "HEAD").strip()
     assert (r.selected, r.redrafted, r.rejected, r.still_flagged, r.unchanged) == (["REQ-NF-001"], ["REQ-NF-001"], [], [], [])
-    assert quiet(r.flagged) == [] and r.superseding == []
+    assert r.flagged == [] and r.superseding == []
 
 
 def test_vague_cleared_without_target_rejected(kb):
@@ -130,7 +130,7 @@ def test_other_flag_removed_is_a_warning(kb):
     put(kb, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
     r = redraft_report(kb, None)
     assert (r.rejected, r.redrafted) == ([], ["REQ-F-001"])
-    assert [(i.record, i.code, i.severity, i.message) for i in quiet(r.flagged)] == [
+    assert [(i.record, i.code, i.severity, i.message) for i in r.flagged] == [
         ("REQ-F-001", "flag.cleared", "warning", "REQ-F-001: conflicting was removed; reviewer to confirm")
     ]
 
@@ -432,3 +432,29 @@ def test_redraft_too_short_quote_is_rejected(kb):
     redraft(kb, "--changed")
     put(kb, "kb/requirements/REQ-NF-001.yaml", _redrafted_nf("Pages load quickly.", "Pages load"))
     assert ("REQ-NF-001", "quote.too_short") in rejected(redraft_report(kb, None))
+
+
+SHOULD = "Pages should load in 2 seconds."
+
+
+def _redrafted_with(kb, edit):
+    triaged(kb)
+    sync(kb, DOC.replace(VAGUE, SHOULD))
+    redraft(kb, "--changed")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", edit(req_yaml("REQ-NF-001", SHOULD, seg="seg-02")))
+    return redraft_report(kb, None)
+
+
+def test_redraft_rejects_fields_missing(kb):
+    r = _redrafted_with(kb, lambda y: "".join(l for l in y.splitlines(keepends=True) if not l.startswith(("modality", "actor", "category"))))
+    assert ("REQ-NF-001", "requirement.fields_missing") in rejected(r)
+
+
+def test_redraft_rejects_modality_mismatch(kb):
+    r = _redrafted_with(kb, lambda y: y.replace("modality: must", "modality: may"))
+    assert ("REQ-NF-001", "requirement.modality_mismatch") in rejected(r)
+
+
+def test_redraft_accepts_matching_fields(kb):
+    r = _redrafted_with(kb, lambda y: y.replace("modality: must", "modality: should"))
+    assert r.rejected == [] and r.redrafted == ["REQ-NF-001"]

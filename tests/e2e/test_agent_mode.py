@@ -25,7 +25,7 @@ TARGET = "The checkout page loads in under 2 seconds."
 
 def req(rid: str, statement: str, quotes: list[tuple[str, str]], brief: str = "ingest", flags: str = "") -> str:
     lines = "".join(f"  - source: {src}\n    text: {text}\n" for src, text in quotes)
-    fields = "".join(f"{k}: {v}\n" for k, v in classification(rid, " ".join(t for _, t in quotes)).items())
+    fields = "".join(f"{k}: {v}\n" for k, v in classification(rid).items())
     return REQ.format(brief=brief, id=rid, statement=statement, quotes=lines, flags=flags, fields=fields)
 
 

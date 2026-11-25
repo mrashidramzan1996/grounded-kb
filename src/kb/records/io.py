@@ -82,10 +82,14 @@ def parse_record(path: str, data: bytes, *, check_name: bool = True) -> Record:
     return record  # type: ignore[return-value]
 
 
-def render_record(record: Record) -> bytes:
-    """Canonical form: model field order, defaults and None omitted, front matter for .md."""
+def render_record(record: Record, keep: tuple[str, ...] = ()) -> bytes:
+    """Canonical form: model field order, defaults and None omitted (except the fields named in `keep`), front matter for .md."""
     has_body = "body" in type(record).model_fields
-    fields = record.model_dump(mode="json", exclude_defaults=True, exclude={"body"} if has_body else None)
+    exclude = {"body"} if has_body else None
+    fields = record.model_dump(mode="json", exclude_defaults=True, exclude=exclude)
+    if keep:
+        full = record.model_dump(mode="json", exclude=exclude)
+        fields = {k: v for k, v in full.items() if k in fields or k in keep}
     out = dump_yaml(fields)
     if has_body:
         out = f"{_FENCE}{out}{_FENCE}{record.body}"  # type: ignore[attr-defined]
