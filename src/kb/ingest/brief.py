@@ -100,6 +100,12 @@ def source_paths(root: Path, config: KbConfig, paths: list[str]) -> tuple[list[s
     return list(dict.fromkeys(out)), sorted(set(skipped))
 
 
+def documents(root: Path, config: KbConfig) -> list[str]:
+    """The repo files `kb ingest` with no paths reads as documents: those config.sources names (see
+    _candidates) that have a reader."""
+    return _readable(_candidates(repo_files(Path(root)), config), set())[0]
+
+
 def _readable(rels: list[str], keep: set[str]) -> tuple[list[str], list[str]]:
     """(rels with a reader, or in `keep`; the rest)."""
     ok = [r for r in rels if r in keep or has_reader(r)]

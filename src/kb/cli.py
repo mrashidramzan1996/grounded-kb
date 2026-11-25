@@ -32,6 +32,7 @@ from kb.safepath import UnsafePath
 from kb.sources.readers import SourceError
 from kb.sources.store import add_sources, sync_sources
 from kb.status import requirement_status, summarize, verified_ids
+from kb.todo import build_todo, render_todo_json, render_todo_text, summary_line as todo_summary
 from kb.trace import TraceError, trace_chain
 from kb.forge import ForgeError, forge_from_option
 from kb.testrun import TestRunError
@@ -447,6 +448,23 @@ def check(
     typer.echo(f"{errors} errors, {warnings} warnings (mode: {report.mode})", err=True)
     if errors and (strict or report.mode == "enforce"):
         raise typer.Exit(1)
+
+
+@app.command()
+def todo(
+    ctx: typer.Context,
+    format: Annotated[str, typer.Option("--format", help="text or json.")] = "text",
+) -> None:
+    """List what your coding agent should do next, and what it must ask you. Exit 0 whatever is listed."""
+    if format not in ("text", "json"):
+        typer.echo(f"unknown format {format!r}: use text or json", err=True)
+        raise typer.Exit(2)
+    try:
+        result = build_todo(Path(ctx.obj["root"]))
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    typer.echo((render_todo_json if format == "json" else render_todo_text)(result), nl=False)
+    typer.echo(todo_summary(result), err=True)
 
 
 _RENDER = {"text": render_text, "json": render_json, "markdown": render_markdown}

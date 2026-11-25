@@ -158,14 +158,18 @@ def test_gate_flags_secret_in_original_and_outdated(acme_repo):
     add_source(acme_repo, "docs/architecture-notes.docx", cfg)
     add_source(acme_repo, "docs/product-brief.docx", cfg)
     issues = gate(acme_repo)
-    assert [i.code for i in issues] == ["source.secret_in_original"]
-    assert issues[0].record == "SRC-architecture-notes"
+    # pricing-spec-v3.pdf is never added: source.not_ingested
+    assert [(i.code, i.record or i.path) for i in issues] == [
+        ("source.secret_in_original", "SRC-architecture-notes"), ("source.not_ingested", "docs/pricing-spec-v3.pdf"),
+    ]
     (acme_repo / "docs/product-brief.docx").write_bytes(b"changed")
     (acme_repo / "docs/architecture-notes.docx").unlink()
     got = {(i.code, i.record): i.message for i in gate(acme_repo)}
     # the secret is counted in the original as it is now (deleted: no secret), never taken from source.yaml;
     # with no base to vouch for the store, a store that cannot be re-derived is tampered, with the cause
-    assert set(got) == {("source.tampered", "SRC-architecture-notes"), ("source.tampered", "SRC-product-brief")}
+    assert set(got) == {
+        ("source.tampered", "SRC-architecture-notes"), ("source.tampered", "SRC-product-brief"), ("source.not_ingested", None),
+    }
     assert "is missing" in got[("source.tampered", "SRC-architecture-notes")]
     assert "cannot be stored as it is now" in got[("source.tampered", "SRC-product-brief")]
 
@@ -298,9 +302,10 @@ def test_gate_invalid_original_and_oversize(acme_repo, tmp_path, monkeypatch):
     outside.write_text("x")
     (acme_repo / "docs/link.md").symlink_to(outside)
     yaml_path.write_text(yaml_path.read_text().replace("docs/product-brief.docx", "docs/link.md"))
-    (issue,) = gate(acme_repo)
+    # the two documents never added are source.not_ingested
+    (issue,) = [i for i in gate(acme_repo) if i.code != "source.not_ingested"]
     assert issue.code == "source.tampered" and "symlink" in issue.message
     yaml_path.write_text(yaml_path.read_text().replace("docs/link.md", "docs/product-brief.docx"))
     monkeypatch.setattr("kb.sources.store.MAX_SOURCE_BYTES", 10)
-    issues = gate(acme_repo)
+    issues = [i for i in gate(acme_repo) if i.code != "source.not_ingested"]
     assert [i.code for i in issues] == ["source.tampered"] and "MAX_SOURCE_BYTES" in issues[0].message

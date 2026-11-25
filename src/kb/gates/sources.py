@@ -12,6 +12,7 @@ from pathlib import Path
 from kb.config.schema import KbConfig
 from kb.gates.base import GateContext
 from kb.gitfiles import file_at
+from kb.ingest.brief import documents
 from kb.issues import Issue
 from kb.records.ids import valid_segment_id
 from kb.records.repo import KbRepo
@@ -156,9 +157,20 @@ def _as_at_base(ctx: GateContext, src_id: str, original: bytes) -> list[Issue]:
     return issues
 
 
+def not_ingested(ctx: GateContext) -> list[Issue]:
+    """A warning per document `kb ingest` would read that is the original of no stored source."""
+    stored = {src.original for src in ctx.repo.sources.values()}
+    return [
+        Issue("source.not_ingested",
+              f"{path} is a document under config.sources that was never ingested; run `kb ingest {path}`",
+              "warning", path=path)
+        for path in documents(ctx.root, ctx.config) if path not in stored
+    ]
+
+
 def source_gate(ctx: GateContext) -> list[Issue]:
     """With a base (ctx.base / ctx.base_ref), sources whose store files or original changed since it are
-    re-derived; without one, every source is."""
+    re-derived; without one, every source is. Documents never ingested are named too."""
     fix = recover_hint(ctx.base_ref)
     issues = [
         Issue("source.tampered", f"kb/sources/{s}/segments.jsonl holds invalid segment ids; {fix}",
@@ -177,4 +189,4 @@ def source_gate(ctx: GateContext) -> list[Issue]:
             issues.extend(_as_at_base(ctx, src_id, original))
         else:
             issues.extend(rederive(ctx.root, ctx.config, src_id, ctx.repo, ctx.base, fix))
-    return issues
+    return issues + not_ingested(ctx)
