@@ -98,6 +98,27 @@ def test_changed_document_suggests_sync(tmp_path):
     assert not any(i.startswith(("fix:source.outdated", "fix:source.tampered")) for i in items(root))  # the sync covers them
 
 
+def test_deleted_original_is_a_fix_not_a_sync(tmp_path):
+    root = ingested(tmp_path)
+    (root / "docs/n.md").unlink()
+    found = items(root)
+    assert "sync" not in found
+    item = found["fix:source.outdated:SRC-n"]
+    assert item["command"] is None
+    assert "docs/n.md is missing; restore it or remove kb/sources/SRC-n" in item["message"]
+
+
+def test_tampered_store_is_not_hidden_by_sync(tmp_path):
+    root = ingested(tmp_path)
+    segments = root / "kb/sources/SRC-n/segments.jsonl"
+    assert '"page": 1' in segments.read_text()
+    segments.write_text(segments.read_text().replace('"page": 1', '"page": 2'))
+    put(root, "docs/n.md", DOC.replace("5 EUR", "7 EUR"))
+    found = items(root)
+    assert "sync" not in found
+    assert found["fix:source.tampered:SRC-n"]["command"] is None
+
+
 def test_changed_cited_text_suggests_redraft_changed(tmp_path):
     root = drafted(tmp_path)
     assert "redraft:changed" not in items(root)

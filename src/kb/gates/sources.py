@@ -7,6 +7,7 @@ stored ids) and compares bytes; `kb check` and `kb ingest --report` both use it.
 
 import hashlib
 import re
+import shlex
 from pathlib import Path
 
 from kb.config.schema import KbConfig
@@ -56,6 +57,20 @@ def recover_hint(ref: str | None) -> str:
     if ref:
         return f"restore the store files from {ref} and run `kb source sync` once"
     return "run `kb source sync` to rebuild them from the original"
+
+
+def changed_message(original: str) -> str:
+    """The source.outdated message for an original that changed since it was stored (and can be read again)."""
+    return f"{original} changed since it was stored; run `kb source sync`"
+
+
+def differs_prefix(src_id: str, name: str, original: str) -> str:
+    """How the source.tampered message for a store file that differs from what its original gives begins."""
+    return f"kb/sources/{src_id}/{name} differs from what {original} gives"
+
+
+# C0 and C1 control characters, and the other characters str.splitlines() breaks lines at
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def _contained(root: Path, rel: str) -> bool:
@@ -110,11 +125,11 @@ def rederive(
     issues = []
     differ = [name for name, data in expected.items() if head.raw.get(f"{where}/{name}") != data]
     if differ and not moved:  # the store is the base's: the original moved on since
-        issues.append(Issue("source.outdated", f"{original} changed since it was stored; run `kb source sync`", path=yaml_path, record=src_id))
+        issues.append(Issue("source.outdated", changed_message(original), path=yaml_path, record=src_id))
     elif differ:
         cause = "" if base is not None else " (the store was edited, or the original changed without `kb source sync`)"
         issues += [
-            Issue("source.tampered", f"{where}/{name} differs from what {original} gives{cause}; {fix}",
+            Issue("source.tampered", f"{differs_prefix(src_id, name, original)}{cause}; {fix}",
                   path=f"{where}/{name}", record=src_id)
             for name in differ
         ]
@@ -148,7 +163,7 @@ def _as_at_base(ctx: GateContext, src_id: str, original: bytes) -> list[Issue]:
     src, where = ctx.repo.sources[src_id], f"kb/sources/{src_id}/source.yaml"
     issues = []
     if hashlib.sha256(original).hexdigest() != src.original_sha256:
-        issues.append(Issue("source.outdated", f"{src.original} changed since it was stored; run `kb source sync`", path=where, record=src_id))
+        issues.append(Issue("source.outdated", changed_message(src.original), path=where, record=src_id))
     if src.guard.secrets > 0:
         issues.append(Issue(
             "source.secret_in_original", f"{src.original} contains {src.guard.secrets} secret(s); remove them from the original and run `kb source sync`",
@@ -158,14 +173,21 @@ def _as_at_base(ctx: GateContext, src_id: str, original: bytes) -> list[Issue]:
 
 
 def not_ingested(ctx: GateContext) -> list[Issue]:
-    """A warning per document `kb ingest` would read that is the original of no stored source."""
+    """A warning per document `kb ingest` would read that is the original of no stored source. Symlinks are
+    skipped (ingest stores the target, or refuses one outside the repo); a name with control characters is
+    source.bad_filename instead, so it never ends up in a command."""
     stored = {src.original for src in ctx.repo.sources.values()}
-    return [
-        Issue("source.not_ingested",
-              f"{path} is a document under config.sources that was never ingested; run `kb ingest {path}`",
-              "warning", path=path)
-        for path in documents(ctx.root, ctx.config) if path not in stored
-    ]
+    issues = []
+    for path in documents(ctx.root, ctx.config):
+        if path in stored or not _contained(ctx.root, path):
+            continue
+        if _CONTROL.search(path):
+            issues.append(Issue("source.bad_filename", f"{path!r} has control characters in its name; rename it",
+                                "warning", path=path))
+        else:
+            issues.append(Issue("source.not_ingested", f"{path} is a document under config.sources that was never "
+                                f"ingested; run `kb ingest {shlex.quote(path)}`", "warning", path=path))
+    return issues
 
 
 def source_gate(ctx: GateContext) -> list[Issue]:
