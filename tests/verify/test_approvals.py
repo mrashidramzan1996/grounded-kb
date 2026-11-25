@@ -205,6 +205,14 @@ def test_codeowners_change_needs_decision_approvers(tmp_path):
     assert ".github/CODEOWNERS changed" in req["@acme/tech-leads"]
 
 
+def test_ci_workflow_change_needs_decision_approvers(tmp_path):
+    """The workflow that runs `kb verify` is part of the gate: a PR that edits it could drop or weaken the check."""
+    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes(".github/workflows/kb.yml", ".gitlab-ci.yml"), [])
+    assert {".github/workflows/kb.yml changed", ".gitlab-ci.yml changed"} <= set(req["@acme/tech-leads"])
+    other = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes(".github/workflows/other.yml"), [])
+    assert "@acme/tech-leads" not in other
+
+
 def test_moving_codeowners_needs_decision_approval(tmp_path):
     """A real `git mv`: git's rename detection would list only the new path; both count as CODEOWNERS changes."""
     from helpers import commit, git, make_git_repo

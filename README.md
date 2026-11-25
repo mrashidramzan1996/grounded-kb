@@ -60,12 +60,24 @@ change cannot loosen the rules it is checked against, not even by branching from
 of the report says where they came from (`Policy from base main at <sha>.`). `--base` and the pull request's target name a
 branch, looked up by exact ref among local and remote-tracking branches only: a tag with the same name (or named
 like the branch's full ref), or a local branch and a remote one of that name at different commits, is an error
-(exit 2); delete the tag, or pass a full ref such as `refs/remotes/origin/main`. A change to `kb.config.yaml` or to a
-CODEOWNERS file (`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) also needs the decision approvers. With
-`kb verify --all` and a pull request, the policy comes from the branch the pull request targets (or the default
-branch); a base branch that cannot be found is an error (exit 2). Without a pull request and without a base the working
+(exit 2); delete the tag, or pass a full ref such as `refs/remotes/origin/main`. A change to `kb.config.yaml`, to a
+CODEOWNERS file (`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) or to the CI workflow that runs the check
+(`.github/workflows/kb.yml`, `.gitlab-ci.yml`) also needs the decision approvers; a rename counts as a change to both
+paths. With `kb verify --all` and a pull request, the policy comes from the branch the pull request targets (or
+the default branch); a base branch that cannot be found is an error (exit 2). Without a pull request and without a base the working
 tree's policy applies. Only when the target branch has no `kb.config.yaml` yet does the change's own policy apply, with
 the target branch's CODEOWNERS.
+
+`kb verify` only reports; the forge enforces. These are prerequisites, not options:
+
+- Make `kb verify` a required status check on the default branch (GitHub: a branch protection rule or ruleset; GitLab:
+  "Pipelines must succeed"), so a pull request cannot merge while it fails.
+- Enable "Require review from Code Owners" (GitLab: code owner approval) and give the CODEOWNERS lines `kb init`
+  writes real owners, including the gate's own files (`/kb.config.yaml`, the CODEOWNERS locations,
+  `/.github/workflows/kb.yml`, `/.gitlab-ci.yml`): a pull request runs its own copy of the workflow, so only the
+  forge's code-owner review stops one that edits the workflow to skip or weaken the check.
+- Restrict who can create tags (GitHub: a tag ruleset; GitLab: protected tags with `*`), so nobody can push a tag
+  named like a branch. `kb verify` refuses such a tag (exit 2) rather than trusting it.
 
 To bootstrap, name the approvers on the default branch first: commit `policy.approvers.decisions` (and `intent`) there
 before any pull request changes the config. While the default branch names no decision approvers, a pull request that

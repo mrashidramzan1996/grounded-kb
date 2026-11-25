@@ -28,6 +28,10 @@ _APPROVAL_PATHS = [
     "/kb/components/",
     "/kb.config.yaml",
 ]
+# CI workflows that run `kb verify` (the files `kb init` writes): a change to one can drop or weaken the gate
+CI_WORKFLOWS = [".github/workflows/kb.yml", ".gitlab-ci.yml"]
+# the gate itself: who decides (CODEOWNERS) and what runs the check; the decision approvers own them, as kb.config.yaml
+_GATE_PATHS = [f"/{p}" for p in (*CI_WORKFLOWS, *CODEOWNERS_LOCATIONS)]
 _SAFE_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+=<>!~,\[\]-]*$")
 _SAFE_BASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _WILDCARDS = set("*?[]\\!")
@@ -159,7 +163,11 @@ def _codeowners_block() -> str:
         "# kb: approvals for the knowledge base. Set policy.approvers in kb.config.yaml, then",
         "# uncomment these lines and replace TODO with the approving team(s).",
     ]
-    return "\n".join(lines + [f"# {p} TODO" for p in _APPROVAL_PATHS])
+    gate = [
+        "# The gate itself (the config above, CODEOWNERS and the CI workflow that runs kb verify):",
+        "# replace TODO with the decision approvers.",
+    ]
+    return "\n".join(lines + [f"# {p} TODO" for p in _APPROVAL_PATHS] + gate + [f"# {p} TODO" for p in _GATE_PATHS])
 
 
 def _check_target(root: Path, rel: str, kind: Literal["file", "dir"]) -> bool:

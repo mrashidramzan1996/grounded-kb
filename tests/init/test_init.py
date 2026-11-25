@@ -92,6 +92,16 @@ def test_codeowners_block_covers_every_record_dir(tmp_path):
         assert f"# {p} " in text
 
 
+def test_codeowners_block_covers_the_gate_itself(tmp_path):
+    """The CI workflow that runs kb verify and every CODEOWNERS location: a PR that edits them controls the gate."""
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo)
+    text = (repo / "CODEOWNERS").read_text()
+    for p in ("/.github/workflows/kb.yml", "/.gitlab-ci.yml", "/CODEOWNERS", "/.github/CODEOWNERS", "/docs/CODEOWNERS"):
+        assert f"# {p} TODO" in text
+    assert "decision approvers" in text
+
+
 def test_codeowners_block_is_commented_and_user_content_kept(tmp_path):
     original = "# mine\n* @a/all\n"
     repo = make_git_repo(None, tmp_path, extra={"CODEOWNERS": original})

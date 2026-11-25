@@ -9,7 +9,7 @@ from kb.config.load import CONFIG
 from kb.config.schema import KbConfig
 from kb.config.validate import modules_for, resolve_owner
 from kb.gitfiles import file_at, tree_symlinks
-from kb.init.scaffold import CODEOWNERS_LOCATIONS
+from kb.init.scaffold import CI_WORKFLOWS, CODEOWNERS_LOCATIONS
 from kb.issues import Issue
 from kb.ports.forge import Forge, PullRequest, Review
 from kb.records.repo import KbRepo
@@ -93,8 +93,8 @@ def required_owners(
     """{owner handle: reasons}. `config` is the approval policy's config (kb.verify.policy: the target branch tip's), so its
     approvers, teams and modules decide, not the change's. `changes` None (no base): no changed files; records count
     as changed against `base_repo` (every record when that is None too). `rules`: the policy's CODEOWNERS rules taken
-    earlier (None: no CODEOWNERS, module owners apply); left out, CODEOWNERS is read now. A change to kb.config.yaml
-    or a CODEOWNERS file needs the decision approvers; with none named, NO_DECISION_APPROVERS, which never approves."""
+    earlier (None: no CODEOWNERS, module owners apply); left out, CODEOWNERS is read now. A change to kb.config.yaml,
+    a CODEOWNERS file or the kb CI workflow needs the decision approvers; with none named, NO_DECISION_APPROVERS, which never approves."""
     reasons: dict[str, set[str]] = {}
 
     def need(handle: str, reason: str) -> None:
@@ -114,7 +114,7 @@ def required_owners(
 
     intent = _handles(config.policy.approvers.intent, config)
     decisions = _handles(config.policy.approvers.decisions, config)
-    policy_files = (CONFIG, *CODEOWNERS_LOCATIONS)
+    policy_files = (CONFIG, *CODEOWNERS_LOCATIONS, *CI_WORKFLOWS)  # the gate: who decides, and what runs it
     for path in sorted(p for p in (changes.files if changes else ()) if p in policy_files):
         for h in decisions or [NO_DECISION_APPROVERS]:
             need(h, f"{path} changed")
