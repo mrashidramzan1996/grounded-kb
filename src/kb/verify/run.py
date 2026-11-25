@@ -18,7 +18,7 @@ from kb.ports.forge import Forge, PullRequest
 from kb.records.repo import KbRepo
 from kb.testrun import run_tests
 from kb.verify.affected import affected
-from kb.verify.approvals import owner_approval, required_owners
+from kb.verify.approvals import no_approver_warnings, owner_approval, required_owners
 from kb.verify.changes import compute_changes
 from kb.verify.engine import EngineInput, Verdict, derive, snapshot, tests_needed
 from kb.verify.index import INDEX_PATH, build_index
@@ -123,6 +123,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     if forge and pr:
         required = required_owners(root, policy.config, repo, base_repo, changes, verdicts, rules=policy.codeowners)
         issues += owner_approval(forge, pr, policy.config, required, bootstrap=policy.bootstrap)
+        issues += no_approver_warnings(policy.config, repo, base_repo, changes, verdicts)
 
     issues = sorted(issues, key=lambda i: (*i.sort_key, i.message))
     return VerifyReport(

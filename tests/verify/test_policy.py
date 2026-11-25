@@ -224,3 +224,18 @@ def test_bootstrap_without_decision_approvers_says_to_set_them_in_this_change(tm
     assert report.policy_source == "working tree (kb.config.yaml is new in this change)"
     (message,) = [i.message for i in report.issues if i.code == "missing_owner_approval"]
     assert message.endswith("names no decision approvers; set policy.approvers.decisions in this change")
+
+
+def test_a_checked_pr_warns_when_an_approver_group_is_empty(tmp_path):
+    empty_intent = BASE_CONFIG.replace("intent: ['@acme/product']", "intent: []")
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": empty_intent, "kb/requirements/.keep": ""})
+    branch(root)
+    (root / "kb/requirements/REQ-F-001.yaml").write_text("id: REQ-F-001\nstatement: x\n")  # does not parse: by path
+    commit(root, "a requirement")
+    report = run_verify(root, base="main", all_=False, forge=local_forge(tmp_path, root))
+    assert [i.message for i in report.issues if i.code == "owner_approval.no_approvers"] == [
+        "intent approvers are empty in the approval policy; changes to requirements, features and glossary terms "
+        "need no approval"
+    ]
+    no_pr = run_verify(root, base="main", all_=False, forge=None)  # no PR: approvals are not checked
+    assert "owner_approval.no_approvers" not in {i.code for i in no_pr.issues}

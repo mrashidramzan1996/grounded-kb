@@ -156,6 +156,32 @@ def required_owners(
     return {h: _ordered(rs) for h, rs in sorted(reasons.items())}
 
 
+_GROUP_RECORDS = {"intent": "requirements, features and glossary terms", "decisions": "decisions, invariants and components"}
+
+
+def no_approver_warnings(
+    config: KbConfig, repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None, verdicts: Sequence[Verdict]
+) -> list[Issue]:
+    """One owner_approval.no_approvers warning per approver group (policy.approvers.intent / decisions) that names
+    nobody while the change has records it would have to approve (as required_owners routes them): those changes
+    need no approval, which should not pass silently. A config or CODEOWNERS change with no decision approvers is
+    not one of them: it fails closed (NO_DECISION_APPROVERS)."""
+    paths = set(_changed_records(repo, base_repo).values())
+    if changes and base_repo is not None:  # record files that do not parse, routed by path
+        paths |= {p for p in changes.files if p.startswith((*_INTENT_DIRS, *_DECISION_DIRS))}
+    changed = {
+        "intent": any(p.startswith(_INTENT_DIRS) for p in paths)
+        or any(v.kind == "requirement" and v.status == "stale" for v in verdicts),
+        "decisions": any(p.startswith(_DECISION_DIRS) for p in paths),
+    }
+    return [
+        Issue("owner_approval.no_approvers", f"{group} approvers are empty in the approval policy; changes to "
+              f"{what} need no approval", "warning")
+        for group, what in _GROUP_RECORDS.items()
+        if changed[group] and not _handles(getattr(config.policy.approvers, group), config)
+    ]
+
+
 def _ordered(reasons: set[str]) -> list[str]:
     """Sorted, with the "… and N more" collapse marker last."""
     return sorted(reasons, key=lambda r: (r.startswith("… and"), r))

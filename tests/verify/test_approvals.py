@@ -373,3 +373,29 @@ def test_unparsable_changed_record_still_needs_approvers(tmp_path):
     }
     assert required_owners(tmp_path, cfg(), head, None, changes(*files), []) == {
         "@pm": ["feature FEAT-001 changed"]}  # no base: changed files are not consulted
+
+
+def test_empty_approver_groups_with_changed_records_warn_once(tmp_path):
+    from kb.verify.approvals import no_approver_warnings
+
+    head = KbRepo.load(Path(__file__).parent.parent / "fixtures" / "kb_valid")
+    req = head.paths["REQ-F-001"]
+    base_files = {**head.raw, req: head.raw[req].replace(b"statement:", b"statement: was", 1)}
+    for path in [p for p in head.raw if p.startswith("kb/glossary/")][:1]:
+        base_files[path] = head.raw[path] + b"\n"  # a second intent record: still one warning
+    for path in [p for p in head.raw if p.startswith("kb/decisions/")][:1]:
+        base_files[path] = head.raw[path] + b"\n"
+    base = repo_of(base_files)
+    files = changes(*(p for p in base_files if base_files[p] != head.raw.get(p)))
+    empty = policy_cfg(intent=[], decisions=["TODO"])
+    warnings = no_approver_warnings(empty, head, base, files, [])
+    assert [(i.code, i.severity, i.message) for i in warnings] == [
+        ("owner_approval.no_approvers", "warning", "intent approvers are empty in the approval policy; changes to "
+         "requirements, features and glossary terms need no approval"),
+        ("owner_approval.no_approvers", "warning", "decisions approvers are empty in the approval policy; changes to "
+         "decisions, invariants and components need no approval"),
+    ]
+    assert no_approver_warnings(policy_cfg(), head, base, files, []) == []  # both groups named
+    assert no_approver_warnings(empty, head, repo_of(head.raw), changes(), []) == []  # no record changed
+    stale = no_approver_warnings(empty, head, repo_of(head.raw), changes(), [verdict("REQ-F-001", "requirement", "stale")])
+    assert [i.message.split(" ", 1)[0] for i in stale] == ["intent"]  # a stale requirement needs intent approval too
