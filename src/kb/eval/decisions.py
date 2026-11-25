@@ -242,9 +242,12 @@ def canonical_kind(canonical: str) -> str | None:
             "L": "unfaithful", "M": "granularity"}.get(canonical.partition(":")[0] if ":" in canonical else "")
 
 
-def _inconsistency(repo: KbRepo, d: Decision, live: set[str]) -> str | None:
-    """Why `d` cannot stand as a person's decision, or None: what `kb eval decide` would not have written."""
-    kind = canonical_kind(d.canonical)
+def _inconsistency(repo: KbRepo, d: Decision, live: set[str], f: SummaryFinding | None) -> str | None:
+    """Why `d` cannot stand as a person's decision, or None: what `kb eval decide` would not have written. `f` is the
+    current summary's finding of that public id: its canonical id must be the entry's, and the decision one it takes."""
+    if f is not None and f.canonical != d.canonical:
+        return "it names a finding of the current summary, but not that finding's canonical id"
+    kind = finding_kind(f) if f is not None else canonical_kind(d.canonical)
     if (d.finding == CATEGORIES) != (d.canonical == CATEGORIES) or kind is None:
         return "its finding and canonical id do not name one finding"
     if kind == "categories" and (d.sentences or d.record or d.record_sha256):
@@ -290,10 +293,10 @@ def _sentence_spans(index: dict[str, list[Sentence]], keys: Iterable[str]) -> li
     return [(s.ref.partition("#")[0], s.start, s.end) for k in keys for s in index.get(k, ())]
 
 
-def _added_problem(repo: KbRepo, d: Decision, index: dict[str, list[Sentence]], live: set[str]) -> str | None:
+def _added_problem(repo: KbRepo, d: Decision, index: dict[str, list[Sentence]], live: set[str],
+                   kind: str | None) -> str | None:
     """What keeps an `added` entry from showing what `kb eval decide` checks: the record quotes one of its sentences
     (through found quotes), or the TERM carries the entity and a quote naming it, or holds a relation of that type."""
-    kind = canonical_kind(d.canonical)
     rec = repo.records.get(d.record or "")
     _, _, rest = d.canonical.partition(":")
     if kind == "omission":
@@ -327,31 +330,53 @@ def _summary_of(repo: KbRepo) -> Summary | None:
         return None
 
 
+def _documents(repo: KbRepo) -> str:
+    """The fingerprint of the stored documents alone (their segment hashes), with no record."""
+    return fingerprint(repo, skip=live_ids(repo))
+
+
 class _Evaluated:
-    """The record ids at the summary's evaluated commit, read from git at most once, and only when asked."""
+    """The knowledge base at the summary's evaluated commit, read from git at most once, and only when asked."""
 
-    def __init__(self, root: Path | None, summary: Summary | None):
-        self.root, self.summary, self._ids, self._read = root, summary, None, False
+    def __init__(self, root: Path | None, repo: KbRepo, summary: Summary | None):
+        self.root, self.repo, self.summary = root, repo, summary
+        self._base: KbRepo | None = None
+        self._read = False
+        self._changed: bool | None = None
 
-    def ids(self) -> set[str] | None:
+    def base(self) -> KbRepo | None:
         if not self._read:
             self._read = True
             if self.root is not None and self.summary is not None:
                 try:
                     if rev_parse(Path(self.root), self.summary.commit) == self.summary.commit:
-                        self._ids = set(KbRepo.at_ref(Path(self.root), self.summary.commit).records)
+                        self._base = KbRepo.at_ref(Path(self.root), self.summary.commit)
                 except GitError:
-                    self._ids = None
-        return self._ids
+                    self._base = None
+        return self._base
+
+    def ids(self) -> set[str] | None:
+        base = self.base()
+        return set(base.records) if base is not None else None
+
+    def documents_changed(self) -> bool:
+        """Whether the stored documents differ from those the summary evaluated (True when that commit cannot be
+        read); False with no summary. While they are the same, an entry's sentences are what kb finds for them."""
+        if self._changed is None:
+            if self.summary is None or self.summary.fingerprint == fingerprint(self.repo):
+                self._changed = False
+            else:
+                base = self.base()
+                self._changed = base is None or _documents(base) != _documents(self.repo)
+        return self._changed
 
 
 def _sentences_problem(repo: KbRepo, d: Decision, index: dict[str, list[Sentence]],
                        f: SummaryFinding | None) -> str | None:
-    """Why an S or B entry's sentences do not show what it settles: none listed; a text that is not, character for
+    """What an S or B entry's sentences do not match in the documents now: a text that is not, character for
     character, the document's sentence of that key; for a finding of the current summary, not exactly the sentences
-    kb finds for it."""
-    if not d.sentences:
-        return "it lists no sentence, so it settles nothing"
+    kb finds for it. Either is an inconsistency while the documents are those the summary evaluated; once they
+    changed, the entry is stale (check_decisions)."""
     if any(not any(s.text == x.text for s in index[x.key]) for x in d.sentences):
         return "a sentence's text is not the document's, character for character"
     if f is not None and [(x.key, x.text) for x in d.sentences] != [(sentence_key(s), s.text)
@@ -364,14 +389,22 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
                     root: Path | None = None) -> tuple[list[Decision], list[Issue]]:
     """(the decisions that stand, an eval.decisions_invalid error per entry that does not: malformed, inconsistent
     with itself or the knowledge base, a sentence whose key is not its text's, an `added` record that does not show
-    it, or a second decision on one finding). A dropped entry settles nothing. An entry one of whose sentences is no
-    longer in the documents is stale: skipped quietly. With `root`, an `added` on an omission of the current summary
-    must name a record new since its evaluated commit."""
+    it, or a second decision on one finding). A dropped entry settles nothing.
+
+    An entry naming a finding of the current summary (kb/eval/summary.yaml in `repo`) is checked against that
+    finding, never against the canonical id it declares: the two must be equal, an S or B entry lists exactly the
+    finding's sentences, a `fixed` names one of the finding's records, and (with `root`) an `added` on an omission
+    names a record new since the evaluated commit. Any other entry is an earlier cycle's: it settles only the sentences
+    it lists and shows (is_fresh never pins its record; is_decided carries it only by canonical id and record hash).
+
+    An entry is stale, skipped quietly, when one of its sentences is no longer in the documents, or when its
+    sentences no longer match while the documents differ from those the summary evaluated: the finding re-opens
+    through the next evaluation."""
     live = live_ids(repo)
     index = _sentence_index(repo)
-    summary = _summary_of(repo) if root is not None else None
-    current = {(f.id, f.canonical): f for f in summary.open_findings} if summary else {}
-    evaluated = _Evaluated(root, summary)
+    summary = _summary_of(repo)
+    current = {f.id: f for f in summary.open_findings} if summary else {}
+    evaluated = _Evaluated(root, repo, summary)
     out: list[Decision] = []
     issues: list[Issue] = []
     seen: set[str] = set()
@@ -382,18 +415,26 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
         elif d.finding in seen:
             why = f"{_shown_id(d.finding)} is decided twice; only the first counts"
         else:
-            why = _inconsistency(repo, d, live)
+            f = current.get(d.finding)  # the finding it names, if the current summary has it
+            kind = finding_kind(f) if f is not None else canonical_kind(d.canonical)
+            why = _inconsistency(repo, d, live, f)
+            if why is None and canonical_kind(d.canonical) == "omission" and not d.sentences:
+                why = "it lists no sentence, so it settles nothing"
             if why is None and any(text_key(x.text) != x.key for x in d.sentences):
                 why = "a sentence's key is not the key of its text"
             stale = why is None and any(x.key not in index for x in d.sentences)
-            f = current.get((d.finding, d.canonical))
             if why is None and not stale and canonical_kind(d.canonical) == "omission":
-                why = _sentences_problem(repo, d, index, f)
-            if why is None and d.decision == "fixed" and d.record not in canonical_records(d.canonical):
+                mismatch = _sentences_problem(repo, d, index, f)
+                if mismatch is not None and evaluated.documents_changed():
+                    stale = True  # the documents changed under it: the next evaluation asks again
+                else:
+                    why = mismatch
+            records = finding_records(f) if f is not None else canonical_records(d.canonical)
+            if why is None and d.decision == "fixed" and d.record not in records:
                 why = "the record it names is not one its finding is about"
             if why is None and not stale and d.decision == "added":
-                why = _added_problem(repo, d, index, live)
-                if (why is None and canonical_kind(d.canonical) == "omission" and f is not None
+                why = _added_problem(repo, d, index, live, kind)
+                if (why is None and kind == "omission" and f is not None
                         and (before := evaluated.ids()) is not None and d.record in before):
                     why = "the record it names existed when the evaluation ran"
             if why is not None:
@@ -576,18 +617,30 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
     evaluation."""
     if summary.fingerprint == fingerprint(repo):
         return True
-    ids = {f.id for f in summary.open_findings}
-    pins = [(d.record, d.record_sha256) for d in decisions if d.finding in ids and d.decision in _CHANGING and d.record]
+    by_id = {f.id: f for f in summary.open_findings}
+    # only an entry consistent with the finding it names pins: that finding's canonical id, and for `fixed` one of its
+    # records; an earlier cycle's entry (its id in no current finding) never does
+    pins: list[tuple[Decision, SummaryFinding]] = []
+    for d in decisions:
+        f = by_id.get(d.finding)
+        if f is None or d.canonical != f.canonical or d.decision not in _CHANGING or not d.record:
+            continue
+        if d.decision == "fixed" and d.record not in finding_records(f):
+            continue
+        pins.append((d, f))
     # each skipped record is pinned to the bytes the person decided on: a later edit needs a new evaluation
-    if not pins or any(sha != records_sha256(repo, [rid]) for rid, sha in pins):
+    if not pins or any(d.record_sha256 != records_sha256(repo, [d.record]) for d, _ in pins):  # type: ignore[list-item]
         return False
-    touched = {rid for rid, _ in pins}
     try:
         if rev_parse(Path(root), summary.commit) != summary.commit:
             return False
         base = KbRepo.at_ref(Path(root), summary.commit)
     except GitError:
         return False
+    # a record added for an omission is new since the evaluated commit: an existing one edited needs a new evaluation
+    if any(d.decision == "added" and finding_kind(f) == "omission" and d.record in base.records for d, f in pins):
+        return False
+    touched = {d.record for d, _ in pins if d.record}
     return fingerprint(base) == summary.fingerprint and fingerprint(repo, skip=touched) == fingerprint(base, skip=touched)
 
 

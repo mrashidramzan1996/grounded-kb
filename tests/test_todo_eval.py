@@ -6,12 +6,15 @@ import datetime
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from helpers import (
+    QUOTE,
     TODO_CONFIG,
     TODO_TRIAGE,
     commit,
+    git,
     head,
     invoke,
     make_git_repo,
@@ -541,3 +544,158 @@ def test_yaml_anchors_are_not_canonical(tmp_path):
     commit(root, "anchors")
     assert "&id001" in (root / "kb/eval/decisions.yaml").read_text()
     assert _invalid_or_open(root, "F-0123456789")
+
+
+# --- fix round 4: an entry is checked against the summary finding it names -----------------------------------------
+
+def _sha(root: Path, rel: str) -> str:
+    return hashlib.sha256((root / rel).read_bytes()).hexdigest()
+
+
+def test_entry_naming_a_summary_finding_with_another_canonical_is_dropped_fixed(tmp_path):
+    """C1: F-1111111111 is R:REQ-F-001; an entry naming it as R:REQ-F-002 would pin an unrelated record's edit."""
+    root = drafted(tmp_path)
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    commit(root, "two")
+    evaluate(root, (unfaithful("F-1111111111"),))
+    p = root / "kb/requirements/REQ-F-002.yaml"
+    p.write_text(p.read_text().replace("statement:", "statement: NOT", 1))
+    hand_written(root,
+                 {"finding": "F-1111111111", "canonical": "R:REQ-F-002", "decision": "fixed", "record": "REQ-F-002",
+                  "record_sha256": _sha(root, "kb/requirements/REQ-F-002.yaml"), "reason": None},
+                 {"finding": "F-9999999999", "canonical": "R:REQ-F-001", "decision": "correct",  # a carried decision
+                  "record_sha256": _sha(root, "kb/requirements/REQ-F-001.yaml"), "reason": "Fine."})
+    out = invoke(root, "check").output
+    assert out.count("error eval.decisions_invalid") == 1 and "decision 1 is dropped" in out
+    assert "R:REQ-F-002" not in out  # canonical ids are never echoed
+    # nothing pins REQ-F-002's edit: the evaluation is stale
+    assert "stale" in ok(root, "eval", "status").stdout
+    assert do_ids(todo_json(root)) == ["fix:eval.decisions_invalid:kb/eval/decisions.yaml"]
+
+
+def test_entry_naming_a_summary_finding_with_another_canonical_is_dropped_added(tmp_path):
+    """C2: F-0123456789 is the INVOICES sentence; an entry naming it as the first sentence would pin an existing,
+    edited record (REQ-F-001) and skip the new-record check."""
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    p = root / "kb/requirements/REQ-F-001.yaml"
+    p.write_text(p.read_text().replace("statement: 'A seat", "statement: 'NOT a seat", 1))
+    ks, ki = key_of(root, QUOTE), key_of(root, INVOICES)
+    hand_written(root,
+                 {"finding": "F-0123456789", "canonical": f"S:{ks}", "decision": "added", "record": "REQ-F-001",
+                  "record_sha256": _sha(root, "kb/requirements/REQ-F-001.yaml"), "reason": None,
+                  "sentences": [{"key": ks, "text": QUOTE}]},
+                 {"finding": "F-8888888888", "canonical": f"S:{ki}", "decision": "not_a_rule", "reason": "Contract.",
+                  "sentences": [{"key": ki, "text": INVOICES}]})
+    out = invoke(root, "check").output
+    assert out.count("error eval.decisions_invalid") == 1 and "decision 1 is dropped" in out
+    assert "stale" in ok(root, "eval", "status").stdout
+
+
+def test_an_entry_on_no_current_finding_pins_no_record(tmp_path):
+    """A historical entry (its id is in no current summary) stands, but never pins a record for freshness."""
+    root = drafted(tmp_path)
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    commit(root, "two")
+    evaluate(root, (unfaithful("F-1111111111"),))
+    p = root / "kb/requirements/REQ-F-002.yaml"
+    p.write_text(p.read_text().replace("statement:", "statement: NOT", 1))
+    hand_written(root, {"finding": "F-9999999999", "canonical": "R:REQ-F-002", "decision": "fixed",
+                        "record": "REQ-F-002", "record_sha256": _sha(root, "kb/requirements/REQ-F-002.yaml"),
+                        "reason": None})
+    assert "eval.decisions_invalid" not in invoke(root, "check").output
+    assert "stale" in ok(root, "eval", "status").stdout
+    assert do_ids(todo_json(root)) == ["eval:extract"]
+
+
+def test_document_edit_inside_a_decided_b_passage_makes_it_stale(tmp_path):
+    """l2: a document edit inside a decided B passage makes the decision stale, never an error: the finding re-opens
+    through the next evaluation."""
+    root = drafted(tmp_path)
+    evaluate(root, (b_finding("F-2222222222", f"{INVOICES} {LISTED}"),))
+    ok(root, "eval", "decide", "F-2222222222", "--as", "not_a_rule", "--reason", "Not one.", "--by", "@alice")
+    commit(root, "decided")
+    put(root, "docs/n.md", f"# Seats\n\nA seat costs 5 EUR. {INVOICES} Late fees apply. {LISTED}\n")
+    ok(root, "ingest")
+    commit(root, "doc edited")
+    out = invoke(root, "check").output
+    assert "eval.decisions_invalid" not in out
+    assert "sentence.uncovered" in out and f"`{INVOICES}`" in out  # it warns again
+    assert do_ids(todo_json(root)) == ["eval:extract"]
+
+
+def test_two_decides_in_a_row(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root), unfaithful("F-1111111111")))
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", INVOICES))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    ok(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
+    put(root, "kb/requirements/REQ-F-001.yaml", reworded)
+    ok(root, "eval", "decide", "F-1111111111", "--as", "fixed", "--record", "REQ-F-001", "--by", "@alice")
+    commit(root, "decided both")
+    assert "eval.decisions_invalid" not in invoke(root, "check").output
+    t = todo_json(root)
+    assert do_ids(t) == [] and t["state"]["clean"] and not [a for a in ask_ids(t) if a.startswith("finding:")]
+    assert "stale" not in ok(root, "eval", "status").stdout
+
+
+def test_decides_across_a_second_judge_cycle(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root), b_finding("F-2222222222", LISTED)))
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", INVOICES))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    ok(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    ok(root, "eval", "decide", "F-2222222222", "--as", "not_a_rule", "--reason", "Navigation.", "--by", "@alice")
+    commit(root, "cycle 1 decided")
+    # cycle 2: new public ids; both sentences carry over by their keys, the record finding is new
+    evaluate(root, (b_finding("F-3333333333", f"{INVOICES} {LISTED}"), unfaithful("F-4444444444"),
+                    omission(root, "F-5555555555")))
+    assert "eval.decisions_invalid" not in invoke(root, "check").output
+    assert [a for a in ask_ids(todo_json(root)) if a.startswith("finding:")] == ["finding:F-4444444444"]
+    ok(root, "eval", "decide", "F-4444444444", "--as", "correct", "--by", "@bob")
+    commit(root, "cycle 2 decided")
+    assert "eval.decisions_invalid" not in invoke(root, "check").output
+    t = todo_json(root)
+    assert do_ids(t) == [] and t["state"]["clean"] and not [a for a in ask_ids(t) if a.startswith("finding:")]
+
+
+def test_merged_branches_keep_both_decisions(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root), b_finding("F-2222222222", LISTED)))
+    git(root, "checkout", "-q", "-b", "a")
+    put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", INVOICES))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    ok(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    commit(root, "a decided")
+    theirs = (root / "kb/eval/decisions.yaml").read_text()
+    git(root, "checkout", "-q", "main")
+    ok(root, "eval", "decide", "F-2222222222", "--as", "not_a_rule", "--reason", "Navigation.", "--by", "@bob")
+    commit(root, "b decided")
+    ours = (root / "kb/eval/decisions.yaml").read_text()
+    merge = subprocess.run(["git", "merge", "-q", "--no-edit", "a"], check=False, cwd=root, capture_output=True, text=True)
+    assert merge.returncode != 0  # both appended to the file: a conflict
+    merged = ours + theirs.removeprefix("decisions:\n")  # resolved by keeping both blocks
+    assert dump_yaml(load_yaml_strict(merged)) == merged  # still kb's canonical form
+    put(root, "kb/eval/decisions.yaml", merged)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "--no-edit")
+    assert "eval.decisions_invalid" not in invoke(root, "check").output
+    t = todo_json(root)
+    assert do_ids(t) == [] and t["state"]["clean"] and not [a for a in ask_ids(t) if a.startswith("finding:")]
+    assert "stale" not in ok(root, "eval", "status").stdout
+
+
+def test_b_entry_mismatch_stays_an_error_while_the_documents_are_unchanged(tmp_path):
+    """Only a document change makes a mismatched entry stale: after a record edit alone it is still dropped as
+    inconsistent."""
+    root = drafted(tmp_path)
+    evaluate(root, (b_finding("F-2222222222", f"{INVOICES} {LISTED}"),))
+    put(root, "kb/requirements/REQ-F-001.yaml",
+        req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'"))
+    hand_written(root, {"finding": "F-2222222222", "canonical": "B:B-REQ-F-001", "decision": "not_a_rule",
+                        "sentences": [{"key": key_of(root, LISTED), "text": LISTED}]})  # only one of its two
+    out = invoke(root, "check").output
+    assert "error eval.decisions_invalid" in out and "its sentences are not exactly its finding's" in out
