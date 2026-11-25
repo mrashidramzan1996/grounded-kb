@@ -4,7 +4,7 @@
 
 **Goal:** Make "did the agent extract every requirement, and is each one right?" measurable and decidable. Deterministic sentence-level checks come first. A blind second extraction is aligned by quote span, an evaluation agent judges one item at a time, and the person decides every disagreement, with the decisions committed in git.
 
-**Architecture:** kb stays LLM-free. It splits stored segments into sentences, tags rule-like ("normative") sentences, and computes coverage exactly from quote spans. The LLM work is done by the user's coding agent from two kb briefs: a blind extraction into `.kb/cache/eval/run-b/` and a judge brief answered in `.kb/cache/eval/verdicts.yaml`. kb aligns, validates and scores both deterministically, and turns what remains into `kb todo` ask items. Human decisions go into `kb/eval/decisions.yaml` through `kb eval decide`, and those decisions suppress the matching findings from then on. Requirements gain four structured fields, a new `EXCL` record type holds scope exclusions, and the 0.3.1 CI limit is fixed by splitting the workflow into a policy job and a test job.
+**Architecture:** kb stays LLM-free. It splits stored segments into sentences, tags rule-like ("normative") sentences, and computes coverage exactly from quote spans. The LLM work is done by the user's coding agent from two kb briefs: a blind extraction into `.kb/cache/eval/run-b/` and a judge brief answered in `.kb/cache/eval/verdicts.yaml`. kb aligns, validates and scores both deterministically, and turns what remains into `kb todo` ask items. Human decisions go into `kb/eval/decisions.yaml` through `kb eval decide`, and those decisions suppress the matching findings from then on. Requirements gain four structured fields, a new `EXCL` record type holds scope exclusions, glossary terms become grounded entities with quoted relations (exported by `kb graph` and served by `kb context` as a domain model), and the 0.3.1 CI limit is fixed by splitting the workflow into a policy job and a test job.
 
 **Tech Stack:** Python ≥3.12, uv, Typer, pydantic v2, pytest. Code map: `/private/tmp/claude-501/-Users-dev-projects-kb/7309a439-0cc8-4296-8435-18da0f1acd39/scratchpad/codemap-040.md` (file:line references for everything below).
 
@@ -27,8 +27,8 @@
 1. Abbreviations and decimals ("e.g.", "v3.1", "5.5 EUR", "U.S.") must not split sentences, and bullet lists and table rows must split into one unit per item. (Task 1: `test_abbreviations_and_decimals_do_not_split`, `test_list_items_and_table_rows_are_units`.)
 2. A quote that starts or ends in the middle of a word ("2" inside "25", "seat" inside "seats") must not count as found, but a quote ending in punctuation must still match. (Task 2: `test_quote_must_align_to_word_and_number_boundaries`.)
 3. A segment that is only a heading, or has no rule-like sentence, must produce no coverage warning and must not need a triage reason beyond the existing `none:`. (Task 3: `test_heading_only_segment_is_silent`.)
-4. A blind run that uses the same IDs as live records, or quotes a segment that does not exist, must be rejected item by item. It must never crash or get merged into `kb/`. (Task 6: `test_run_b_items_are_validated_not_trusted`.)
-5. A verdicts file that answers items not in the judge brief, skips items, or gives a span not in the segment must have those entries rejected. The remaining verdicts are still used. (Task 7: `test_verdicts_outside_the_brief_are_rejected`.)
+4. A blind run that uses the same IDs as live records, or quotes a segment that does not exist, must be rejected item by item. It must never crash or get merged into `kb/`. (Task 7: `test_run_b_items_are_validated_not_trusted`.)
+5. A verdicts file that answers items not in the judge brief, skips items, or gives a span not in the segment must have those entries rejected. The remaining verdicts are still used. (Task 8: `test_verdicts_outside_the_brief_are_rejected`.)
 
 ---
 
@@ -118,7 +118,7 @@
 - Consumes: Task 1 `sentences`, `is_normative`, `sentence_key`; Task 2 `find_quote`.
 - Produces:
   - `def quote_spans(repo: KbRepo) -> dict[str, list[tuple[int, int, str]]]`: maps each source id to `(start, end, record_id)` text.md offsets for every quote of a live Requirement, Decision, Invariant or Exclusion (Task 5 adds Exclusion; until then the three existing types).
-  - `def uncovered(repo: KbRepo, decided: set[str] = frozenset()) -> list[Sentence]`: the normative sentences that no quote span overlaps, excluding sentences whose `sentence_key` is in `decided`. Task 8 passes the keys from decisions.yaml.
+  - `def uncovered(repo: KbRepo, decided: set[str] = frozenset()) -> list[Sentence]`: the normative sentences that no quote span overlaps, excluding sentences whose `sentence_key` is in `decided`. Task 9 passes the keys from decisions.yaml.
   - `coverage_gate(ctx) -> list[Issue]` emits these issues:
     - `sentence.uncovered` (warning, path `kb/sources/<src>/triage.yaml`, record `<src>`): ``"{ref}: rule-like sentence no record quotes: {inline_code(text)}"``.
     - `quote.multiple_rules` (warning, record = record id): ``"{rid}: its quote spans {n} rule-like sentences; split it into one record per rule"``. Raised when a single quote overlaps two or more normative sentences.
@@ -160,7 +160,7 @@
   - `requirement.fields_missing`: modality or actor is missing, or category is missing on a REQ-NF.
   - `requirement.modality_mismatch`: the quote's cues contain a modality cue that differs from `modality`. Map the cue keys from Task 1: `must`→must, `must_not`→must_not, `should`→should, `may`→may. When the quote has several, any match passes.
   - `requirement.no_rule_word`: `origin: stated` but the quote has no modality cue. The suggested fix is "if the document implies it, set origin: implied".
-  - `requirement.implied_unconfirmed`: `origin: implied` and no quote cites `SRC-clarifications`. Task 8 turns this into an ask.
+  - `requirement.implied_unconfirmed`: `origin: implied` and no quote cites `SRC-clarifications`. Task 9 turns this into an ask.
 - [ ] **Step 1: Write the failing tests.**
   - The model accepts and rejects as specified (category on REQ-F is rejected).
   - `test_fields_missing_is_warning_in_check_error_in_report`.
@@ -203,7 +203,78 @@
 - [ ] **Step 4: Run** `uv run pytest tests/records tests/gates tests/ingest tests/verify tests/test_context.py tests/test_trace.py -q`.
 - [ ] **Step 5: Commit** with the message `feat(records): EXCL scope-exclusion records`.
 
-### Task 6: Blind second extraction and deterministic alignment
+### Task 6: Entities and relations (glossary terms become grounded entities), graph export
+
+**Files:**
+- Modify: `src/kb/records/models.py` (`Term`, plus a new `Relation` model), `src/kb/gates/quotes.py` (entity and relation checks) or a new `src/kb/gates/entities.py` registered in check.py and the ingest report GATES, `src/kb/records/models.py` (Requirement `entities: list[str] = []`; `actor` may be a TERM id), `src/kb/gates/ids.py` (reference checks), `src/kb/ingest/templates/brief.md` and `src/kb/ingest/brief.py` (rules and examples), `src/kb/context.py` ("Domain model" section, JSON key `entities`), `src/kb/trace.py`, `src/kb/cli.py` (`kb graph`), `src/kb/init/templates/kb_readme.md`
+- Create: `src/kb/graph.py`
+- Test: `tests/records/test_entities.py`, `tests/gates/test_entities.py`, `tests/test_graph.py`, plus additions to `tests/test_context.py`
+
+**Interfaces:**
+- Consumes: Task 2 `find_quote` boundary rules, Task 4 `actor`, Task 5 `Exclusion`.
+- Produces:
+  - `Term` gains optional fields, so existing TERM files stay valid:
+    - `kind: Literal["actor", "system", "data", "external", "document", "event", "concept"] | None = None`
+    - `evidence: Evidence | None = None`
+    - `relations: list[Relation] = []`
+  - `class Relation(_Model)` has these fields, at most 10 relations per term:
+    - `type: Literal["owns", "uses", "contains", "produces", "depends_on", "part_of", "is_a", "triggers"]`
+    - `target: str` (a TERM id)
+    - `quote: Quote` (the same model as evidence quotes)
+  - `Requirement.entities: list[str] = []` (TERM ids). `Requirement.actor` is either a TERM id, which must exist, or plain text.
+  - Issue codes:
+    - `entity.name_not_in_quote` (error for drafted records in reports, warning in check): neither the name nor an alias appears in any of the term's evidence quotes. Case-insensitive, on word boundaries.
+    - `relation.quote_not_found` (error): the relation quote is not found in its segment, using Task 2's rules.
+    - `relation.entities_not_in_quote` (error for drafted, warning in check): the relation quote does not mention both the source term and the target term by name or alias.
+    - `ref.missing` for an unknown `target`, an unknown `entities` item, or an unknown TERM-id `actor`.
+    - `entity.unquoted` (warning): a term has a `kind` but no evidence.
+  - Coverage: entity and relation quotes do not count as covering rule-like sentences in Task 3. Only requirements, decisions, invariants and exclusions do.
+  - Context:
+    - `kb context` adds a section `## Domain model` (JSON key `entities`) when the selected records name entities, through `actor` or `entities`.
+    - For each such entity it shows name, kind and definition.
+    - It shows only the relations between entities in that set, each as `TERM-a —owns→ TERM-b` with its quote.
+    - All untrusted text is escaped as today.
+  - `src/kb/graph.py`:
+    - `def build_graph(repo: KbRepo) -> dict` returns `{"nodes": [{"id", "type", "label"}], "edges": [{"source", "target", "type", "quote": str | None}]}`.
+    - Nodes are live records of every type, plus modules from the config.
+    - Edges:
+      - relation edges (type = relation type);
+      - requirement → module/feature (`belongs_to`);
+      - requirement → entity (`mentions`, and `actor` for the actor field);
+      - decision/invariant → governs target (`governs`);
+      - claim → requirement (`implements`);
+      - supersedes (`supersedes`);
+      - exclusion → module/feature (`excludes`).
+    - The output is sorted, so it is deterministic.
+    - `def render_mermaid(graph: dict) -> str` writes a `flowchart LR` diagram. Node labels are escaped: no quotes, brackets or pipes from untrusted text pass through, and each label is cut to 60 characters.
+  - CLI: `kb graph [--format json|mermaid]` prints to stdout and exits 0. A bad format exits 2.
+  - Brief rules (ingest and redraft):
+    - "Record each named actor, system, data object, external party, document, event or business concept as a TERM with `kind`, a definition and a quote that contains its name."
+    - "Record how entities relate as `relations` on the source term, each with a quote that mentions both."
+    - "Link requirements to entities with `actor` and `entities`."
+  - Eval hook for Task 8: Task 7's `Item` alignment treats TERM records by normalised name or alias instead of quote span. Task 8's judge items gain `E:<term-id>` (kind `entity`, from run B only: a term in only one run) and `L:<src>-<type>-<tgt>` (kind `relation`, from run B only). These become findings of kind `omission` exactly like the others. Tasks 7 and 8 own that code; this task provides `def entity_key(term: Term) -> frozenset[str]` (the lower-cased, whitespace-collapsed name plus aliases) and `def entity_candidates(repo: KbRepo) -> list[tuple[str, str, Sentence]]` in `src/kb/graph.py`.
+    - `entity_candidates` returns (normalised phrase, ref, first sentence) for phrases the documents treat as named things that no live TERM covers by name or alias.
+    - It is deterministic and uses only these patterns: a quoted defined term (`"X" means`, `(the "X")`), `X is a|an|the …` at sentence start, and Title Case phrases of 2 to 5 words that occur at least twice and not only at sentence start.
+    - It skips headings, kb IDs, and the documents' own titles.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `test_term_with_entity_fields_round_trips`, and `test_old_term_still_valid`.
+  - `test_entity_name_must_be_in_quote`.
+  - `test_relation_quote_must_mention_both_entities`: the quote "Each account owns its invoices." passes when TERM-account and TERM-invoice (alias "invoices") exist; the quote "Accounts are billed monthly." gives `relation.entities_not_in_quote`.
+  - `test_relation_target_must_exist`.
+  - `test_requirement_actor_term_must_exist`.
+  - `test_context_shows_domain_model_for_selected_records`.
+  - `test_graph_nodes_and_edges`: a small repo gives the expected sorted edges, including `owns` with its quote, `belongs_to`, `actor` and `governs`.
+  - `test_mermaid_escapes_labels`: a term named `a"]--> x` is rendered without breaking the diagram.
+  - `test_brief_explains_entities`.
+  - `test_entity_candidates`: `"Billing Admin" means …` and a repeated "Seat Pool" are candidates; once TERM-billing-admin (alias "Billing Admin") exists it is no longer a candidate; headings and sentence-start-only words are not candidates.
+  - `test_drafted_relation_errors_are_rejected_in_report`.
+- [ ] **Step 2: Run them and confirm they fail.**
+- [ ] **Step 3: Implement as specified.**
+- [ ] **Step 4: Run** `uv run pytest tests/records tests/gates tests/ingest tests/test_context.py tests/test_graph.py tests/test_trace.py -q`.
+- [ ] **Step 5: Commit** with the message `feat: grounded entities and relations, kb graph export`.
+
+### Task 7: Blind second extraction and deterministic alignment
 
 **Files:**
 - Create: `src/kb/eval/__init__.py`, `src/kb/eval/extract.py`, `src/kb/eval/align.py`, `src/kb/eval/templates/extract.md`
@@ -216,7 +287,7 @@
   - Constants: `EVAL_DIR = ".kb/cache/eval"`, `RUN_B = ".kb/cache/eval/run-b"`, `EXTRACT_BRIEF = ".kb/cache/eval/extract.md"`, `EVAL_BASE = ".kb/cache/eval/base"`.
   - `def build_extract_brief(root: Path, config: KbConfig) -> str`.
     - Content: the ingest rules plus every segment of every source. Records go to `.kb/cache/eval/run-b/<same layout as kb/>`, with IDs prefixed `B-` (`B-REQ-F-001`, …).
-    - Header: "Work in a fresh session or subagent. Do not read kb/requirements, kb/decisions, kb/invariants, kb/exclusions or kb/features; extract from the segments below only. Work segment by segment, bottom-up."
+    - Header: "Work in a fresh session or subagent. Do not read kb/requirements, kb/decisions, kb/invariants, kb/exclusions or kb/features; extract from the segments below only. Work segment by segment, bottom-up. Also record entities as TERM records with relations."
     - `drafted_by` must say `via kb eval extract`.
   - `kb eval extract` writes the brief and `EVAL_BASE` (HEAD), clears `RUN_B`, and prints the path.
   - `@dataclass(frozen=True) class Item: id: str, kind: str ("requirement"|"decision"|"invariant"|"exclusion"), statement: str, spans: tuple[tuple[str, int, int], ...]`. Each span is `(src, start, end)` in text.md offsets.
@@ -224,19 +295,23 @@
   - `@dataclass(frozen=True) class Alignment: matched: list[tuple[str, str]]` (kb id, B id); `only_kb: list[str]`, `only_b: list[Item]`, `splits: list[tuple[str, list[str]]]` (one kb record against several B items), `merges: list[tuple[list[str], str]]`.
   - `def align(kb_items: list[Item], b_items: list[Item]) -> Alignment`. Two items match when, for some shared source, `overlap / min(len_a, len_b) >= 0.5`. Use many-to-one matching. A kb item matched by 2 or more B items is a split, and a B item matching 2 or more kb items is a merge.
   - `def kb_items(repo: KbRepo) -> list[Item]`: live records with evidence.
+  - Entities and relations are aligned too. TERM items match by overlapping `entity_key` sets, not by span. Relations match by (source key, type, target key).
+    - `Alignment` gains `only_kb_entities: list[str]`, `only_b_entities: list[Item]`, `only_kb_relations: list[str]` and `only_b_relations: list[tuple[str, str, str]]`.
+    - `agreement` reports entity and relation agreement separately: `entity_f1`, `relation_f1`.
   - `def agreement(al: Alignment, n_kb: int, n_b: int) -> dict`: `{"matched": m, "only_kb": .., "only_b": .., "span_f1": 2m/(n_kb+n_b), "estimated_total": round(n_kb*n_b/m) if m else None}`. The capture–recapture estimate is labelled "upper bound on recall" wherever it is shown.
 - [ ] **Step 1: Write the failing tests.**
   - `test_extract_brief_is_blind_and_complete`: the brief contains every segment ref and the blind header, and contains no live record statement.
   - `test_run_b_items_are_validated_not_trusted`: a B file with a bad segment, an unfound quote and an ID without `B-` gives three issues, while the good items load.
   - `test_align_matches_by_quote_overlap`.
   - `test_align_detects_split_and_merge`.
+  - `test_entities_and_relations_align_by_name_and_alias`.
   - `test_agreement_numbers`: 16 kb, 18 B, 14 matched gives span_f1 0.8235… and estimated_total 21.
 - [ ] **Step 2: Run them and confirm they fail.**
 - [ ] **Step 3: Implement.** `kb eval extract` exits 2 when nothing is ingested.
 - [ ] **Step 4: Run** `uv run pytest tests/eval -q`.
 - [ ] **Step 5: Commit** with the message `feat(eval): blind second extraction and quote-span alignment`.
 
-### Task 7: Judge brief, verdict validation, findings
+### Task 8: Judge brief, verdict validation, findings
 
 **Files:**
 - Create: `src/kb/eval/judge.py`, `src/kb/eval/findings.py`, `src/kb/eval/templates/judge.md`
@@ -244,7 +319,7 @@
 - Test: `tests/eval/test_judge.py`, `tests/eval/test_findings.py`
 
 **Interfaces:**
-- Consumes: Task 3 `uncovered`, `coverage_stats`; Task 4 fields; Task 6 `load_run_b`, `align`, `kb_items`, `agreement`.
+- Consumes: Task 3 `uncovered`, `coverage_stats`; Task 4 fields; Task 7 `load_run_b`, `align`, `kb_items`, `agreement`.
 - Produces:
   - `JUDGE_BRIEF = ".kb/cache/eval/judge.md"`, `VERDICTS = ".kb/cache/eval/verdicts.yaml"`, `JUDGE_ITEMS = ".kb/cache/eval/items.json"` (the item list kb asked about, written by kb).
   - `def judge_items(repo, alignment, decided: set[str]) -> list[dict]`. Each item has `id`, `kind`, `ref`, `text` and `context`, with IDs and kinds as follows:
@@ -252,6 +327,11 @@
     - `S:<sentence_key>` (kind `uncovered`): every `uncovered()` sentence.
     - `B:<b-id>` (kind `only_b`): every `only_b` item.
     - `M:<rid>` (kind `split_merge`): every split and merge.
+    - `T:<term-id>` (kind `entity_faithful`): every live TERM with evidence. Yes/no for `definition_matches_quote` and `kind_correct`.
+    - `L:<term-id>:<type>:<target>` (kind `relation_faithful`): every live relation. Yes/no for `quote_states_relation` and `direction_correct`.
+    - `E:<key>` (kind `entity_missing`): every `only_b_entities` item and every Task 6 `entity_candidates` phrase.
+    - `N:<src-key>:<type>:<tgt-key>` (kind `relation_missing`): every `only_b_relations` item.
+    - Entity and relation spans are verified by code like all others. Relations proposed by the judge must quote a sentence that mentions both entities, the same rule as Task 6's `relation.entities_not_in_quote`.
     - The sort order is stable.
   - `kb eval judge` checks that `EVAL_BASE` equals HEAD, then writes `JUDGE_ITEMS` and the brief.
     - The brief rules: "Judge each item on its own; you have not seen any other verdicts. Over-flag: if unsure whether a sentence is a rule, say `missing`. Every verdict needs a verbatim `span` copied from the item's text."
@@ -259,19 +339,22 @@
       - **faithful:** yes/no each for `same_meaning`, `same_actor`, `same_modality` and `no_added_constraint`, plus a note.
       - **uncovered / only_b:** `verdict` in {missing, covered, not_a_rule, unknown}, with `kind_hint` in {requirement, decision, invariant, exclusion} when missing, `severity` in {high, medium, low}, `related` (existing record IDs) and `span`.
       - **split_merge:** `verdict` in {ok, should_split, should_merge, unknown}.
+      - **entity_faithful / relation_faithful:** yes/no per question, plus a note.
+      - **entity_missing / relation_missing:** `verdict` in {missing, covered, not_an_entity, unknown}, with `related` (existing TERM IDs) and `span`.
   - `def validate_verdicts(root, repo) -> tuple[list[dict], list[Issue]]`. It re-reads `JUDGE_ITEMS` and checks it equals `judge_items(...)` recomputed now; on a mismatch it raises `EvalError` with the hint "run `kb eval judge` again".
     - Verdicts are rejected (issue `eval.verdict_invalid`) for an unknown item ID, a span not found in the item text (Task 2 rules), an unknown enum value, or `related` IDs that don't exist.
     - A missing verdict gives `eval.verdict_missing`.
   - `@dataclass(frozen=True) class Finding: id: str` (same as item id), `kind: str` (`omission`, `unfaithful`, `split`, `merge`, `unknown`), `ref: str`, `text: str`, `severity: str`, `supporters: int` (how many of {kb coverage gate, run B, judge} flagged it), `related: tuple[str, ...]`, `note: str`.
   - `def build_findings(items, verdicts, alignment) -> list[Finding]`:
     - `omission`: an S or B item with verdict missing or unknown. An S item that run B also extracted gets supporters = 3.
-    - `unfaithful`: an R item with any `no`.
+    - `unfaithful`: an R, T or L item with any `no`.
+    - `omission` also covers E and N items with verdict missing or unknown. Their `kind_hint` is `entity` or `relation`.
     - `split` / `merge`: from split_merge items when they are not `ok`.
     - Ranking: high severity before medium before low, then supporters descending, then ID.
   - `def fingerprint(repo) -> str`: sha256 over sorted (live record id, raw bytes) plus every source's segment hashes, first 16 hex characters; files under `kb/eval/` are ignored.
   - `kb eval report [--write]`:
     - It prints Markdown: coverage stats, agreement (with "upper bound" wording), findings grouped by kind with escaped text, and rejected verdicts.
-    - `--write` writes committed `kb/eval/summary.yaml` with: `commit` (EVAL_BASE), `fingerprint` (Task 8), `coverage` and `agreement` dicts, `open_findings` (list of Finding as dicts), `judged_at` (ISO date).
+    - `--write` writes committed `kb/eval/summary.yaml` with: `commit` (EVAL_BASE), `fingerprint` (defined below), `coverage` and `agreement` dicts, `open_findings` (list of Finding as dicts), `judged_at` (ISO date).
     - It exits 1 when any verdict is missing or invalid.
 - [ ] **Step 1: Write the failing tests.**
   - `test_judge_items_cover_every_record_and_gap`.
@@ -279,6 +362,7 @@
   - `test_tampered_items_file_is_refused`.
   - `test_findings_ranked`.
   - `test_unfaithful_from_any_no`.
+  - `test_entity_and_relation_items_validated`: a relation proposal whose span does not mention both entities is rejected; a candidate entity judged missing becomes an omission finding.
   - `test_report_write_produces_summary`, with a round-trip through YAML.
   - `test_eval_files_are_not_unknown_records`.
 - [ ] **Step 2: Run them and confirm they fail.**
@@ -286,7 +370,7 @@
 - [ ] **Step 4: Run** `uv run pytest tests/eval -q`.
 - [ ] **Step 5: Commit** with the message `feat(eval): judge brief, verdict validation and ranked findings`.
 
-### Task 8: Decisions, `kb todo` integration, QC sample, approvals
+### Task 9: Decisions, `kb todo` integration, QC sample, approvals
 
 **Files:**
 - Create: `src/kb/eval/decisions.py`, `src/kb/eval/sample.py`
@@ -294,7 +378,7 @@
 - Test: `tests/eval/test_decisions.py`, `tests/eval/test_sample.py`, `tests/test_todo_eval.py`
 
 **Interfaces:**
-- Consumes: Task 7 `Finding`, `fingerprint`, `kb/eval/summary.yaml`; Task 3 `uncovered`; Task 4 `requirement.implied_unconfirmed`.
+- Consumes: Task 8 `Finding`, `fingerprint`, `kb/eval/summary.yaml`; Task 3 `uncovered`; Task 4 `requirement.implied_unconfirmed`.
 - Produces:
   - `DECISIONS = "kb/eval/decisions.yaml"` with schema `decisions: list[Decision]`. Each entry has:
     - `finding: str`
@@ -319,7 +403,9 @@
     - Ask items, one per open finding not yet in decisions, all **blocking** (they make `clean` False and block the freeze ask). They are rendered with `_question` and have these options:
       - **omission:** "(a) Add it as a new record" then "write a record quoting this sentence, run `kb ingest --report`, then `kb eval decide <id> --as added --record <new id> --by <handle>`"; "(b) Already covered by a record" then "`kb eval decide <id> --as covered --record <id> --by <handle>`"; "(c) Not a rule" then "`kb eval decide <id> --as not_a_rule --reason <why> --by <handle>`"; "(d) Needs a product decision" then "record the user's answer with `kb clarify`, draft from it, then decide `--as added`".
       - **unfaithful:** "(a) Fix the record" then "`kb redraft <rid>`, follow the brief, `kb redraft --report`, then decide `--as fixed`"; "(b) It is correct" then decide `--as correct`.
-      - **split / merge:** "(a) Split or merge as suggested" then redraft and decide `--as fixed`; "(b) Keep as is" then decide `--as ok`.
+      - **entity or relation omission:** "(a) Add it" then "add the TERM (or the relation on its source TERM) with a quote containing the name(s), run `kb ingest --report`, then `kb eval decide <id> --as added --record <TERM id> --by <handle>`"; "(b) Already recorded as TERM-x" then decide `--as covered`; "(c) Not an entity" then decide `--as not_a_rule --reason <why>`.
+      - `added` is validated for these too: the TERM must exist and carry the entity's name or alias. For a relation, the source TERM must hold a relation of that type to that target.
+    - **split / merge:** "(a) Split or merge as suggested" then redraft and decide `--as fixed`; "(b) Keep as is" then decide `--as ok`.
     - Ask item `implied:<rid>` for each `requirement.implied_unconfirmed`, with options "(a) Confirm" then "`kb clarify` with the user's confirmation, add it as a quote, `kb redraft <rid>`" and "(b) Not a requirement" then retire it. This ask is blocking.
     - One optional ask, `categories`, when no live REQ-NF has category security, privacy or availability: "None of the documents state {missing} requirements. Is that right?" with options "(a) Correct, none apply" then decide `--as not_a_rule` on finding `categories` (kb accepts that pseudo-finding), and "(b) I will give them" then `kb clarify` and draft.
   - `kb eval sample [--n 10]`: a deterministic QC sample seeded by HEAD sha. It picks n random live records, each with its quote and no verdicts, and n sentences from the unquoted pile. Half the sentences come from normative and half from non-normative, chosen by a seeded `random.Random(int(head[:12], 16))`. It prints a Markdown checklist meant for the PR description.
@@ -332,6 +418,7 @@
   - `test_todo_eval_sequence`: extract, then run-b, then judge, then verdicts, then asks, then clean once all are decided.
   - `test_open_findings_block_freeze`.
   - `test_implied_requirement_ask`.
+  - `test_entity_omission_decision_validated`.
   - `test_categories_ask_optional`.
   - `test_sample_is_deterministic_and_has_no_verdicts`.
   - `test_eval_dir_changes_need_intent_approvers`.
@@ -340,7 +427,7 @@
 - [ ] **Step 4: Run** `uv run pytest tests/eval tests/test_todo*.py tests/verify tests/records -q`.
 - [ ] **Step 5: Commit** with the message `feat(eval): decisions, todo integration, QC sample`.
 
-### Task 9: CI split (policy job and test job) and the 0.3.1 leftovers
+### Task 10: CI split (policy job and test job) and the 0.3.1 leftovers
 
 **Files:**
 - Modify: `src/kb/verify/run.py`, `src/kb/cli.py` (`kb verify --skip-tests`), `src/kb/init/templates/github_workflow.yml`, `src/kb/gitfiles.py` (`_default_branch_ref`), `src/kb/verify/approvals.py` (`policy_files_changed`), README.md
@@ -365,7 +452,7 @@
 - [ ] **Step 4: Run** `uv run pytest tests/cli tests/init tests/verify -q`.
 - [ ] **Step 5: Commit** with the message `fix(ci): approval gate in a job that never runs PR code; 0.3.1 leftovers`.
 
-### Task 10: Playbook, skill, README, e2e, version 0.4.0
+### Task 11: Playbook, skill, README, e2e, version 0.4.0
 
 **Files:**
 - Modify: `src/kb/rules.py` (PLAYBOOK), `src/kb/init/templates/skill_kb.md`, `README.md` ("Evaluate the extraction" section), `docs/phases/agent-mode-demo.md` (eval steps), version pins as in commit 2104821 (`pyproject.toml`, `uv.lock`, `README.md`, `docs/phases/phase1-demo.md`, `docs/phases/phase2-demo.md`, plus agent-mode-demo.md)
@@ -380,6 +467,7 @@
 - [ ] **Step 1: Write the failing tests.**
   - `test_playbook_has_eval_steps`, with the exact sentences.
   - `tests/e2e/test_eval.py::test_full_eval_loop`. On the md fixture with two "must" sentences, only one is drafted. Then: `kb eval extract`, scripted run-b quoting both, `kb eval judge`, scripted verdicts (missing for the uncovered one), `kb eval report --write`. `kb todo` shows one blocking omission ask. Then: draft a record, `kb ingest --report --strict`, `kb eval decide S:<key> --as added --record REQ-F-002 --by @eval-user`. `kb todo` is clean and the freeze ask is offered.
+  - In `test_full_eval_loop`, the scripted run B also adds one entity and one relation the main run lacks. Both appear as omission findings and are resolved with `--as added`.
   - Extend `test_agent_follows_playbook_literally` so that the LiteralAgent completes the eval items before freezing.
 - [ ] **Step 2: Run them and confirm they fail.**
 - [ ] **Step 3: Implement** the text and docs, and bump the version to 0.4.0 everywhere 2104821 touched, plus agent-mode-demo.md.
