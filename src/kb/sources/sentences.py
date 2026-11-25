@@ -13,7 +13,10 @@ if TYPE_CHECKING:
 
 _BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])")
 _ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "u.s.", "no.", "fig.", "approx.", "incl.", "resp.")
-_UNIT_START = re.compile(r"(?:[-*+] |\d+[.)] |\| )")
+_UNIT_START = re.compile(r"\s*(?:[-*+] |\d+[.)] |\| )")
+_MARKER = re.compile(r"\s*(?:[-*+] |\d+[.)] |\| )")
+_FENCE = re.compile(r"\s*(?:```|~~~)")
+_SEPARATOR = re.compile(r"\|?[\s:|-]+\|?")
 _HEADING_LINE = re.compile(r"#{1,6} ")
 
 NORMATIVE_CUES: dict[str, re.Pattern] = {
@@ -48,18 +51,26 @@ def is_normative(s: Sentence) -> bool:
 
 
 def sentence_key(s: Sentence) -> str:
-    return hashlib.sha256(fold(s.text)[0].encode()).hexdigest()[:12]
+    body = _MARKER.sub("", s.text, count=1)
+    return hashlib.sha256(fold(body)[0].strip().encode()).hexdigest()[:12]
 
 
 def _blocks(text: str, start: int, end: int) -> list[tuple[int, int]]:
-    """Units of [start, end): a paragraph, a list item or a table row; headings and blanks are skipped."""
+    """Units of [start, end): a paragraph, a list item or a table row; headings, blanks, table
+    separators and fenced code are skipped."""
     blocks: list[list[int]] = []
     open_block: list[int] | None = None
+    in_fence = False
     pos = start
-    for line in text[start:end].split("\n"):
-        ls, le = pos, pos + len(line)
+    for raw in text[start:end].split("\n"):
+        ls, le = pos, pos + len(raw)
         pos = le + 1
-        if not line.strip() or _HEADING_LINE.match(line):
+        line = raw.rstrip("\r")
+        le = ls + len(line)
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            open_block = None
+        elif in_fence or not line.strip() or _HEADING_LINE.match(line) or "-" in line and line.lstrip().startswith("|") and _SEPARATOR.fullmatch(line.strip()):
             open_block = None
         elif open_block is not None and not _UNIT_START.match(line):
             open_block[1] = le  # a wrapped continuation line
@@ -75,8 +86,11 @@ def _split_block(text: str, start: int, end: int) -> list[tuple[int, int]]:
     out: list[tuple[int, int]] = []
     cur = start
     for m in _BOUNDARY.finditer(text, start, end):
+        if cur == start and re.fullmatch(r"\s*\d+[.)]", text[cur : m.start()]):
+            continue  # the number of a numbered list item is not a sentence
         before = text[cur : m.start()].split()
-        if before and before[-1].lower() in _ABBREVIATIONS:
+        # Known trade-off: "No." is protected, so it never ends a sentence.
+        if before and before[-1].lower().lstrip("([{\"'") in _ABBREVIATIONS:
             continue
         out.append((cur, m.start()))
         cur = m.end()
@@ -88,9 +102,10 @@ def segment_sentences(text: str, seg: Segment, src_id: str) -> list[Sentence]:
     result: list[Sentence] = []
     for bs, be in _blocks(text, seg.start, seg.end):
         for s, e in _split_block(text, bs, be):
-            piece = text[s:e]
-            if not piece.strip():
+            piece = text[s:e].rstrip()
+            if not piece:
                 continue
+            e = s + len(piece)
             result.append(Sentence(f"{src_id}#{seg.id}", len(result), s, e, piece, cues(piece)))
     return result
 
