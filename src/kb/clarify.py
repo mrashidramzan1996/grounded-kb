@@ -22,6 +22,8 @@ _HANDLE = re.compile(r"@[\w.-]+(/[\w.-]+)?", re.ASCII)
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 _BLOCK = re.compile(r"#|~~~|<!--|>|[-*+] |\||\d+[.)] ")  # what would make a paragraph into other markup
 MAX_TOPIC, MAX_TEXT = 200, 1500  # with the header lines, the section stays under one segment (2000 characters)
+MAX_BY = 64
+_NESTED = " > "  # how a segment's heading path joins nested headings: a topic must not mimic one
 
 
 class ClarifyError(ValueError):
@@ -69,8 +71,10 @@ def clarify(root: Path, topic: str, text: str, by: str, date: str) -> tuple[str,
     section, SRC-x#seg-NN)."""
     root = Path(root)
     topic, text = _plain("topic", topic, MAX_TOPIC), _plain("text", text, MAX_TEXT)
-    if not _HANDLE.fullmatch(by):
-        raise ClarifyError(f"--by must look like @handle or @org/team, not {by!r}")
+    if _NESTED in topic:
+        raise ClarifyError(f"topic must not contain {_NESTED.strip()!r} between words; it reads as a nested heading")
+    if len(by) > MAX_BY or not _HANDLE.fullmatch(by):
+        raise ClarifyError(f"--by must look like @handle or @org/team (at most {MAX_BY} characters), not {by[:MAX_BY + 1]!r}")
     try:
         if not _DATE.fullmatch(date):
             raise ValueError

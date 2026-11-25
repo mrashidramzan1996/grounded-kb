@@ -221,3 +221,22 @@ def _failing_second_load(real):
         return real(root, *a, **k)
 
     return load
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"text": "> quoted"}, {"text": "- a list"}, {"text": "* a list"}, {"text": "+ a list"}, {"text": "| a | b |"},
+    {"text": "1. first"}, {"text": "~~~ fence"}, {"text": "<!-- hidden -->"}, {"topic": "> quoted"},
+    {"topic": "- item"}, {"topic": "1. first"}, {"text": "a​b"}, {"text": "a‮b"}, {"topic": "a﻿b"},
+    {"text": "x" * 1501}, {"topic": "t" * 201}, {"by": "@" + "a" * 64}, {"topic": "Checkout > Speed"},
+])
+def test_clarify_refuses_markup_long_input_and_nested_topics(tmp_path, kwargs):
+    root = repo(tmp_path)
+    with pytest.raises(ClarifyError):
+        do(root, **kwargs)
+    assert not (root / CLARIFICATIONS).exists()
+
+
+def test_clarify_accepts_limits(tmp_path):
+    root = repo(tmp_path)
+    do(root, topic="t" * 200, text="x" * 1500, by="@" + "a" * 63)
+    do(root, topic="Checkout>speed", text="Speed > 2 seconds is too slow.")
