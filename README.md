@@ -42,10 +42,14 @@ kb version
 For CI, `kb init --install-spec 'grounded-kb==0.3.1'` (or the pinned git spec above) writes it into the workflow;
 without `--install-spec` the CI job only warns.
 
-The generated CI job runs `kb verify --base origin/<target> --comment` on pull requests (one updated comment, plus
-`.kb/cache/status.json` and `.kb/cache/verify.md` as an artifact) and `kb verify --all` on the default branch. Install your
-project's test dependencies in the workflow before the verify step, keep `fetch-depth: 0` so the merge-base exists, and
-grant `pull-requests: write` for the comment (the template does).
+The generated GitHub workflow has two jobs, so the approval gate never runs pull-request code. `kb-policy` runs
+`kb verify --base origin/<target> --skip-tests --comment` on pull requests: approvals, schema, stale context and the
+decision guard, with no dependency install and no project test (one updated comment, plus `.kb/cache/status.json` and
+`.kb/cache/verify.md` as an artifact; it holds `pull-requests: write`). `kb-claims` installs your project's test
+dependencies, runs the tests and reports claim verification with `kb verify --base origin/<target> --forge none`
+(read-only token, no comment), and runs `kb verify --all` on the default branch. Keep `fetch-depth: 0` so the merge-base
+exists. `kb verify --skip-tests` runs no project test: claims that need tests are `unverified` ("tests not run
+(--skip-tests)"), never broken.
 
 ## Approvals
 
@@ -70,8 +74,9 @@ the target branch's CODEOWNERS.
 
 `kb verify` only reports; the forge enforces. These are prerequisites, not options:
 
-- Make `kb verify` a required status check on the default branch (GitHub: a branch protection rule or ruleset; GitLab:
-  "Pipelines must succeed"), so a pull request cannot merge while it fails.
+- Make `kb-policy` (the job that runs `kb verify --skip-tests`) a required status check on the default branch (GitHub: a
+  branch protection rule or ruleset; GitLab: "Pipelines must succeed"), so a pull request cannot merge while it fails.
+  `kb-claims` runs the project's tests and reports claim verification; it runs pull-request code, so it is not the gate.
 - Enable "Require review from Code Owners" (GitLab: code owner approval) and give the CODEOWNERS lines `kb init`
   writes real owners, including the gate's own files (`/kb.config.yaml`, the CODEOWNERS locations,
   `/.github/workflows/kb.yml`, `/.gitlab-ci.yml`): a pull request runs its own copy of the workflow, so only the

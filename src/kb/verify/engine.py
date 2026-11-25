@@ -33,6 +33,7 @@ Kind = Literal["claim", "requirement", "invariant"]
 
 _KIND_ORDER: dict[str, int] = {"claim": 0, "requirement": 1, "invariant": 2}
 NO_RUNNER_HINT = "no test command: set modules[].tests"
+TESTS_SKIPPED_HINT = "tests not run (--skip-tests)"
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class EngineInput:
     index: AnchorIndex
     outcomes: dict[str, Outcome]  # every ref in tests_needed(...) for the affected set
     symbols: SymbolIndex | None = None  # parsed head files; `snapshot` fills it before the test run
+    tests_skipped: bool = False  # --skip-tests: no test ran, so no outcome exists; test-dependent claims are unverified
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,8 @@ class _Engine:
         lost = [(r, gone[p]) for r in refs if (p := self.test_presence(r)) in gone]
         if lost:
             return _TestResult("broken", tuple(f"linked test {r} {why}" for r, why in lost), False)
+        if self.inp.tests_skipped:
+            return _TestResult("unverified", (TESTS_SKIPPED_HINT,), False)
         outcomes = {r: self.inp.outcomes.get(r, "missing") for r in refs}  # absent from the run: not passing
         # a deterministic failure is never masked by another test lacking a runner: rule 7 before 6b
         failing = [(r, o) for r, o in outcomes.items() if o in ("failed", "skipped", "missing")]

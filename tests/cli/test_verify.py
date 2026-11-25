@@ -279,3 +279,22 @@ def test_unreadable_base_policy_exits_2(tmp_path):
     r = invoke(root, "verify", "--base", "main", "--forge", "none")
     assert r.exit_code == 2, r.output
     assert f"kb.config.yaml at {tip}" in r.output
+
+
+def test_skip_tests_runs_no_tests_and_checks_approvals(verify_repo, tmp_path):
+    git(verify_repo, "checkout", "-q", "-b", "feature")
+    seats = verify_repo / "services/billing/seats.py"
+    seats.write_text(seats.read_text() + "\n\ndef add_seat(account):\n    return 1\n")
+    marker = tmp_path / "ran"
+    test = verify_repo / CLAIM_TEST
+    test.write_text(test.read_text().replace(
+        "    ...\n", f"    import pathlib\n    pathlib.Path({str(marker)!r}).write_text('ran')\n", 1))
+    commit(verify_repo)
+    path = forge_file(tmp_path, verify_repo)
+    r = invoke(verify_repo, "verify", "--skip-tests", "--forge", f"local:{path}", "--format", "json")
+    assert r.exit_code == 0, r.output
+    assert not marker.exists()  # no project test ran
+    claim = verdicts(r.stdout)["FEAT-001.C1"]
+    assert claim["status"] == "unverified" and "tests not run (--skip-tests)" in claim["reasons"]
+    assert {"code": "missing_owner_approval", "record": None} in json.loads(r.stdout)["blocking"]
+    assert "broken" not in {v["status"] for v in verdicts(r.stdout).values()}

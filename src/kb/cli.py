@@ -512,6 +512,8 @@ def verify(
     forge: Annotated[str, typer.Option("--forge", help="auto, none, github or local:PATH.")] = "auto",
     comment: Annotated[bool, typer.Option("--comment", help="Post the Markdown report on the pull request.")] = False,
     strict: Annotated[bool, typer.Option("--strict", help="Exit 1 on anything blocking, whatever the policy mode.")] = False,
+    skip_tests: Annotated[bool, typer.Option(
+        "--skip-tests", help="Run no project test: claims that need tests are unverified. For the CI approval gate.")] = False,
 ) -> None:
     """Run the linked tests and derive claim, requirement and invariant states; check stale context and owner approval.
     Writes .kb/cache/status.json and .kb/cache/verify.md."""
@@ -527,7 +529,7 @@ def verify(
     except (ValueError, *TOOL_ERRORS) as e:  # ValueError: an unknown --forge value
         raise _fail(e) from e
     try:
-        report = run_verify(root, base=base, all_=all_, forge=port)
+        report = run_verify(root, base=base, all_=all_, forge=port, skip_tests=skip_tests)
         write_outputs(root, report)
     except TOOL_ERRORS as e:
         raise _fail(e) from e

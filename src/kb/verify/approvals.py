@@ -1,5 +1,6 @@
 """The missing_owner_approval rule: who must approve a PR, and whether they did."""
 
+import os
 import re
 from collections.abc import Sequence
 from fnmatch import fnmatchcase
@@ -66,13 +67,15 @@ POLICY_FILES = (CONFIG, *CODEOWNERS_LOCATIONS, *CI_WORKFLOWS)
 def policy_files_changed(root: Path, tip: str) -> list[str]:
     """POLICY_FILES whose working-tree bytes differ from `tip`'s (added, edited or deleted): for `kb verify --all`
     with a pull request, which computes no changed files. A file that cannot be read safely (a symlink) counts as
-    changed."""
+    changed, and so does one that exists but cannot be read (too large, not a regular file)."""
     out = []
     for rel in POLICY_FILES:
         try:
             data = read_regular(root, rel)
         except UnsafePath:
             data = b"\0unreadable"  # never equal to a tracked file's bytes as git stores a symlink
+        if data is None and os.path.lexists(root / rel):
+            data = b"\0unreadable"  # exists but too large or not a regular file: changed, not "absent"
         if data != file_at(root, tip, rel) or rel in tree_symlinks(root, tip, rel):
             out.append(rel)
     return out

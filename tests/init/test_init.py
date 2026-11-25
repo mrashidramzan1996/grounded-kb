@@ -3,8 +3,8 @@ import os
 import stat
 
 import pytest
-
 from helpers import git, invoke, make_git_repo
+
 from kb.config.load import load_config
 from kb.init.scaffold import init_repo
 
@@ -141,7 +141,7 @@ def test_github_ci_template(tmp_path):
     init_repo(repo, install_spec="grounded-kb==9.9")
     text = (repo / ".github/workflows/kb.yml").read_text()
     assert "fetch-depth: 0" in text and "KB_INSTALL_SPEC: 'grounded-kb==9.9'" in text
-    assert 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --comment --forge auto' in text
+    assert 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto' in text
     assert "--strict" not in text
     assert "BASE_REF: ${{ github.event.pull_request.base.ref }}" in text  # M7: never expanded inside run:
 
@@ -291,18 +291,42 @@ def test_github_workflow_pr_and_push_steps(tmp_path):
     text = (repo / ".github/workflows/kb.yml").read_text()
     wf = YAML(typ="safe").load(text)
     assert set(wf[True] if True in wf else wf["on"]) == {"pull_request", "pull_request_review", "push"}
-    steps = wf["jobs"]["check"]["steps"]
-    runs = {s["if"]: s["run"] for s in steps if "run" in s}
-    assert len(runs) == 3
+    jobs = wf["jobs"]
+    env = {"KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.event.pull_request.base.ref }}"}
+    assert jobs["kb-policy"]["env"] == env and jobs["kb-claims"]["env"] == env
+    for job in jobs.values():
+        assert job["steps"][0]["with"]["fetch-depth"] == 0
     pr = "env.KB_INSTALL_SPEC != '' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')"
-    push = "env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"
-    assert runs[pr].endswith('kb verify --base "origin/$BASE_REF" --comment --forge auto') and "${{" not in runs[pr]
-    assert runs[push].endswith("kb verify --all") and "--base" not in runs[push]
+    (policy_run,) = [s["run"] for s in jobs["kb-policy"]["steps"] if "run" in s and s.get("if") == pr]
+    assert policy_run == 'uvx --from "$KB_INSTALL_SPEC" kb verify --base "origin/$BASE_REF" --skip-tests --comment --forge auto'
+    assert "${{" not in policy_run
+    runs = {s["if"]: s["run"] for s in jobs["kb-claims"]["steps"] if "run" in s}
+    pr_run = runs["env.KB_INSTALL_SPEC != '' && github.event_name == 'pull_request'"]
+    assert pr_run.endswith('kb verify --base "origin/$BASE_REF" --forge none') and "${{" not in pr_run
+    assert runs["env.KB_INSTALL_SPEC != '' && github.event_name == 'push'"].endswith("kb verify --all")
     assert runs["env.KB_INSTALL_SPEC == ''"].startswith("echo ")
-    assert wf["jobs"]["check"]["env"] == {
-        "KB_INSTALL_SPEC": "grounded-kb==9.9", "BASE_REF": "${{ github.event.pull_request.base.ref }}"}
-    assert wf["jobs"]["check"]["steps"][0]["with"]["fetch-depth"] == 0
     assert "branches: [main]" in text
+
+
+def test_workflow_has_policy_job_without_install(tmp_path):
+    from ruamel.yaml import YAML
+
+    repo = make_git_repo(None, tmp_path)
+    init_repo(repo, install_spec="grounded-kb==9.9")
+    text = (repo / ".github/workflows/kb.yml").read_text()
+    jobs = YAML(typ="safe").load(text)["jobs"]
+    policy, claims = jobs["kb-policy"], jobs["kb-claims"]
+    for step in policy["steps"]:  # the echo step only warns about the empty install spec
+        text_of_step = str(step.get("uses", "")) + ("" if str(step.get("run", "")).startswith("echo ") else str(step.get("run", "")))
+        assert "install" not in text_of_step.lower().replace("kb_install_spec", "") and "sync" not in text_of_step
+    (run,) = [s["run"] for s in policy["steps"] if "run" in s and "kb verify" in s["run"]]
+    assert "--skip-tests" in run and "--comment" in run and '"origin/$BASE_REF"' in run
+    assert policy["permissions"]["pull-requests"] == "write"
+    claim_runs = [s["run"] for s in claims["steps"] if "run" in s and "kb verify" in s["run"]]
+    assert claim_runs and all("--comment" not in r and "--skip-tests" not in r for r in claim_runs)
+    assert any("--forge none" in r for r in claim_runs if "--base" in r)
+    assert "pull-requests" not in claims["permissions"]
+    assert "never runs pull-request code" in text
 
 
 def test_gitlab_ci_mr_and_default_branch_jobs(tmp_path):
@@ -363,9 +387,9 @@ def test_github_template_runs_verify_with_comment_and_artifact(tmp_path):
     text = (repo / ".github/workflows/kb.yml").read_text()
     wf = YAML(typ="safe").load(text)
     assert wf["permissions"] == {"contents": "read"}
-    assert wf["jobs"]["check"]["permissions"] == {"contents": "read", "pull-requests": "write"}
+    assert wf["jobs"]["kb-policy"]["permissions"] == {"contents": "read", "pull-requests": "write"}
     assert "# install your project's test dependencies here" in text
-    steps = wf["jobs"]["check"]["steps"]
+    steps = wf["jobs"]["kb-policy"]["steps"]
     verify = next(s for s in steps if "--comment" in s.get("run", ""))
     assert verify["env"] == {"GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
     assert "${{ secrets.GITHUB_TOKEN }}" in text
@@ -402,7 +426,7 @@ def test_github_workflow_checks_out_pr_head_and_reruns_on_reviews(tmp_path):
     wf = YAML(typ="safe").load((repo / ".github/workflows/kb.yml").read_text())
     on = wf[True] if True in wf else wf["on"]
     assert on["pull_request_review"] == {"types": ["submitted", "dismissed"]}
-    job = wf["jobs"]["check"]
+    job = wf["jobs"]["kb-policy"]
     checkout = next(s for s in job["steps"] if s.get("uses") == "actions/checkout@v4")
     # empty on push, so a push keeps the default ref; no token left in .git/config for linked tests to read
     assert checkout["with"] == {

@@ -61,10 +61,12 @@ def exact_ref(root: Path, full: str) -> str | None:
 def _default_branch_ref(root: Path) -> str | None:
     """The default branch's full ref: refs/heads/<name>, else refs/remotes/origin/<name>, for origin/HEAD's target,
     then main, then master; None when none exists."""
-    r = _git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False)
+    # without --short: git abbreviates the target to "origin/main" or, when a tag refs/tags/origin/main exists,
+    # to the ambiguous "heads/origin/main"-style names; the full ref is stripped by hand instead
+    r = _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", check=False)
     candidates = []
-    if r.returncode == 0 and r.stdout.strip():
-        candidates.append(r.stdout.decode().strip().removeprefix("origin/"))
+    if r.returncode == 0 and r.stdout.strip().decode().startswith("refs/remotes/origin/"):
+        candidates.append(r.stdout.decode().strip().removeprefix("refs/remotes/origin/"))
     candidates += ["main", "master"]
     for name in candidates:
         for full in (f"refs/heads/{name}", f"refs/remotes/origin/{name}"):

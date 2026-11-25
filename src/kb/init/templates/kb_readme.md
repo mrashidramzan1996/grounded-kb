@@ -31,7 +31,7 @@ only prints a warning. Use a spec you control and pin it:
 - a tagged git URL, e.g. `git+https://github.com/<owner>/grounded-kb@<tag>`, or
 - the published package with an exact version (`grounded-kb==<version>`), once its owner publishes it.
 
-On GitHub the pull-request job posts (and updates) one comment and uploads `.kb/cache/status.json` and `.kb/cache/verify.md`
+On GitHub the `kb-policy` job (the one to mark as a required check; it installs no dependency and runs no project test) posts (and updates) one comment and uploads `.kb/cache/status.json` and `.kb/cache/verify.md`
 as an artifact; the comment needs `permissions: pull-requests: write` (the template sets it). GitLab prints the Markdown to
 the job log and keeps both files as artifacts. Install your project's test dependencies before the verify step, because
 `kb verify` runs the linked tests with the project's own `python`. Keep `fetch-depth: 0` (`GIT_DEPTH: "0"` on GitLab):

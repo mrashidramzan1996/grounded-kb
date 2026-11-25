@@ -94,7 +94,8 @@ def verdict_issues(verdicts: list[Verdict], repo: KbRepo) -> list[Issue]:
     return out
 
 
-def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None) -> VerifyReport:
+def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None,
+               skip_tests: bool = False) -> VerifyReport:
     """Raises ConfigError, GitError, TestRunError, ForgeError; the caller maps them to exit 2."""
     root = Path(root)
     config = load_config(root / "kb.config.yaml")
@@ -123,7 +124,10 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     # (the PR, policy, config, repos, changes and index above; HEAD and the parsed head files here).
     head = head_commit(root)
     inp = snapshot(EngineInput(root, config, repo, base_repo, changes, index, {}), hit)
-    inp = replace(inp, outcomes=run_tests(root, config, tests_needed(inp, hit)))
+    if skip_tests:  # the CI policy job: no project code runs; claims that need tests are reported unverified
+        inp = replace(inp, tests_skipped=True)
+    else:
+        inp = replace(inp, outcomes=run_tests(root, config, tests_needed(inp, hit)))
     verdicts = derive(inp, hit)
 
     issues = check.issues + verdict_issues(verdicts, repo) + stale
