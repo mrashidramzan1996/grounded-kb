@@ -71,19 +71,26 @@ def too_short(text: str) -> bool:
     return len("".join(text.split())) < MIN_QUOTE_CHARS
 
 
-def quote_results(repo: KbRepo, evidence: Evidence) -> tuple[list[Quote], list[Quote]]:
-    """(found, unfound) quotes: found means long enough and verbatim, aligned to word and number boundaries, in its segment.
-
-    A quote whose source or segment is missing is unfound. Under `mode: any` a record is unfound only when `found` is empty.
-    """
-    found: list[Quote] = []
-    unfound: list[Quote] = []
+def located_quotes(repo: KbRepo, evidence: Evidence) -> list[tuple[Quote, str, int, int]]:
+    """(quote, source id, start, end) for each found quote: long enough and verbatim, aligned to word and number
+    boundaries, in its segment. start and end are offsets into the source's text.md. A quote whose source or segment
+    is missing is not found."""
+    out: list[tuple[Quote, str, int, int]] = []
     for q in evidence.quotes:
         src, _, seg_id = q.source.partition("#")
         seg = next((s for s in repo.segments(src) if s.id == seg_id), None) if src in repo.sources else None
-        ok = seg is not None and not too_short(q.text) and find_quote(repo.source_text(src)[seg.start : seg.end], q.text) is not None
-        (found if ok else unfound).append(q)
-    return found, unfound
+        if seg is None or too_short(q.text):
+            continue
+        at = find_quote(repo.source_text(src)[seg.start : seg.end], q.text)
+        if at is not None:
+            out.append((q, src, seg.start + at[0], seg.start + at[1]))
+    return out
+
+
+def quote_results(repo: KbRepo, evidence: Evidence) -> tuple[list[Quote], list[Quote]]:
+    """(found, unfound) quotes, by located_quotes. Under `mode: any` a record is unfound only when `found` is empty."""
+    located = [q for q, *_ in located_quotes(repo, evidence)]
+    return [q for q in evidence.quotes if q in located], [q for q in evidence.quotes if q not in located]
 
 
 def quote_gate(ctx: GateContext) -> list[Issue]:

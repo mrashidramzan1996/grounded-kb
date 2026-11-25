@@ -66,6 +66,18 @@ def test_cues():
     assert "number" in cues("Save 50% now.")
 
 
+def test_number_cue_needs_a_unit_currency_or_percentage():
+    assert cues("Refunds are paid within 14 days.") == {"limit", "number"}
+    for text in ("A seat costs 5 EUR.", "A seat costs $8.", "It costs €12 a month.", "Pay USD 20 up front.",
+                 "Logs are kept 30 days.", "A request takes 200 ms.", "Uploads are capped at 10 MB.",
+                 "Teams start with 3 seats.", "Retry 3 times.", "It runs 2 per day.", "A 15% discount applies."):
+        assert "number" in cues(text), text
+    for text in ("Contact [EMAIL-1] on 2026-01-05.", "Key [SECRET:aws] was rotated.", "Released in 2026.",
+                 "The call starts at 10:30.", "See section 3.", "See page 2.", "3.2 Removing seats",
+                 "Decisions from the review on 10 November 2026."):
+        assert cues(text) == set(), text
+
+
 def test_sentence_key_stable_when_neighbours_change():
     _, a = _units("First one. Seats must stay.\n")
     _, b = _units("Different start here now. Seats  must stay.\n")

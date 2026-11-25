@@ -22,7 +22,8 @@ shape of the examples. The gates then check what you wrote: when you are done, r
    use `--owner <@handle>` only when the documents name a forge handle (e.g. @acme/billing);
    a team name like 'Billing team' means `--owner TODO`, and so do documents that name no owner.
 7. Write `triage.yaml` for every segment, in `kb/sources/SRC-…/triage.yaml`: map each segment ID to
-   the IDs drafted from it (each must quote that segment, or for a feature link a requirement that does),
+   the IDs drafted from it (at least one of the named records must quote that segment, or be a feature
+   linking a requirement that does),
    or to `"none: <code>: <reason>"` with a code from heading, background, contact, boilerplate, example,
    duplicate, out-of-scope, other.
 8. Set `drafted_by: "agent:<your name> via kb ingest brief $version"` on every record you draft.

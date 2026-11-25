@@ -1,6 +1,7 @@
 """`kb ingest --report`: gate whatever the agent drafted since `base` (A-16)."""
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from kb.textfmt import inline_code
 GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate, coverage_gate, triage_gate]
 BASE_GATES = [g for g in GATES if g is not source_gate]
 TRIAGE_ERRORS = ("triage.none_uncoded", "triage.not_quoted")
+TRIAGE_FILE = re.compile(r"kb/sources/SRC-[^/]+/triage\.yaml")
 ORIGINAL_CHANGED = (
     "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
 )
@@ -178,9 +180,13 @@ def gate_drafts(root: Path, config: KbConfig, config_at_base: KbConfig | None, h
         if i.code in TRIAGE_ERRORS and issue_key(i) not in known and (i.code == "triage.not_quoted" or i.path in drafted) else i
         for i in issues
     ]
-    # untriaged segments have their own section of the report
+    # untriaged segments have their own section of the report. For a triage file that existed at base only the new
+    # warnings are reported; one written in this range shows them all (on a first ingest every rule a record missed
+    # was already uncovered at base)
     mine = [i for i in issues if (i.record in ids or i.path in drafted) and not i.code.startswith("source.")
-            and i.code != "segment.untriaged"]
+            and i.code != "segment.untriaged"
+            and not (i.severity == "warning" and TRIAGE_FILE.fullmatch(i.path or "") and i.path in before.raw
+                     and issue_key(i) in known)]
     # whoever wrote it, a decision or invariant drafted in this range must quote its document (C2)
     mine = [i for i in mine if i.code != "evidence.missing"] + [
         missing_evidence(rid, rec, "error", head.paths[rid])

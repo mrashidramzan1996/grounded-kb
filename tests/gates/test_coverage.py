@@ -139,3 +139,27 @@ def test_overlapping_quotes_count_quoted_chars_once():
     text = "A seat must be paid before use."
     repo = repo_of(req("REQ-F-001", "seg-02", text), req("REQ-F-002", "seg-02", "must be paid before use."))
     assert coverage_stats(repo)["quoted_chars"] == len(text)
+
+
+def test_stats_skip_sources_with_invalid_segment_ids():
+    repo = repo_of()
+    bad = "SRC-bad"
+    files = dict(repo.raw)
+    files[f"kb/sources/{bad}/source.yaml"] = SOURCE_YAML.replace(SRC, bad).encode()
+    files[f"kb/sources/{bad}/text.md"] = b"A seat must be paid.\n"
+    files[f"kb/sources/{bad}/segments.jsonl"] = (
+        json.dumps({"id": "x`y", "heading": "H", "page": 1, "start": 0, "end": 20, "hash": "0" * 12}) + "\n"
+    ).encode()
+    both = KbRepo.from_files(files)
+    assert coverage_stats(both) == coverage_stats(repo)  # neither its sentences nor its text count
+    assert gate(both) == gate(repo)
+
+
+def test_located_quotes_give_text_offsets():
+    from kb.gates.quotes import located_quotes
+
+    text = "A seat must be paid before use."
+    repo = repo_of(req("REQ-F-001", "seg-02", text))
+    ev = repo.records["REQ-F-001"].evidence
+    ((q, src, start, end),) = located_quotes(repo, ev)
+    assert (q, src, repo.source_text(SRC)[start:end]) == (ev.quotes[0], SRC, text)

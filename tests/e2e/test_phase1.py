@@ -61,7 +61,7 @@ def test_phase1_docs_only_story(story, fixtures):
     r = invoke(repo, "ingest", "--report")
     assert r.exit_code == 0, r.output
     out = r.stdout
-    assert "## Rejected (1)" in out and "REQ-F-005" in out and "quote.not_found" in out
+    assert "## Rejected (2)" in out and "REQ-F-005" in out and "quote.not_found" in out and "triage.not_quoted" in out
     assert "REQ-NF-001" in out and "requirement.vague" in out
     assert "## Untriaged segments (1)" in out and "5. Contact" in out
     assert "## Proposed modules (3)" in out

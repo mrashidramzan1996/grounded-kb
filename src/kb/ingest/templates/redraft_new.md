@@ -14,7 +14,7 @@ record cites them.
 6. Never invent numbers, targets or details. When a line is vague (for example "must be fast"), draft it
    as written and flag it `flags: [vague]` instead of making up a target.
 7. Write a triage entry for every segment below, in `kb/sources/SRC-…/triage.yaml`: the IDs drafted from
-   it (each must quote that segment), or `"none: <code>: <reason>"` with a code from heading, background,
+   it (at least one of the named records must quote that segment), or `"none: <code>: <reason>"` with a code from heading, background,
    contact, boilerplate, example, duplicate, out-of-scope, other. Update the entry a changed segment already has.
 8. Set `drafted_by: "agent:<your name> via kb redraft brief $version"` on every record you draft.
 

@@ -1,10 +1,9 @@
 """Sentence-level coverage: every rule-like sentence of a stored document should be quoted by a record (0.4.0)."""
 
 from kb.gates.base import GateContext
-from kb.gates.quotes import too_short
+from kb.gates.quotes import located_quotes
 from kb.gates.sources import bad_segment_ids
 from kb.issues import Issue
-from kb.quotes.match import find_quote
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
@@ -17,21 +16,14 @@ Span = tuple[int, int, str]  # [start, end) in the source's text.md, and the rec
 
 
 def quote_spans(repo: KbRepo) -> dict[str, list[Span]]:
-    """{source id: (start, end, record id)} for each quote of a live covering record that is found in its segment
-    (by the quote gate's rules: long enough, verbatim, on word and number boundaries), sorted by position."""
+    """{source id: (start, end, record id)} for each found quote (gates.quotes.located_quotes: the quote gate's rules)
+    of a live covering record, sorted by position."""
     live = live_ids(repo)
     out: dict[str, list[Span]] = {}
     for rid, rec in sorted(repo.records.items()):
-        if not isinstance(rec, COVERING_TYPES) or rid not in live or rec.evidence is None:
-            continue
-        for q in rec.evidence.quotes:
-            src, _, seg_id = q.source.partition("#")
-            seg = next((s for s in repo.segments(src) if s.id == seg_id), None) if src in repo.sources else None
-            if seg is None or too_short(q.text):
-                continue
-            at = find_quote(repo.source_text(src)[seg.start : seg.end], q.text)
-            if at is not None:
-                out.setdefault(src, []).append((seg.start + at[0], seg.start + at[1], rid))
+        if isinstance(rec, COVERING_TYPES) and rid in live and rec.evidence is not None:
+            for _, src, start, end in located_quotes(repo, rec.evidence):
+                out.setdefault(src, []).append((start, end, rid))
     return {src: sorted(spans) for src, spans in out.items()}
 
 
@@ -79,8 +71,8 @@ def coverage_stats(repo: KbRepo) -> dict:
         "normative": normative,
         "covered": covered,
         "ratio": covered / normative if normative else 1.0,
-        "quoted_chars": sum(_quoted_chars(v) for v in spans.values()),
-        "text_chars": sum(len(repo.source_text(src)) for src in repo.sources),
+        "quoted_chars": sum(_quoted_chars(spans.get(src, [])) for src in rules),
+        "text_chars": sum(len(repo.source_text(src)) for src in rules),
     }
 
 

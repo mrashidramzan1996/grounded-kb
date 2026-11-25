@@ -27,9 +27,14 @@ NORMATIVE_CUES: dict[str, re.Pattern] = {
         "should": r"\b(?:should|recommended)\b",
         "may": r"\bmay\b(?!\s+not\b)",
         "limit": r"\b(?:at least|at most|no more than|no less than|up to|within|maximum|minimum|only)\b",
-        "number": r"\b\d+(?:[.,]\d+)*(?:\s?%|\b)",
+        # a quantity: a number with a currency, a percentage or a unit (a bare year, page or section number is not one)
+        "number": r"(?:[$€£]\s?|\b(?:EUR|USD|GBP)\s?)\d+(?:[.,]\d+)*"
+                  r"|\b\d+(?:[.,]\d+)*(?:\s?(?:%|[$€£])|\s?(?:EUR|USD|GBP|seconds?|minutes?|hours?|days?|weeks?|months?"
+                  r"|years?|ms|s|KB|MB|GB|TB|seats?|users?|requests?|times|per)\b)",
     }.items()
 }
+# never quantities: masked placeholders ([EMAIL-1], [SECRET:aws]), ISO dates and times of day
+_NOT_QUANTITIES = re.compile(r"\[(?:EMAIL-\d+|SECRET:[^\]\n]*)\]|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
 
 
 @dataclass(frozen=True)
@@ -43,7 +48,8 @@ class Sentence:
 
 
 def cues(text: str) -> frozenset[str]:
-    return frozenset(name for name, pat in NORMATIVE_CUES.items() if pat.search(text))
+    plain = _NOT_QUANTITIES.sub(" ", text)
+    return frozenset(name for name, pat in NORMATIVE_CUES.items() if pat.search(plain if name == "number" else text))
 
 
 def is_normative(s: Sentence) -> bool:

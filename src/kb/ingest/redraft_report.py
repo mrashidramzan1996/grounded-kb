@@ -6,6 +6,7 @@ from pathlib import Path
 
 from kb.config.load import load_config
 from kb.gates.quotes import numbers
+from kb.gates.triage import not_quoted_issue, quotes_ref, unquoted_entries
 from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.ingest.redraft import (
@@ -24,6 +25,7 @@ from kb.ingest.redraft import (
 )
 from kb.ingest.report import (
     CONFIG,
+    TRIAGE_FILE,
     base_config,
     deleted_sources,
     gate_drafts,
@@ -31,8 +33,9 @@ from kb.ingest.report import (
     section,
     tainted,
 )
-from kb.issues import Issue
+from kb.issues import Issue, issue_key
 from kb.records.ids import ADR_ID, INV_ID, REQ_ID, SOURCE_REF
+from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
@@ -138,6 +141,17 @@ def _drafting(head: KbRepo, before: KbRepo, segments: set[str]) -> list[str]:
         and not getattr(rec, "supersedes", None) and rec.evidence and rec.evidence.quotes
         and all(q.source in segments for q in rec.evidence.quotes)
     )
+
+
+def _stopped_quoting(head: KbRepo, before: KbRepo, chosen: set[str], issues: list[Issue]) -> list[Issue]:
+    """The triage.not_quoted errors among `issues` whose list names a selected record that quoted the segment at base."""
+    live = live_ids(before)
+    stopped = {
+        issue_key(not_quoted_issue(src, seg, known))
+        for src, seg, known in unquoted_entries(head)
+        if any(rid in chosen and quotes_ref(before, rid, f"{src}#{seg}", live) for rid in known)
+    }
+    return [i for i in issues if i.code == "triage.not_quoted" and i.severity == "error" and issue_key(i) in stopped]
 
 
 def _triaged(repo: KbRepo, ref: str) -> bool:
@@ -292,14 +306,18 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
     fresh = _fresh(before, segments)
     sources = [i for i in g.issues if i.code.startswith("source.")] + deleted_sources(head, before, ref)
     flags = _flag_issues(head, before, set(segments))
+    # a triage list that stops being quoted only because a selected record moved its quote elsewhere is a warning
+    demoted = _stopped_quoting(head, before, chosen, [*g.mine, *g.caused])
+    mine = [i for i in g.mine if i not in demoted]
+    caused = [i for i in g.caused if i not in demoted]
     rejected = (
-        [i for i in g.mine if i.severity == "error"]
+        [i for i in mine if i.severity == "error"]
         + _scope_issues(head, before, g.drafted, chosen | set(superseding) | set(drafting), chosen, fresh)
         + [i for i in flags if i.severity == "error"]
         + _config_issues(root, ref)
         + [i for i in sources if i.severity == "error" and i.code != "source.secret_in_original"]
         + tainted(head, sources)
-        + g.caused
+        + caused
     )
 
     bad_paths = {i.path for i in rejected}
@@ -316,7 +334,8 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
         redrafted=redrafted,
         superseding=accepted_superseding,
         rejected=rejected,
-        flagged=[i for i in g.mine if i.severity == "warning" and i.record in good]
+        flagged=[i for i in mine if i.severity == "warning" and (i.record in good or TRIAGE_FILE.fullmatch(i.path or ""))]
+        + [Issue(i.code, i.message, "warning", i.path, i.record) for i in demoted]
         + [i for i in flags if i.code == "flag.cleared"] + _untriaged_issues(head, fresh)
         + untriaged_cited(head, head, set(untriaged(head)) - fresh),  # an offered one is segment.untriaged
         unchanged=[rid for rid in selected if rid not in touched and rid not in replaced],
@@ -325,7 +344,7 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
             if isinstance(rec := head.records.get(rid), Requirement) and rec.flags and rec.status != "rejected"
         ],
         sources=sources,
-        caused=g.caused,
+        caused=caused,
         documents_changed=_documents_changed(head, before),
         drafted=drafted,
         segments=segments,

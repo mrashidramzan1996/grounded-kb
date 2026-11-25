@@ -12,7 +12,9 @@ DRAFTED = ["ADR-0001", "ADR-0002", "INV-001", "REQ-F-001", "REQ-F-002", "REQ-F-0
 def test_report_on_simulated_agent_drafts(acme_repo_ingested, fixtures):
     apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
     r = ingest_report(acme_repo_ingested, base="HEAD")
-    assert [i.record for i in r.rejected] == ["REQ-F-005"] and r.rejected[0].code == "quote.not_found"
+    # REQ-F-005's quote is not found, so the triage entry naming it quotes nothing either
+    assert [(i.record, i.code) for i in r.rejected] == [("REQ-F-005", "quote.not_found"),
+                                                         ("SRC-pricing-spec-v3", "triage.not_quoted")]
     assert [i.record for i in r.flagged if i.code == "requirement.vague"] == ["REQ-NF-001"]
     assert len(r.untriaged) == 1 and "Contact" in r.untriaged[0]
     assert r.untriaged == ["SRC-product-brief#seg-06 · Acme Billing - Product Brief > 5. Contact"]
@@ -20,6 +22,8 @@ def test_report_on_simulated_agent_drafts(acme_repo_ingested, fixtures):
     assert {"REQ-F-001", "REQ-F-002", "ADR-0001", "INV-001"} <= set(r.accepted)
     assert r.accepted == DRAFTED
     assert all(i.severity == "warning" for i in r.flagged) and all(i.severity == "error" for i in r.rejected)
+    # new triage files: a rule no record quotes is flagged, though it was uncovered at base too
+    assert "SRC-pricing-spec-v3#seg-10" in " ".join(i.message for i in r.flagged if i.code == "sentence.uncovered")
 
 
 def test_default_base_is_head(acme_repo_ingested, fixtures):
@@ -34,7 +38,7 @@ def test_unchanged_records_are_not_reported(acme_repo_ingested, fixtures):
     r = ingest_report(acme_repo_ingested, base="HEAD")
     assert (r.accepted, r.rejected, r.flagged, r.proposed_modules) == ([], [], [], [])
     assert len(r.untriaged) == 1  # coverage is reported whatever changed
-    assert [i.record for i in ingest_report(acme_repo_ingested, base="HEAD~1").rejected] == ["REQ-F-005"]
+    assert [i.record for i in ingest_report(acme_repo_ingested, base="HEAD~1").rejected] == ["REQ-F-005", "SRC-pricing-spec-v3"]
 
 
 def test_changed_record_is_reported_again(acme_repo_ingested, fixtures):
@@ -65,7 +69,7 @@ def test_cli_report_prints_markdown(acme_repo_ingested, fixtures):
     out = invoke(acme_repo_ingested, "ingest", "--report")
     assert out.exit_code == 0, out.output
     text = out.stdout
-    for needle in ("# Ingest report", "## Accepted (9)", "## Rejected (1)", "REQ-F-005", "quote.not_found",
+    for needle in ("# Ingest report", "## Accepted (9)", "## Rejected (2)", "REQ-F-005", "quote.not_found", "triage.not_quoted",
                    "requirement.vague", "## Untriaged segments (1)", "5. Contact", "## Proposed modules (3)", "MOD-web"):
         assert needle in text, needle
     assert invoke(acme_repo_ingested, "ingest", "--report", "--strict").exit_code == 1
@@ -82,7 +86,7 @@ def test_cli_report_base_option(acme_repo_ingested, fixtures):
     git(acme_repo_ingested, "add", "-A")
     git(acme_repo_ingested, "commit", "-m", "drafts")
     assert "## Rejected (0)" in invoke(acme_repo_ingested, "ingest", "--report").stdout
-    assert "## Rejected (1)" in invoke(acme_repo_ingested, "ingest", "--report", "--base", "HEAD~1").stdout
+    assert "## Rejected (2)" in invoke(acme_repo_ingested, "ingest", "--report", "--base", "HEAD~1").stdout
 
 
 def test_cli_bad_base_exits_2(acme_repo_ingested):
@@ -440,3 +444,47 @@ def test_too_short_quote_without_drafted_by_stays_warning(acme_repo_ingested, fi
     _strip_drafted_by(_shorten_req_f_002(acme_repo_ingested))
     r = ingest_report(acme_repo_ingested, base="HEAD")
     assert ("REQ-F-002", "quote.too_short") in _pairs(r.flagged)
+
+
+# --- triage entries: escalation is keyed on the issue being new since base ---------------------------------------
+
+PRICING_TRIAGE = "kb/sources/SRC-pricing-spec-v3/triage.yaml"
+BRIEF_TRIAGE = "kb/sources/SRC-product-brief/triage.yaml"
+
+
+def _edit(root, rel, old, new):
+    p = root / rel
+    assert old in p.read_text()
+    p.write_text(p.read_text().replace(old, new))
+
+
+def test_old_uncoded_entry_stays_a_warning_beside_a_new_coded_one(acme_repo_drafted):
+    root = acme_repo_drafted
+    _edit(root, BRIEF_TRIAGE, '"none: background: release scope"', '"none: release scope"')
+    git(root, "commit", "-qam", "a 0.3 triage entry")
+    _edit(root, BRIEF_TRIAGE, '  seg-05: "none: release scope"\n', '  seg-05: "none: release scope"\n  seg-06: "none: contact"\n')
+    r = ingest_report(root, "HEAD")
+    assert r.rejected == [] and r.untriaged == []
+    assert "triage.none_uncoded" not in [i.code for i in r.flagged]  # not new since base: not reported again
+    out = invoke(root, "check")
+    assert "warning triage.none_uncoded" in out.output
+
+
+def test_unchanged_entry_whose_record_stopped_quoting_is_caused(acme_repo_drafted):
+    root = acme_repo_drafted
+    _edit(root, "kb/requirements/REQ-F-003.yaml", "id: REQ-F-003\n", "id: REQ-F-003\nstatus: rejected\n")
+    r = ingest_report(root, "HEAD")
+    assert [(i.code, i.path, i.severity) for i in r.caused] == [("triage.not_quoted", PRICING_TRIAGE, "error")]
+    assert r.caused[0].message.startswith("SRC-pricing-spec-v3#seg-09: ")
+
+
+def test_flagged_for_a_touched_triage_file_are_only_new_warnings(acme_repo_drafted):
+    root = acme_repo_drafted
+    _edit(root, PRICING_TRIAGE, '"none: heading: document title and status"', '"none: heading: title"')
+    r = ingest_report(root, "HEAD")
+    assert r.rejected == []
+    assert [i for i in r.flagged if i.path == PRICING_TRIAGE] == []  # seg-04's none_has_rules was there at base
+    _edit(root, PRICING_TRIAGE, "  seg-10: [REQ-F-001, REQ-F-002]\n", "  seg-10: 'none: other: later'\n")
+    r = ingest_report(root, "HEAD")
+    # new since base: seg-10 holds rules (its uncovered "cannot" sentence was already reported at base) and is now none
+    assert [i.code for i in r.flagged if i.path == PRICING_TRIAGE] == ["triage.none_has_rules"]

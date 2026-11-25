@@ -178,7 +178,8 @@ def test_new_segment_left_untriaged_flagged(kb):
     assert "SRC-n#seg-03" in r.flagged[0].message
     assert "## Flagged (1)" in render_redraft_report(r)
     put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: duplicate: covered by REQ-F-002'\n")
-    assert redraft_report(kb, None).flagged == []
+    # a rule triaged none, even as a duplicate, is flagged (the segment was not triaged at base)
+    assert [i.code for i in redraft_report(kb, None).flagged] == ["triage.none_has_rules"]
 
 
 def test_triage_of_old_segment_still_out_of_scope(kb):
@@ -201,7 +202,8 @@ def test_changed_alone_lets_new_records_cite_changed_text(kb):
     put(kb, TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n  seg-02: [REQ-NF-001]\n")
     r = redraft_report(kb, None)
     assert (r.rejected, r.redrafted, r.drafted) == ([], ["REQ-F-001"], ["REQ-F-002"])
-    assert r.flagged == []  # seg-01 was triaged at base; seg-03 was not offered
+    # seg-01 was triaged at base and seg-03 was not offered (no untriaged warning), but seg-03's rule is new and unquoted
+    assert [(i.code, i.message.split(":")[0]) for i in r.flagged] == [("sentence.uncovered", "SRC-n#seg-03")]
 
 
 def test_new_file_must_match_brief(kb):
@@ -255,7 +257,8 @@ def test_changed_uncited_segment_offered_for_new_records(kb):
     put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: other: still no requirement'\n")
     (kb / "kb/requirements/REQ-NF-002.yaml").unlink()
     r = redraft_report(kb, None)
-    assert (r.rejected, r.drafted, r.flagged) == ([], [], [])  # it has an entry, so no untriaged warning
+    assert (r.rejected, r.drafted) == ([], [])  # it has an entry, so no untriaged warning
+    assert sorted(i.code for i in r.flagged) == ["sentence.uncovered", "triage.none_has_rules"]  # the new rule is not drafted
 
 
 def test_sync_hint_counts_changed_uncited_segments(kb):
@@ -390,3 +393,26 @@ def test_new_record_overwriting_an_unselected_file_rejected(kb):
     r = redraft_report(kb, None)
     assert r.drafted == [] and ("REQ-F-002", "id.filename_mismatch") in rejected(r)
     assert invoke(kb, "redraft", "--report", "--strict").exit_code == 1
+
+
+def test_new_rule_triaged_none_is_flagged(kb):
+    sync(kb, ADDED)
+    redraft(kb, "--new")
+    put(kb, TRIAGE, TRIAGED + "  seg-03: 'none: other: later'\n")
+    r = redraft_report(kb, None)
+    assert r.rejected == []
+    flagged = [(i.code, i.path) for i in r.flagged]
+    assert ("triage.none_has_rules", TRIAGE) in flagged and ("sentence.uncovered", TRIAGE) in flagged
+    assert all("SRC-n#seg-03" in i.message for i in r.flagged)
+    assert "triage.none_has_rules" in render_redraft_report(r)
+
+
+def test_selected_requirement_that_stops_quoting_is_only_a_warning(kb):
+    sync(kb, ADDED.replace("5 EUR", "7 EUR"))
+    redraft(kb, "--changed", "--new")
+    # REQ-F-001 is redrafted from the new text; seg-01's entry still names it
+    put(kb, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", REFUND, seg="seg-03"))
+    put(kb, TRIAGE, TRIAGED + "  seg-03: [REQ-F-001]\n")
+    r = redraft_report(kb, None)
+    assert "triage.not_quoted" not in [i.code for i in r.rejected]
+    assert [(i.code, i.severity) for i in r.flagged if i.code == "triage.not_quoted"] == [("triage.not_quoted", "warning")]
