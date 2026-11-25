@@ -15,7 +15,13 @@ from kb.config.load import load_config
 from kb.config.schema import KbConfig
 from kb.gates.base import GateContext
 from kb.gates.sources import STORE_NAMES, changed_message, differs_prefix, source_gate
-from kb.gitfiles import find_default_branch, has_commits, head_commit, rev_parse
+from kb.gitfiles import (
+    find_default_branch,
+    has_commits,
+    head_commit,
+    is_dirty,
+    rev_parse,
+)
 from kb.ingest.redraft import changed_segments, citing, new_text, unfound
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
@@ -175,6 +181,7 @@ _APPROVER_QUESTIONS = {
     "policy.approvers.decisions":
         "Who approves decisions and invariants? Give a forge handle such as @org/team or @user.",
 }
+_MODULE_TAIL = ")? Give a forge handle."
 _OWNER_TODO_SUFFIX = ": owner is still TODO"  # kb.config.validate: f"{where}: owner is still TODO"
 
 
@@ -227,7 +234,7 @@ def _owner_asks(issues: list[Issue], config: KbConfig) -> list[AskItem]:
         if i.record:  # a module
             where = f"modules.{i.record}.owner"
             title = titles.get(i.record)
-            question = f"Who owns {i.record}{f' ({title})' if title else ''}? Give a forge handle."
+            question = f"Who owns {i.record} ({title}{_MODULE_TAIL}" if title else f"Who owns {i.record}? Give a forge handle."
         else:
             where = i.message.removesuffix(_OWNER_TODO_SUFFIX)
             question = _APPROVER_QUESTIONS.get(where, f"Who should be the owner at {where}? Give a forge handle.")
@@ -249,7 +256,7 @@ def _secret_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
             {"document": document, "source": i.record},
             (
                 Option("remove", "Remove it from the document",
-                       f"delete that paragraph from {document} (or ask the person to, for PDF or Word), then "
+                       f"delete that paragraph from {inline_code(document)} (or ask the person to, for PDF or Word), then "
                        "`kb source sync`; tell the person to rotate the key"),
                 Option("self", "I will handle it", "leave it; kb check keeps reporting it"),
             ),
@@ -267,15 +274,19 @@ def _baseline_requirements(root: Path, version: str) -> object:
 
 
 def _freeze_asks(root: Path, repo: KbRepo, errors: int, pending: bool) -> list[AskItem]:
-    """Offer the next baseline when nothing else is left (no error, no do or other ask item), HEAD is the tip of
-    the default branch, and the live requirements differ from the latest baseline (or there is none)."""
+    """Offer the next baseline when nothing else is left (no error, no do item, no ask but flag asks: keeping a
+    flag is a valid answer), there is a live requirement, HEAD is the tip of the default branch with kb/ and
+    kb.config.yaml committed, and the live requirements differ from the latest baseline (or there is none)."""
     if errors or pending or not has_commits(root):
+        return []
+    reqs = requirement_hashes(repo)
+    if not reqs or is_dirty(root, "kb/") or is_dirty(root, "kb.config.yaml"):
         return []
     branch = find_default_branch(root)
     if branch is None or rev_parse(root, branch) != head_commit(root):
         return []
     latest = _baseline(root)
-    if latest is not None and _baseline_requirements(root, latest) == requirement_hashes(repo):
+    if latest is not None and _baseline_requirements(root, latest) == reqs:
         return []
     version = f"v{int(latest[1:]) + 1}" if latest else "v1"
     return [AskItem(
@@ -303,9 +314,9 @@ def build_todo(root: Path) -> Todo:
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head) + _fix_items(issues, repo, outdated, broken) + _triage_items(issues)
-    ask = _flag_asks(repo) + _owner_asks(issues, config) + _secret_asks(issues, repo)
+    blocking = _owner_asks(issues, config) + _secret_asks(issues, repo)
     errors = sum(i.severity == "error" for i in issues)
-    ask += _freeze_asks(root, repo, errors, bool(do or ask))
+    ask = _flag_asks(repo) + blocking + _freeze_asks(root, repo, errors, bool(do or blocking))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
         "warnings": len(issues) - errors, "baseline": _baseline(root), "clean": not errors and not do and not ask,
@@ -318,9 +329,18 @@ def _line(text: str) -> str:
 
 
 def _question_text(a: AskItem) -> str:
-    """The question with the statement it quotes as inline code."""
-    statement = a.evidence.get("statement")
-    return a.question.replace(f'"{statement}"', inline_code(statement), 1) if statement is not None else a.question
+    """The question with the untrusted text it embeds (a statement, a document path, a module title) as inline
+    code."""
+    q, ev = a.question, a.evidence
+    if (statement := ev.get("statement")) is not None:
+        return q.replace(f'"{statement}"', inline_code(statement), 1)
+    if a.kind == "secret" and (document := ev.get("document")) and q.startswith(document):
+        return inline_code(document) + q.removeprefix(document)
+    if a.id.startswith("owner:modules."):
+        head = f"Who owns {a.id.removeprefix('owner:modules.').removesuffix('.owner')} ("
+        if q.startswith(head) and q.endswith(_MODULE_TAIL):
+            return head + inline_code(q[len(head):-len(_MODULE_TAIL)]) + _MODULE_TAIL
+    return q
 
 
 def _evidence_text(ev: dict) -> str:

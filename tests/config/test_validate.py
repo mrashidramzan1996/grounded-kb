@@ -26,6 +26,16 @@ def test_duplicate_module_and_approver_todo(cfg):
     assert codes(validate_config(c, [])) == ["config.duplicate_module", "config.owner_todo", "config.unknown_owner"]
 
 
+def test_owner_todo_message_names_where(cfg):
+    """kb todo reads `<where>` back from this exact message (owner:<where> ask items)."""
+    c = cfg(modules=[mod("MOD-a", owner="TODO")], policy={"approvers": {"intent": ["TODO"], "decisions": ["TODO"]}})
+    assert [(i.code, i.message, i.record) for i in validate_config(c, [])] == [
+        ("config.owner_todo", "module MOD-a: owner is still TODO", "MOD-a"),
+        ("config.owner_todo", "policy.approvers.intent: owner is still TODO", None),
+        ("config.owner_todo", "policy.approvers.decisions: owner is still TODO", None),
+    ]
+
+
 def test_exempt_files(cfg):
     c = cfg(modules=[mod("MOD-a", ["src/**"])], ignore=["vendor/**"], generated=["gen/**"])
     files = ["kb/x.py", "setup.py", ".github/a.py", "vendor/v.py", "gen/g.py", "src/ok.py"]

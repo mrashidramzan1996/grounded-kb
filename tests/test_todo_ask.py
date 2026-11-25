@@ -51,7 +51,7 @@ def test_vague_requirement_becomes_ask_with_three_options(tmp_path):
     root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
     put(root, "kb/requirements/REQ-NF-002.yaml", req_yaml("REQ-NF-002", flags=("vague",)) + "status: rejected\n")
     found = asks(root)
-    assert list(found) == ["vague:REQ-NF-001"]  # a rejected requirement asks nothing; no freeze while asks are open
+    assert [k for k in found if not k.startswith("freeze:")] == ["vague:REQ-NF-001"]  # a rejected one asks nothing
     assert found["vague:REQ-NF-001"] == {
         "id": "vague:REQ-NF-001", "kind": "vague",
         "question": 'REQ-NF-001 says "A seat costs 5 EUR." but gives no measurable target. What should it be?',
@@ -68,7 +68,7 @@ def test_vague_requirement_becomes_ask_with_three_options(tmp_path):
 def test_conflicting_and_untestable_asks(tmp_path):
     root = flagged(tmp_path, ("REQ-F-002", ("conflicting",)), ("REQ-F-003", ("untestable", "conflicting")))
     found = asks(root)
-    assert list(found) == ["conflicting:REQ-F-002", "conflicting:REQ-F-003", "untestable:REQ-F-003"]
+    assert list(found) == ["conflicting:REQ-F-002", "conflicting:REQ-F-003", "freeze:v1", "untestable:REQ-F-003"]
     conflicting = found["conflicting:REQ-F-002"]
     assert conflicting["kind"] == "conflicting"
     assert conflicting["question"] == "REQ-F-002 contradicts another requirement. Which document is right?"
@@ -130,11 +130,35 @@ def test_secret_ask_names_document(tmp_path):
         "evidence": {"document": "docs/keys.md", "source": "SRC-keys"},
         "options": [
             {"key": "remove", "label": "Remove it from the document",
-             "then": "delete that paragraph from docs/keys.md (or ask the person to, for PDF or Word), then "
+             "then": "delete that paragraph from `docs/keys.md` (or ask the person to, for PDF or Word), then "
                      "`kb source sync`; tell the person to rotate the key"},
             {"key": "self", "label": "I will handle it", "then": "leave it; kb check keeps reporting it"},
         ],
     }
+
+
+def test_secret_ask_escapes_document_path(tmp_path):
+    document = "docs/k`e`y *x*.md"
+    root = todo_ingested(tmp_path, **{document: "# Keys\n\nThe staging key is AKIAIOSFODNN7EXAMPLE.\n"})
+    item = asks(root)["secret:SRC-k-e-y-x"]
+    assert item["question"] == f"{document} contains a secret (the stored copy is masked). Remove it from the original?"
+    assert item["evidence"] == {"document": document, "source": "SRC-k-e-y-x"}  # JSON keeps raw values
+    assert item["options"][0]["then"].startswith("delete that paragraph from ``docs/k`e`y *x*.md`` (or ask")
+    text = ok(root, "todo").stdout.split("Ask the user:\n", 1)[1]
+    assert text == (
+        "1. ``docs/k`e`y *x*.md`` contains a secret (the stored copy is masked). Remove it from the original?\n"
+        "   evidence: ``docs/k`e`y *x*.md``\n"
+        "   (a) Remove it from the document\n"
+        "   (b) I will handle it\n"
+    )
+
+
+def test_module_title_is_inline_code_in_text(tmp_path):
+    config = TODO_CONFIG + "  - id: MOD-b\n    title: \"Billing `x` **now**\"\n    owner: TODO\n"
+    root = todo_drafted(tmp_path, config)
+    item = asks(root)["owner:modules.MOD-b.owner"]
+    assert item["question"] == "Who owns MOD-b (Billing `x` **now**)? Give a forge handle."
+    assert "1. Who owns MOD-b (``Billing `x` **now**``)? Give a forge handle.\n" in ok(root, "todo").stdout
 
 
 FREEZE_V1 = {
@@ -168,11 +192,58 @@ def test_freeze_offered_only_when_everything_is_clean(tmp_path):
     (root / "docs/b.md").unlink()
 
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001") + "features:\n- FEAT-999\n")  # an error
+    commit(root, "break REQ-F-001")
     t = todo_json(root)
     assert t["state"]["errors"] >= 1 and t["ask"] == []
-    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", flags=("vague",)))  # another ask
-    assert list(asks(root)) == ["vague:REQ-F-001"]
     put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    commit(root, "fix REQ-F-001")
+    assert list(asks(root)) == ["freeze:v1"]
+
+    put(root, "kb.config.yaml", TODO_CONFIG + "  - id: MOD-b\n    owner: TODO\n")  # an owner ask blocks it
+    commit(root, "MOD-b")
+    assert list(asks(root)) == ["owner:modules.MOD-b.owner"]
+
+
+def test_freeze_offered_alongside_flag_asks(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)), ("REQ-F-002", ("untestable",)))
+    assert list(asks(root)) == ["freeze:v1", "untestable:REQ-F-002", "vague:REQ-NF-001"]  # keeping a flag is an answer
+
+    put(root, "docs/keys.md", "# Keys\n\nThe staging key is AKIAIOSFODNN7EXAMPLE.\n")  # a secret ask blocks it
+    ok(root, "ingest")
+    put(root, "kb/sources/SRC-keys/triage.yaml", 'segments:\n  seg-01: "none: not a requirement"\n')
+    commit(root, "keys")
+    t = todo_json(root)
+    assert t["do"] == []
+    assert [a["id"] for a in t["ask"]] == ["secret:SRC-keys", "untestable:REQ-F-002", "vague:REQ-NF-001"]
+
+
+def test_no_freeze_without_requirements(tmp_path):
+    root = todo_ingested(tmp_path)
+    put(root, TODO_TRIAGE, 'segments:\n  seg-01: "none: no requirement here"\n')
+    commit(root, "triage")
+    t = todo_json(root)
+    assert (t["do"], t["ask"], t["state"]["errors"]) == ([], [], 0)
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001") + "status: rejected\n")  # not live
+    commit(root, "rejected")
+    assert todo_json(root)["ask"] == []
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001]\n")
+    commit(root, "live")
+    assert list(asks(root)) == ["freeze:v1"]
+
+
+def test_no_freeze_with_uncommitted_kb_changes(tmp_path):
+    root = todo_drafted(tmp_path)
+    reworded = req_yaml("REQ-F-001").replace("statement: 'A seat costs 5 EUR.'", "statement: 'Seats cost 5 EUR each.'")
+    put(root, "kb/requirements/REQ-F-001.yaml", reworded)
+    t = todo_json(root)
+    assert (t["do"], t["ask"], t["state"]["errors"]) == ([], [], 0)
+    commit(root, "reword")
+    assert list(asks(root)) == ["freeze:v1"]
+
+    put(root, "kb.config.yaml", TODO_CONFIG + "    title: Seats\n")
+    assert todo_json(root)["ask"] == []
+    commit(root, "title")
     assert list(asks(root)) == ["freeze:v1"]
 
 
