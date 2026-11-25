@@ -47,6 +47,22 @@ The generated CI job runs `kb verify --base origin/<target> --comment` on pull r
 project's test dependencies in the workflow before the verify step, keep `fetch-depth: 0` so the merge-base exists, and
 grant `pull-requests: write` for the comment (the template does).
 
+## Approvals
+
+On a pull request, `kb verify` reports `missing_owner_approval` until the right people approve the head commit:
+CODEOWNERS (or, without one, the module owners) for the files changed, `policy.approvers.intent` for changed or stale
+requirements, and `policy.approvers.decisions` for changed decisions and invariants. The approval policy
+(`policy.approvers`, `teams`, `bots`, module owners, `fail_on` and `mode`) and CODEOWNERS are read from the merge-base,
+not from the pull request, so a change cannot loosen the rules it is checked against; the Approvals section of the
+report says where they came from (`Policy from base <sha>.`). A change to `kb.config.yaml` or to a CODEOWNERS file
+(`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) also needs the decision approvers. Without a base
+(`kb verify --all`, or no default branch) the working tree's policy applies; when `kb.config.yaml` is new in the change,
+its own policy applies, with the base's CODEOWNERS.
+
+To bootstrap, name the approvers on the default branch first: commit `policy.approvers.decisions` (and `intent`) there
+before any pull request changes the config. While the default branch names no decision approvers, a pull request that
+changes `kb.config.yaml` or CODEOWNERS cannot pass the approval check.
+
 ## Use (Phase 1)
 
 | Command | What it does |

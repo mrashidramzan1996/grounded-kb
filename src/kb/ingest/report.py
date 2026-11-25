@@ -4,9 +4,7 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from kb.config.load import ConfigError, load_config
+from kb.config.load import config_at, load_config
 from kb.config.schema import KbConfig
 from kb.config.validate import resolve_owner
 from kb.gates.anchors import anchor_gate
@@ -22,13 +20,12 @@ from kb.gates.sources import (
     source_gate,
     stored_ids,
 )
-from kb.gitfiles import GitError, file_at, read_tree_files, require_commit, rev_parse
+from kb.gitfiles import GitError, file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.issues import Issue, new_since
 from kb.records.models import Decision, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.textfmt import inline_code
-from kb.yamlio import YamlError, load_yaml_strict
 
 GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]
 BASE_GATES = [g for g in GATES if g is not source_gate]
@@ -57,13 +54,7 @@ class IngestReport:
 
 
 def base_config(root: Path, ref: str) -> KbConfig | None:
-    data = read_tree_files(root, ref, CONFIG).get(CONFIG)
-    if data is None:
-        return None
-    try:
-        return KbConfig.model_validate(load_yaml_strict(data.decode("utf-8")))
-    except (UnicodeDecodeError, YamlError, ValidationError) as e:
-        raise ConfigError([f"{CONFIG} at {ref}: {e}"]) from e
+    return config_at(root, ref)
 
 
 def _handle(value: str, config: KbConfig) -> bool:

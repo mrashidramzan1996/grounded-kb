@@ -17,10 +17,11 @@ from kb.ports.forge import Forge
 from kb.records.repo import KbRepo
 from kb.testrun import run_tests
 from kb.verify.affected import affected
-from kb.verify.approvals import codeowners_rules, owner_approval, required_owners
+from kb.verify.approvals import owner_approval, required_owners
 from kb.verify.changes import compute_changes
 from kb.verify.engine import EngineInput, Verdict, derive, snapshot, tests_needed
 from kb.verify.index import INDEX_PATH, build_index
+from kb.verify.policy import load_policy
 from kb.verify.report import VerifyReport, blocking_issues
 from kb.verify.stale_context import stale_context
 
@@ -64,6 +65,9 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     root = Path(root)
     config = load_config(root / "kb.config.yaml")
     base_branch, base_ref = _bases(root, base, all_)
+    # Who must approve, what blocks and the mode come from the merge-base (ConfigError/GitError when it cannot be
+    # read), so the change under review cannot loosen them; the working tree's config drives everything else.
+    policy = load_policy(root, base_ref, config)
 
     check = run_check(root, base=base_branch)  # the schema gates, and decision_guard when there is a base
     repo = KbRepo.load(root)
@@ -77,10 +81,9 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
         if base_branch and base_ref and changes is not None else []
     )
     # The project's tests are untrusted code: everything read from the tree or the forge's event is read first
-    # (config, repos, changes and index above; the PR, HEAD, CODEOWNERS and the parsed head files here).
+    # (policy, config, repos, changes and index above; the PR, HEAD and the parsed head files here).
     pr = forge.pull_request() if forge else None
     head = head_commit(root)
-    owners_rules = codeowners_rules(root) if forge and pr else None
     inp = snapshot(EngineInput(root, config, repo, base_repo, changes, index, {}), hit)
     inp = replace(inp, outcomes=run_tests(root, config, tests_needed(inp, hit)))
     verdicts = derive(inp, hit)
@@ -88,8 +91,8 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     issues = check.issues + verdict_issues(verdicts, repo) + stale
     required = None
     if forge and pr:
-        required = required_owners(root, config, repo, base_repo, changes, verdicts, rules=owners_rules)
-        issues += owner_approval(forge, pr, config, required)
+        required = required_owners(root, policy.config, repo, base_repo, changes, verdicts, rules=policy.codeowners)
+        issues += owner_approval(forge, pr, policy.config, required)
 
     issues = sorted(issues, key=lambda i: (*i.sort_key, i.message))
     return VerifyReport(
@@ -97,10 +100,11 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
         head=head,
         verdicts=verdicts,
         issues=issues,
-        blocking=blocking_issues(issues, list(config.policy.fail_on)),
-        mode=config.policy.mode,
+        blocking=blocking_issues(issues, list(policy.config.policy.fail_on)),
+        mode=policy.config.policy.mode,
         scope="all" if all_ or changes is None else "affected",
         pr=pr,
         required=required,
         max_items=config.review.max_items_per_pr,
+        policy_source=policy.source,
     )

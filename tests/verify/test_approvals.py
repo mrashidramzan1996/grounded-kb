@@ -179,3 +179,56 @@ def test_rules_taken_earlier_override_the_working_tree(tmp_path):
     assert req == {"@first": ["changes src/a/x.py"]}
     none = required_owners(tmp_path, cfg(), repo_of({}), None, changes("src/a/x.py"), [], rules=None)
     assert none == {"@alice-owner": ["changes src/a/x.py"]}  # no CODEOWNERS when snapshotted: module owners
+
+
+NO_DECISION_APPROVERS = (
+    "kb.config.yaml changed, but the base branch names no decision approvers; "
+    "set policy.approvers.decisions on the default branch first"
+)
+
+
+def policy_cfg(intent=("@pm",), decisions=("@acme/tech-leads",), **extra):
+    return cfg(policy={"approvers": {"intent": list(intent), "decisions": list(decisions)}}, **extra)
+
+
+def test_config_change_needs_decision_approvers(tmp_path):
+    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes("kb.config.yaml"), [])
+    assert "kb.config.yaml changed" in req["@acme/tech-leads"]
+
+
+def test_codeowners_change_needs_decision_approvers(tmp_path):
+    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes(".github/CODEOWNERS"), [])
+    assert ".github/CODEOWNERS changed" in req["@acme/tech-leads"]
+
+
+def test_moving_codeowners_needs_decision_approval(tmp_path):
+    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes("CODEOWNERS", ".github/CODEOWNERS"), [])
+    assert {"CODEOWNERS changed", ".github/CODEOWNERS changed"} <= set(req["@acme/tech-leads"])
+
+
+def test_config_change_with_no_base_decision_approvers_fails_closed(tmp_path):
+    config = policy_cfg(decisions=["TODO"])
+    req = required_owners(tmp_path, config, repo_of({}), None, changes("kb.config.yaml"), [])
+    assert req == {"(no decision approvers)": ["kb.config.yaml changed"]}
+    # nobody's approval satisfies it, not even a login that looks like the sentinel
+    forge = FakeForge([review("bob"), review("(no decision approvers)")])
+    issues = owner_approval(forge, PR, config, req)
+    assert [(i.code, i.severity, i.message) for i in issues] == [
+        ("missing_owner_approval", "error", NO_DECISION_APPROVERS)
+    ]
+
+
+def test_emptied_intent_in_the_change_still_needs_base_intent_approvers(tmp_path):
+    head = KbRepo.load(Path(__file__).parent.parent / "fixtures" / "kb_valid")
+    path = head.paths["REQ-F-001"]
+    base = repo_of({**head.raw, path: head.raw[path].replace(b"statement:", b"statement: was", 1)})
+    req = required_owners(tmp_path, policy_cfg(intent=["@acme/product"]), head, base, changes(path), [])
+    assert "requirement REQ-F-001 changed" in req["@acme/product"]
+
+
+def test_module_added_in_the_change_owns_nothing_yet(tmp_path):
+    head_config = policy_cfg(modules=[{"id": "MOD-x", "paths": ["src/**"], "owner": "@attacker"}])
+    assert head_config.modules[0].owner == "@attacker"  # what the change would add; the policy is the base's
+    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes("src/a.py"), [])
+    assert "@attacker" not in req
+    assert req == {}

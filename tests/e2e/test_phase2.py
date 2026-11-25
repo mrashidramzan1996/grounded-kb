@@ -229,3 +229,42 @@ def test_invariant_failing_test_fails_pr(repo, tmp_path):
     assert inv["status"] == "broken"
     assert inv["reasons"] == ["tests/test_sessions.py::test_session_expires_after_30_minutes failed"]
     assert blocking_codes(data) == {"invariant.broken"}
+
+
+def test_pr_cannot_loosen_its_own_policy(repo, tmp_path):
+    """The approvers, CODEOWNERS and mode are the merge-base's: a PR that empties `intent`, drops the CODEOWNERS lines
+    and turns enforcement off still needs the intent approvers for its requirement change, and the decision approvers
+    for the policy change itself."""
+    write(repo, ".github/CODEOWNERS", "/kb/requirements/ @acme/product\n/kb.config.yaml @acme/tech-leads\n")
+    set_mode(repo, "enforce")
+    commit(repo, "CODEOWNERS block, enforce")
+    base = head(repo)
+    branch(repo)
+    cfg = repo / "kb.config.yaml"
+    text = cfg.read_text()
+    loosened = text.replace("    intent:\n    - product-owners\n", "    intent: []\n").replace(
+        "  mode: enforce\n", "  mode: warn-only\n  fail_on: []\n"
+    )
+    assert loosened.count("intent: []") == 1 and "mode: warn-only" in loosened
+    cfg.write_text(loosened)
+    write(repo, ".github/CODEOWNERS", "")
+    req = repo / "kb/requirements/REQ-F-001.yaml"
+    req.write_text(req.read_text().replace("statement: A removed seat", "statement: A deleted seat", 1))
+    commit(repo, "loosen the policy and change a requirement")
+
+    unapproved = f"local:{forge_file(tmp_path, repo, teams=TEAMS)}"
+    r = invoke(repo, "verify", "--base", "main", "--forge", unapproved, "--format", "markdown")
+    assert r.exit_code == 1, r.output
+    approvals = r.stdout.split("### Approvals\n", 1)[1].split("### Other issues", 1)[0]
+    assert f"Policy from base {base[:7]}." in approvals
+    product = next(ln for ln in approvals.splitlines() if ln.startswith("- `@acme/product`"))
+    assert "requirement REQ-F-001 changed" in product
+    leads = next(ln for ln in approvals.splitlines() if ln.startswith("- `@acme/tech-leads`"))
+    assert "kb.config.yaml changed" in leads and ".github/CODEOWNERS changed" in leads
+    assert "missing_owner_approval" in approvals
+    assert "blocking (mode: enforce)" in r.stderr
+
+    both = approving_forge(tmp_path, repo, approvers=("@acme/product", "@acme/tech-leads"))
+    r = invoke(repo, "verify", "--base", "main", "--forge", both, "--format", "markdown")
+    assert r.exit_code == 0, r.output
+    assert "All required owners approved." in r.stdout

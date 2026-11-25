@@ -3,7 +3,10 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from kb.config.schema import KbConfig
+from kb.gitfiles import file_at
 from kb.yamlio import YamlError, load_yaml_strict
+
+CONFIG = "kb.config.yaml"
 
 
 class ConfigError(Exception):
@@ -27,3 +30,15 @@ def load_config(path: Path) -> KbConfig:
             [f"{path}: {'.'.join(str(p) for p in err['loc'])}: {err['msg']} (got {err['input']!r})"
              for err in e.errors()]
         ) from e
+
+
+def config_at(root: Path, ref: str) -> KbConfig | None:
+    """kb.config.yaml as committed at `ref`; None when it is not in that tree. A file that does not parse or validate
+    is a ConfigError naming the ref (never a fallback to the working tree); a git failure is a GitError."""
+    data = file_at(root, ref, CONFIG)
+    if data is None:
+        return None
+    try:
+        return KbConfig.model_validate(load_yaml_strict(data.decode("utf-8")))
+    except (UnicodeDecodeError, YamlError, ValidationError) as e:
+        raise ConfigError([f"{CONFIG} at {ref}: {e}"]) from e

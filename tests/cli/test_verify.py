@@ -30,7 +30,13 @@ def test_broken_claim_exit_1_in_enforce_0_in_warn_only(verify_repo):
     assert "error claim.broken" not in r.stdout  # the verdict line already says it
     assert "2 broken, 0 stale, 0 unverified, 0 verified, 0 built, 0 not_built; 2 blocking (mode: warn-only)" in r.stderr
     assert invoke(verify_repo, "verify", "--strict").exit_code == 1
-    set_mode(verify_repo, "enforce")
+    set_mode(verify_repo, "enforce")  # the mode is the merge-base's: turning it on in the change does not count...
+    r = invoke(verify_repo, "verify")
+    assert r.exit_code == 0, r.output
+    assert "blocking (mode: warn-only)" in r.stderr
+    git(verify_repo, "checkout", "-q", "main")  # ...committed on the base, it does
+    git(verify_repo, "commit", "-q", "-m", "enforce", "kb.config.yaml")
+    git(verify_repo, "checkout", "-q", "-B", "feature", "main")
     r = invoke(verify_repo, "verify")
     assert r.exit_code == 1, r.output
     assert "blocking (mode: enforce)" in r.stderr

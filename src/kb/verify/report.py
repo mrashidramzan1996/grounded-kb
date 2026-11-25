@@ -42,6 +42,7 @@ class VerifyReport:
     pr: PullRequest | None = None  # the forge's pull request, when there is one
     required: dict[str, list[str]] | None = None  # owners who must approve; None when not checked (no PR)
     max_items: int = 40  # config.review.max_items_per_pr: rows in each of the comment's lists
+    policy_source: str | None = None  # kb.verify.policy.Policy.source: where approvers, fail_on and mode came from
 
 
 def category(issue: Issue) -> str | None:
@@ -96,6 +97,8 @@ def render_text(r: VerifyReport) -> str:
     for i in r.issues:
         if not _is_verdict_issue(r, i):
             lines.append(f"{i.severity} {i.code} {i.path or '-'} {i.record or '-'}: {' '.join(i.message.split())}")
+    if r.required is not None and r.policy_source:
+        lines.append(f"approvals: policy from {' '.join(r.policy_source.split())}")
     return "".join(f"{ln}\n" for ln in lines)
 
 
@@ -182,6 +185,8 @@ def render_markdown(r: VerifyReport) -> str:
         out.append("No affected claims.")
 
     out += ["", "### Approvals", ""]
+    if r.required is not None and r.policy_source:
+        out += [f"Policy from {_md(r.policy_source)}.", ""]
     approval_issues = [i for i in r.issues if i.code in APPROVAL_CODES]
     if r.required is None:
         out.append("Not checked: no pull request.")

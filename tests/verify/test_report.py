@@ -8,6 +8,7 @@ from kb.verify.report import (
     VerifyReport,
     render_json,
     render_markdown,
+    render_text,
     summary_line,
 )
 
@@ -67,3 +68,14 @@ def test_cell_text_cannot_inject_links_or_images():
     md = render_markdown(report([verdict("REQ-F-001", "broken", reasons=[evil])], issues=[issue], blocking=[issue]))
     assert "](" not in md.replace("\\](", "") and "![" not in md and "[click]" not in md
     assert "\\!\\[x\\](https://evil.example/p.png)" in md
+
+
+def test_approvals_name_the_policy_source():
+    from dataclasses import replace
+
+    checked = replace(report(), required={"@pm": ["requirement REQ-1 changed"]}, policy_source="base abcdef1")
+    assert section(render_markdown(checked), "Approvals").startswith("\nPolicy from base abcdef1.\n\n- `@pm`:")
+    assert render_text(checked).splitlines()[-1] == "approvals: policy from base abcdef1"
+    no_pr = replace(checked, required=None)  # no pull request: approvals were not checked, so no policy line
+    assert "Policy from" not in render_markdown(no_pr)
+    assert "approvals:" not in render_text(no_pr)

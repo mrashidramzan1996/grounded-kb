@@ -5,8 +5,10 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 from kb.config.codeowners import owners_for, parse_codeowners
+from kb.config.load import CONFIG
 from kb.config.schema import KbConfig
 from kb.config.validate import modules_for, resolve_owner
+from kb.gitfiles import file_at, tree_symlinks
 from kb.init.scaffold import CODEOWNERS_LOCATIONS
 from kb.issues import Issue
 from kb.ports.forge import Forge, PullRequest, Review
@@ -20,6 +22,8 @@ _CODEOWNERS = tuple(p for p in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOW
 _SHOWN_PATHS = 3
 CodeownersRules = list[tuple[str, list[str]]]
 _READ_NOW = object()  # required_owners default: read CODEOWNERS from the working tree when called
+# required_owners' handle when the policy names no decision approvers: no login matches it, so it fails closed
+NO_DECISION_APPROVERS = "(no decision approvers)"
 
 
 def codeowners_rules(root: Path) -> CodeownersRules | None:
@@ -30,6 +34,18 @@ def codeowners_rules(root: Path) -> CodeownersRules | None:
             data = read_regular(root, rel)
         except UnsafePath:
             continue
+        if data is not None:
+            return parse_codeowners(data.decode("utf-8", errors="replace"))
+    return None
+
+
+def codeowners_rules_at(root: Path, ref: str) -> CodeownersRules | None:
+    """codeowners_rules as committed at `ref`: the first CODEOWNERS in GitHub's lookup order, skipping symlink
+    entries; None when there is none."""
+    for rel in _CODEOWNERS:
+        if rel in tree_symlinks(root, ref, rel):
+            continue
+        data = file_at(root, ref, rel)
         if data is not None:
             return parse_codeowners(data.decode("utf-8", errors="replace"))
     return None
@@ -72,9 +88,11 @@ def required_owners(
     *,
     rules: "CodeownersRules | None | object" = _READ_NOW,
 ) -> dict[str, list[str]]:
-    """{owner handle: reasons}. `changes` None (no base): no changed files; records count as changed against
-    `base_repo` (every record when that is None too). `rules`: codeowners_rules(root) taken earlier (None: no
-    CODEOWNERS, module owners apply); left out, CODEOWNERS is read now."""
+    """{owner handle: reasons}. `config` is the approval policy's config (kb.verify.policy: the merge-base's), so its
+    approvers, teams and modules decide, not the change's. `changes` None (no base): no changed files; records count
+    as changed against `base_repo` (every record when that is None too). `rules`: the policy's CODEOWNERS rules taken
+    earlier (None: no CODEOWNERS, module owners apply); left out, CODEOWNERS is read now. A change to kb.config.yaml
+    or a CODEOWNERS file needs the decision approvers; with none named, NO_DECISION_APPROVERS, which never approves."""
     reasons: dict[str, set[str]] = {}
 
     def need(handle: str, reason: str) -> None:
@@ -94,6 +112,10 @@ def required_owners(
 
     intent = _handles(config.policy.approvers.intent, config)
     decisions = _handles(config.policy.approvers.decisions, config)
+    policy_files = (CONFIG, *CODEOWNERS_LOCATIONS)
+    for path in sorted(p for p in (changes.files if changes else ()) if p in policy_files):
+        for h in decisions or [NO_DECISION_APPROVERS]:
+            need(h, f"{path} changed")
     for rid, path in _changed_records(repo, base_repo).items():
         if path.startswith("kb/requirements/"):
             for h in intent:
@@ -146,6 +168,10 @@ def owner_approval(forge: Forge, pr: PullRequest, config: KbConfig, required: di
     issues: list[Issue] = []
     unreadable: list[str] = []
     for handle in sorted(required):
+        if handle == NO_DECISION_APPROVERS:  # no approval can satisfy it
+            issues.append(Issue("missing_owner_approval", f"{', '.join(required[handle])}, but the base branch names "
+                                "no decision approvers; set policy.approvers.decisions on the default branch first"))
+            continue
         if "/" in handle:
             members = forge.team_members(handle)
             if members is None:
