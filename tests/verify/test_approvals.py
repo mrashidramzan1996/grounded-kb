@@ -293,3 +293,10 @@ def test_defer_keeps_the_old_behaviour():
     assert issues[0].message == (
         "cannot read team membership for @acme/product; relying on branch protection's required code-owner review"
     )
+
+
+def test_empty_members_list_still_fails_closed():
+    c = _team_cfg(members=[])
+    issues = owner_approval(FakeForge([review("erin")]), PR, c, {"@acme/product": ["x"]})
+    assert [(i.code, i.severity) for i in issues] == [("missing_owner_approval", "error")]
+    assert "cannot read the members of @acme/product" in issues[0].message

@@ -89,6 +89,7 @@ def _render_config(modules: list[dict[str, str]], has_docs: bool) -> str:
         "version: 1",
         "",
         "# Short team names -> forge handles. None generated: use the forge handle (@org/team) directly below.",
+        "# A team can list `members: [login, ...]` (logins, no @); kb uses them when the forge cannot read the team.",
         "teams: {}",
         "",
         "policy:",
