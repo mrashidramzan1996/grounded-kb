@@ -80,8 +80,6 @@ def test_max_items_per_pr_must_be_positive(tmp_path, n):
 
 
 def test_team_members_are_logins_without_at():
-    import pytest
-
     from kb.config.schema import Team
 
     assert Team(git_team="@a/b", members=["x"]).members == ["x"]
