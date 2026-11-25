@@ -116,7 +116,8 @@ def test_owner_todo_asks_per_location(tmp_path):
         where = key.removeprefix("owner:")
         assert (item["kind"], item["evidence"]) == ("owner", {})
         assert item["options"] == [
-            {"key": "handle", "label": "Give a handle", "then": f"write it into kb.config.yaml at {where}"},
+            {"key": "handle", "label": "Give a handle", "then": f"write it into kb.config.yaml at {where}, then commit "
+             "kb.config.yaml on its own before running `kb redraft` (a redraft rejects config changes)"},
         ]
     assert not any(d["id"].startswith("fix:config.owner_todo") for d in todo_json(root)["do"])
 

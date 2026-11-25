@@ -249,7 +249,9 @@ def _owner_asks(issues: list[Issue], config: KbConfig) -> list[AskItem]:
             where = i.message.removesuffix(_OWNER_TODO_SUFFIX)
             question = _question(_APPROVER_QUESTIONS.get(where, "Who should be the owner at {where}? Give a forge handle."),
                                  where=where)
-        handle = Option("handle", "Give a handle", f"write it into kb.config.yaml at {where}")
+        # a redraft brief rejects any config change (ingest.config_changed): the answer is committed first
+        handle = Option("handle", "Give a handle", f"write it into kb.config.yaml at {where}, then commit "
+                        "kb.config.yaml on its own before running `kb redraft` (a redraft rejects config changes)")
         out[f"owner:{where}"] = AskItem(f"owner:{where}", "owner", question[0], {}, (handle,), question[1])
     return list(out.values())
 

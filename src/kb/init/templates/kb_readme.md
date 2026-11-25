@@ -10,6 +10,10 @@ Commit document edits together with `kb source sync`, before running `kb ingest`
 - `kb ingest` prepares a drafting brief; drafted records are reviewed in a pull request.
 - `kb check` runs every gate; `kb context` and `kb trace` read the KB.
 
+## Agent-driven mode
+
+You can leave all of this to your coding agent: tell it, for example, "Set up the knowledge base from the documents in docs/." The playbook in `AGENTS.md` has it run `kb todo`, do every `do` item itself, and ask you every `ask` item (approvers, module owners, a target for a vague line, a secret in a document, freezing the baseline) in one message. It records each new fact you give with `kb clarify`, which appends it to `docs/clarifications.md` as a source the records can quote. kb never answers a question for you, and approval is still a merged pull request.
+
 ## When a document changes
 
 1. Edit the document, then run `kb source sync`. It names the records that cite changed text and the new or changed segments that have no records yet.

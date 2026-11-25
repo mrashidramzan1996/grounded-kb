@@ -74,7 +74,7 @@ def test_readme_covers_install_every_command_and_posix():
     assert "uv tool install" in readme and "POSIX" in readme
     for cmd in ("kb init", "kb source add", "kb source sync", "kb ingest", "kb ingest --report", "kb module add",
                 "kb module paths", "kb check", "kb context", "kb trace", "kb status", "kb baseline freeze",
-                "kb agents install", "kb hook"):
+                "kb agents install", "kb hook", "kb todo", "kb clarify"):
         assert f"`{cmd}" in readme, cmd
     # kb redraft takes --base with --changed (a committed sync) and with --report
     assert "`kb redraft [IDs] [--flagged] [--changed [--base REF]] [--new]`" in readme
