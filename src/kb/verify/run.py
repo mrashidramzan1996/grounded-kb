@@ -7,13 +7,14 @@ from kb.cache import write_cache
 from kb.check import run_check
 from kb.config.load import load_config
 from kb.gitfiles import (
+    GitError,
     find_default_branch,
     head_commit,
     merge_base,
     rev_parse,
 )
 from kb.issues import Issue
-from kb.ports.forge import Forge
+from kb.ports.forge import Forge, PullRequest
 from kb.records.repo import KbRepo
 from kb.testrun import run_tests
 from kb.verify.affected import affected
@@ -41,6 +42,24 @@ def _bases(root: Path, base: str | None, all_: bool) -> tuple[str | None, str | 
     return None, None
 
 
+def _policy_branch(root: Path, base_branch: str | None, pr: PullRequest | None) -> str | None:
+    """The branch whose tip holds the approval policy: the base branch; with none (--all, or no default branch) and a
+    pull request, the branch it targets (as the forge names it, else the default branch). None: no PR and no base,
+    the working tree's policy. A PR whose target cannot be found is a GitError, never the working tree's policy."""
+    if base_branch is not None or pr is None:
+        return base_branch
+    if pr.base is not None:
+        for name in (pr.base, f"origin/{pr.base}"):
+            if not pr.base.startswith("-") and rev_parse(root, name) is not None:
+                return name
+        raise GitError(f"cannot find the pull request's base branch {pr.base!r} to read the approval policy; fetch it")
+    branch = find_default_branch(root)
+    if branch is None:
+        raise GitError("a pull request is checked but there is no base branch to read the approval policy from; "
+                       "fetch the default branch or pass --base")
+    return branch
+
+
 def verdict_issues(verdicts: list[Verdict], repo: KbRepo) -> list[Issue]:
     """broken: an error; stale and unverified: warnings. The path is the record's file (a claim's feature)."""
     feature_of = {c.id: f.id for f, c in repo.claims()}
@@ -65,9 +84,11 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
     root = Path(root)
     config = load_config(root / "kb.config.yaml")
     base_branch, base_ref = _bases(root, base, all_)
-    # Who must approve, what blocks and the mode come from the merge-base (ConfigError/GitError when it cannot be
-    # read), so the change under review cannot loosen them; the working tree's config drives everything else.
-    policy = load_policy(root, base_ref, config)
+    pr = forge.pull_request() if forge else None
+    # Who must approve, what blocks and the mode come from the target branch's tip (ConfigError/GitError when it
+    # cannot be read), so the change under review cannot loosen them, not even by branching from an old commit; the
+    # working tree's config drives everything else. The merge-base stays the base of the diff.
+    policy = load_policy(root, _policy_branch(root, base_branch, pr), config)
 
     check = run_check(root, base=base_branch)  # the schema gates, and decision_guard when there is a base
     repo = KbRepo.load(root)
@@ -81,8 +102,7 @@ def run_verify(root: Path, *, base: str | None, all_: bool, forge: Forge | None)
         if base_branch and base_ref and changes is not None else []
     )
     # The project's tests are untrusted code: everything read from the tree or the forge's event is read first
-    # (policy, config, repos, changes and index above; the PR, HEAD and the parsed head files here).
-    pr = forge.pull_request() if forge else None
+    # (the PR, policy, config, repos, changes and index above; HEAD and the parsed head files here).
     head = head_commit(root)
     inp = snapshot(EngineInput(root, config, repo, base_repo, changes, index, {}), hit)
     inp = replace(inp, outcomes=run_tests(root, config, tests_needed(inp, hit)))

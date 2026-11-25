@@ -88,7 +88,7 @@ def required_owners(
     *,
     rules: "CodeownersRules | None | object" = _READ_NOW,
 ) -> dict[str, list[str]]:
-    """{owner handle: reasons}. `config` is the approval policy's config (kb.verify.policy: the merge-base's), so its
+    """{owner handle: reasons}. `config` is the approval policy's config (kb.verify.policy: the target branch tip's), so its
     approvers, teams and modules decide, not the change's. `changes` None (no base): no changed files; records count
     as changed against `base_repo` (every record when that is None too). `rules`: the policy's CODEOWNERS rules taken
     earlier (None: no CODEOWNERS, module owners apply); left out, CODEOWNERS is read now. A change to kb.config.yaml
@@ -169,7 +169,7 @@ def owner_approval(forge: Forge, pr: PullRequest, config: KbConfig, required: di
     unreadable: list[str] = []
     for handle in sorted(required):
         if handle == NO_DECISION_APPROVERS:  # no approval can satisfy it
-            issues.append(Issue("missing_owner_approval", f"{', '.join(required[handle])}, but the base branch names "
+            issues.append(Issue("missing_owner_approval", f"{', '.join(required[handle])}, but the approval policy names "
                                 "no decision approvers; set policy.approvers.decisions on the default branch first"))
             continue
         if "/" in handle:

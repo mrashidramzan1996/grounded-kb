@@ -266,3 +266,16 @@ def test_codeowners_snapshot_taken_before_tests(verify_repo):
     missing = [i["message"] for i in json.loads(r.stdout)["issues"] if i["code"] == "missing_owner_approval"]
     assert missing and all(m.startswith("@acme/billing has not approved") for m in missing)
     assert "@mallory" not in r.stdout and "@acme/platform" not in r.stdout
+
+
+def test_unreadable_base_policy_exits_2(tmp_path):
+    from helpers import make_git_repo
+
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": "version: [\n"})
+    tip = head(root)
+    git(root, "checkout", "-q", "-b", "feature")
+    (root / "kb.config.yaml").write_text("version: 1\n")
+    commit(root, "a config that parses")
+    r = invoke(root, "verify", "--base", "main", "--forge", "none")
+    assert r.exit_code == 2, r.output
+    assert f"kb.config.yaml at {tip}" in r.output

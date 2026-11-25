@@ -123,9 +123,12 @@ class GithubForge:
             return None
         try:
             pr = event["pull_request"]
-            return PullRequest(int(pr["number"]), str(pr["head"]["sha"]), str(pr["user"]["login"]))
+            number, head_sha, author = int(pr["number"]), str(pr["head"]["sha"]), str(pr["user"]["login"])
         except (KeyError, TypeError, ValueError):
             raise ForgeError("the event's pull_request lacks number, head.sha or user.login") from None
+        base = pr.get("base")
+        ref = base.get("ref") if isinstance(base, dict) else None
+        return PullRequest(number, head_sha, author, ref if isinstance(ref, str) and ref else None)
 
     def reviews(self, pr: PullRequest) -> list[Review]:
         url = f"{_api_base()}/repos/{_env('GITHUB_REPOSITORY')}/pulls/{pr.number}/reviews?per_page=100"

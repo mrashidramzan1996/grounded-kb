@@ -182,7 +182,7 @@ def test_rules_taken_earlier_override_the_working_tree(tmp_path):
 
 
 NO_DECISION_APPROVERS = (
-    "kb.config.yaml changed, but the base branch names no decision approvers; "
+    "kb.config.yaml changed, but the approval policy names no decision approvers; "
     "set policy.approvers.decisions on the default branch first"
 )
 
@@ -227,8 +227,24 @@ def test_emptied_intent_in_the_change_still_needs_base_intent_approvers(tmp_path
 
 
 def test_module_added_in_the_change_owns_nothing_yet(tmp_path):
-    head_config = policy_cfg(modules=[{"id": "MOD-x", "paths": ["src/**"], "owner": "@attacker"}])
-    assert head_config.modules[0].owner == "@attacker"  # what the change would add; the policy is the base's
-    req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes("src/a.py"), [])
-    assert "@attacker" not in req
-    assert req == {}
+    """No CODEOWNERS, so module owners route changed files: the base's modules, not one the change adds."""
+    import json
+
+    from helpers import commit, git, make_git_repo
+
+    from kb.forge.local import LocalForge
+    from kb.verify.run import run_verify
+
+    config = "version: 1\npolicy:\n  approvers:\n    intent: ['@pm']\n    decisions: ['@arch']\n"
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": config})
+    git(root, "checkout", "-q", "-b", "feature")
+    (root / "kb.config.yaml").write_text(config + "modules:\n- id: MOD-x\n  paths: ['src/**']\n  owner: '@attacker'\n")
+    (root / "src").mkdir()
+    (root / "src/a.py").write_text("x = 1\n")
+    commit(root, "a module of my own")
+    forge_path = tmp_path / "forge.json"
+    head_sha = git(root, "rev-parse", "HEAD").strip()
+    forge_path.write_text(json.dumps({"pr": {"number": 7, "head_sha": head_sha, "author": "mallory"}, "reviews": []}))
+    report = run_verify(root, base="main", all_=False, forge=LocalForge(forge_path))
+    assert report.required is not None and "@attacker" not in report.required
+    assert report.required == {"@arch": ["kb.config.yaml changed"]}

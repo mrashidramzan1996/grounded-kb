@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from kb.config.load import config_at, load_config
+from kb.config.load import CONFIG, config_at, load_config
 from kb.config.schema import KbConfig
 from kb.config.validate import resolve_owner
 from kb.gates.anchors import anchor_gate
@@ -29,7 +29,6 @@ from kb.textfmt import inline_code
 
 GATES = [id_gate, decision_guard, quote_gate, anchor_gate, source_gate]
 BASE_GATES = [g for g in GATES if g is not source_gate]
-CONFIG = "kb.config.yaml"
 ORIGINAL_CHANGED = (
     "the source document changed in the same change as the drafts; commit document updates separately, before kb ingest"
 )

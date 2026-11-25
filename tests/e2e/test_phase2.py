@@ -256,7 +256,7 @@ def test_pr_cannot_loosen_its_own_policy(repo, tmp_path):
     r = invoke(repo, "verify", "--base", "main", "--forge", unapproved, "--format", "markdown")
     assert r.exit_code == 1, r.output
     approvals = r.stdout.split("### Approvals\n", 1)[1].split("### Other issues", 1)[0]
-    assert f"Policy from base {base[:7]}." in approvals
+    assert f"Policy from base main at {base[:7]}." in approvals
     product = next(ln for ln in approvals.splitlines() if ln.startswith("- `@acme/product`"))
     assert "requirement REQ-F-001 changed" in product
     leads = next(ln for ln in approvals.splitlines() if ln.startswith("- `@acme/tech-leads`"))

@@ -29,6 +29,14 @@ def test_local_forge_reads_pr_reviews_teams(tmp_path):
     assert forge.team_members("@org/missing") is None
 
 
+def test_local_forge_pr_base_is_optional(tmp_path):
+    path = write(tmp_path, {"pr": {"number": 7, "head_sha": "a" * 40, "author": "alice", "base": "release"}})
+    assert LocalForge(path).pull_request() == PullRequest(7, "a" * 40, "alice", "release")
+    path = write(tmp_path, {"pr": {"number": 7, "head_sha": "a" * 40, "author": "alice", "base": ["x"]}})
+    with pytest.raises(ForgeError, match="base"):
+        LocalForge(path).pull_request()
+
+
 def test_local_forge_null_pr(tmp_path):
     assert LocalForge(write(tmp_path, {"pr": None})).pull_request() is None
 

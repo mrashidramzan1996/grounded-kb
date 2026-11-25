@@ -9,6 +9,7 @@ class PullRequest:
     number: int
     head_sha: str
     author: str
+    base: str | None = None  # the branch the PR targets, when the forge says; its tip holds the approval policy
 
 
 @dataclass(frozen=True)

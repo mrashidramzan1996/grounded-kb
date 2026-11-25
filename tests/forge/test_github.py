@@ -210,7 +210,7 @@ def test_pull_request_review_event_payload(env, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     forge = forge_from_option("auto", tmp_path)
     assert forge is not None and forge.name == "github"
-    assert forge.pull_request() == PR
+    assert forge.pull_request() == PullRequest(5, "b" * 40, "alice", "main")  # base.ref: the target branch
 
 
 def test_pull_request_is_read_once(env, tmp_path):
