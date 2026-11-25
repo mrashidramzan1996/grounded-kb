@@ -235,3 +235,52 @@ def test_base_snapshot_leaves_no_worktree_behind(valid_git_repo):
     (valid_git_repo / "services/billing/refunds.py").write_text("# r[impl REQ-F-999]\n")
     run_hook(valid_git_repo, "pre-commit", "generic", "")
     assert git(valid_git_repo, "worktree", "list").count("\n") == 1
+
+
+# --- agent-driven mode: the to-do summary at session start ---------------------------------------
+
+SUMMARY = "## kb to-do\n{n} things to do, {m} questions for the user. Run `kb todo` and follow the playbook in AGENTS.md.\n"
+
+
+def test_session_start_prepends_todo_summary(acme_repo, fixtures):
+    from kb.todo import build_todo
+
+    todo = build_todo(acme_repo)
+    assert todo.do  # the documents are not ingested yet
+    out, code = run_hook(acme_repo, "session-start", "claude-code", payload(fixtures, "claude_code/session_start"))
+    assert code == 0 and out.startswith(SUMMARY.format(n=len(todo.do), m=len(todo.ask)))
+    assert "# KB rules\n" in out
+
+
+def test_session_start_has_no_summary_when_there_is_nothing_to_do(valid_git_repo, monkeypatch):
+    import kb.hooks
+    from kb.todo import Todo
+
+    monkeypatch.setattr(kb.hooks, "build_todo", lambda root: Todo((), (), {}))
+    out, code = run_hook(valid_git_repo, "session-start", "claude-code", "")
+    assert code == 0 and "## kb to-do" not in out and "# KB rules\n" in out
+
+
+def test_session_start_survives_todo_error(valid_git_repo, monkeypatch, capsys):
+    import kb.hooks
+
+    def broken(root):
+        raise RuntimeError("todo exploded")
+
+    monkeypatch.setattr(kb.hooks, "build_todo", broken)
+    out, code = run_hook(valid_git_repo, "session-start", "claude-code", "")
+    assert code == 0 and "## kb to-do" not in out and "# KB rules\n" in out
+    assert "todo exploded" not in capsys.readouterr().err
+
+
+def test_session_start_summary_follows_the_load_warning(valid_git_repo, monkeypatch):
+    import kb.hooks
+    from kb.todo import DoItem, Todo
+
+    (valid_git_repo / "kb/requirements/REQ-F-001.yaml").write_text("id: [unclosed\n")
+    item = DoItem("fix:x", "x", "fix it", None, None, None)
+    monkeypatch.setattr(kb.hooks, "build_todo", lambda root: Todo((item,), (), {}))
+    out, _ = run_hook(valid_git_repo, "session-start", "codex", "")
+    lines = out.splitlines()
+    assert lines[0].startswith("⚠ 1 KB files failed to load") and lines[1] == "## kb to-do"
+    assert lines[2].startswith("1 things to do, 0 questions for the user.")

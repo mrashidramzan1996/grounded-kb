@@ -12,6 +12,7 @@ from kb.gitfiles import resolve_base
 from kb.issues import Issue, new_since
 from kb.ports.agents import EventKind, HookResult
 from kb.records.repo import KbRepo
+from kb.todo import build_todo
 
 EVENTS: dict[str, EventKind] = {"session-start": "session_start", "stop": "stop", "pre-commit": "pre_commit"}
 OWNER_TODO, SECRET = "config.owner_todo", "source.secret_in_original"
@@ -25,8 +26,23 @@ def _payload(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _todo_summary(root: Path) -> str:
+    """A short note on the open kb work (`kb todo`), or "" when there is none. Never raises: the brief must always
+    print."""
+    try:
+        todo = build_todo(root)
+    except Exception:
+        return ""
+    if not (todo.do or todo.ask):
+        return ""
+    return (
+        f"## kb to-do\n{len(todo.do)} things to do, {len(todo.ask)} questions for the user. "
+        "Run `kb todo` and follow the playbook in AGENTS.md.\n"
+    )
+
+
 def _brief(root: Path) -> str:
-    out = session_brief(root)
+    out = _todo_summary(root) + session_brief(root)
     failed = len(KbRepo.load(root).errors)
     if failed:
         out = f"⚠ {failed} KB files failed to load; run `kb check`\n" + out

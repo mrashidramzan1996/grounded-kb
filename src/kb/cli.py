@@ -630,7 +630,7 @@ def agents_install(
     ctx: typer.Context,
     names: Annotated[list[str], typer.Argument(help=f"One or more of: {', '.join(agent_names())}.")],
 ) -> None:
-    """Install the session-start and stop hooks (claude-code, codex) or a git pre-commit hook (generic)."""
+    """Install the session-start and stop hooks (claude-code, codex; claude-code also gets the kb skill) or a git pre-commit hook (generic)."""
     try:
         integrations = [get_agent(n) for n in names]
     except KeyError as e:

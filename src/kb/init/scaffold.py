@@ -13,7 +13,7 @@ from typing import Literal
 from kb.config.codeowners import parse_codeowners
 from kb.gitfiles import GitError, default_branch
 from kb.issues import Issue
-from kb.rules import AGENT_RULES
+from kb.rules import render
 from kb.safewrite import check_target, read_text, write_atomic
 from kb.textblocks import upsert_block
 
@@ -181,7 +181,7 @@ def init_repo(
 
     files: dict[str, str] = {"kb.config.yaml": _render_config(modules, has_docs)}
     for rel, name, content, style in [
-        ("AGENTS.md", "kb", _template("agents_block.md").replace("{{rules}}", "\n".join(AGENT_RULES)), "html"),
+        ("AGENTS.md", "kb", render(_template("agents_block.md")), "html"),
         ("CLAUDE.md", "kb", "@AGENTS.md", "html"),
         (codeowners_rel, "kb", _codeowners_block(), "hash"),
         (".gitignore", "kb", ".kb/", "hash"),  # A-11: caches and the drafting brief are never committed

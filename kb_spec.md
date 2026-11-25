@@ -115,6 +115,13 @@ These come out of three independent reviews of the implementation plan: simplici
   - **IDs are kept.** A redrafted requirement keeps its ID and is edited in place. A record whose text is gone gets `status: rejected`; it is never deleted or renamed.
   - **`vague` clears only with a measurable quote.** The flag may be removed only when a quote of the record states a measurable target (it contains a number). Removing any other flag is flagged for the reviewer.
   - **ADRs and INVs change only by superseding** (§2.4). A new record with `supersedes: <old ID>` takes the next free ID; the accepted one stays byte-identical.
+- **A-18 · Agent-driven mode** (§2.2, §6, §8, §16).
+  - **The user talks to their coding agent.** They do not run kb commands themselves. `kb init` puts a playbook in the kb block of `AGENTS.md`, and `kb agents install claude-code` also writes it as the `kb` skill (`.claude/skills/kb/SKILL.md`). The session-start hook says when there is kb work (`## kb to-do`).
+  - **`kb todo` separates agent work from human decisions.** `do` items are for the agent, most with the command to run. `ask` items are for the person; each carries its evidence and lettered options, and each option says what the agent does next. `--format json` is deterministic and its ids are stable.
+  - **`kb clarify` turns an answer into a quotable source.** It appends the person's answer to `docs/clarifications.md` and stores it as a source, so a redrafted requirement can quote it. Its trust is whatever `config.sources` gives that path.
+  - **Agents never answer `ask` items, invent targets or approve.** They ask the person, record only what the person said, and follow the chosen option. Approval is still a merged PR (A-2).
+  - **After the baseline, changes go through a PR.** Before it, the agent works on the current branch. After it, it works on a branch, opens a PR and never merges it.
+  - **New documents are detected.** A readable file under `config.sources` that was never ingested gives the warning `source.not_ingested`, and `kb todo` turns it into an `ingest:<path>` item.
 
 ## 1. Problem and goal
 
