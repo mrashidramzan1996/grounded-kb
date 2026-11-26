@@ -261,3 +261,23 @@ def test_entity_added_needs_a_quote_naming_it(tmp_path):
     assert r.exit_code == 2 and "quote" in r.output, r.output
     put(root, "kb/glossary/TERM-seat.yaml", term.format("Each account buys seats for its users."))
     assert decide(root, seat, "--as", "added", "--record", "TERM-seat", "--by", "@pm").exit_code == 0
+
+
+def test_kept_entry_suppresses_nothing_but_its_flag_ask(tmp_path):
+    root, findings = evaluated(tmp_path)
+    put(root, "kb/requirements/REQ-F-001.yaml", req("REQ-F-001", INVOICES) + "flags: [vague]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "req")
+    before = decided_keys(root)
+    r = invoke(root, "flag", "keep", "REQ-F-001", "--flag", "vague", "--by", "@alice")
+    assert r.exit_code == 0, r.output
+    entries = read_decisions(root)
+    assert [(d.finding, d.decision, d.record, d.sentences) for d in entries] == [
+        ("flag:vague:REQ-F-001", "kept", "REQ-F-001", [])]
+    assert decided_keys(root) == before  # no sentence is settled by it
+    assert all(f["canonical"] in findings for f in findings.values())  # the open findings are untouched
+    # an entry that mixes a flag finding with another decision is invalid
+    path = root / DECISIONS
+    path.write_text(path.read_text().replace("decision: kept", "decision: covered"))
+    git(root, "add", "-A")
+    assert "eval.decisions_invalid" in invoke(root, "check").output

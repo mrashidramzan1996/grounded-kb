@@ -1,6 +1,7 @@
 """`kb todo` ask items: the decisions only the person can make, with evidence and options."""
 
 import json
+import re
 import shutil
 
 from helpers import (
@@ -10,6 +11,7 @@ from helpers import (
     docx_bytes,
     evaluated,
     git,
+    invoke,
     ok,
     put,
     req_yaml,
@@ -21,7 +23,9 @@ from helpers import (
 
 from kb.todo import build_todo
 
-KEEP = {"key": "keep", "label": "Keep it flagged for now", "then": "leave it; it stays a warning"}
+def keep(rid: str, flag: str) -> dict:
+    return {"key": "keep", "label": "Keep it flagged for now",
+            "then": f"`kb flag keep {rid} --flag {flag} --by <handle>`"}
 
 
 def retire(rid: str) -> dict:
@@ -65,7 +69,7 @@ def test_vague_requirement_becomes_ask_with_three_options(tmp_path):
              "then": "record the answer with `kb clarify`; once every answer is recorded, run one "
                      "`kb redraft REQ-NF-001 … --new` naming every answered ID, quote the new sentence, run "
                      "`kb redraft --report`, then commit"},
-            KEEP,
+            keep("REQ-NF-001", "vague"),
             retire("REQ-NF-001"),
         ],
     }
@@ -84,7 +88,7 @@ def test_conflicting_and_untestable_asks(tmp_path):
          "then": "record it with `kb clarify`; once every answer is recorded, run one `kb redraft REQ-F-002 … --new` "
                  "naming every answered ID and the other requirement, update or retire the other requirement, run "
                  "`kb redraft --report`, then commit"},
-        KEEP,
+        keep("REQ-F-002", "conflicting"),
         retire("REQ-F-002"),
     ]
     untestable = found["untestable:REQ-F-003"]
@@ -95,7 +99,7 @@ def test_conflicting_and_untestable_asks(tmp_path):
         {"key": "define", "label": "Describe how to check it",
          "then": "record it with `kb clarify`; once every answer is recorded, run one `kb redraft REQ-F-003 … --new` "
                  "naming every answered ID, run `kb redraft --report`, then commit"},
-        KEEP,
+        keep("REQ-F-003", "untestable"),
         retire("REQ-F-003"),
     ]
 
@@ -368,7 +372,7 @@ def test_todo_text_escapes_evidence(tmp_path):
         "`kb redraft REQ-NF-001 … --new` naming every answered ID, quote the new sentence, run `kb redraft --report`, "
         "then commit\n"
         "   (b) Keep it flagged for now\n"
-        "       then: leave it; it stays a warning\n"
+        "       then: `kb flag keep REQ-NF-001 --flag vague --by <handle>`\n"
         "   (c) It is not a real requirement\n"
         "       then: set `status: rejected` on REQ-NF-001; never delete the file\n"
     )
@@ -421,7 +425,7 @@ def test_todo_text_shows_each_options_then(tmp_path):
             "   (a) Give a measurable target (a number and a unit)",
             f"       then: {found['vague:REQ-NF-001']['options'][0]['then']}",
             "   (b) Keep it flagged for now",
-            "       then: leave it; it stays a warning",
+            "       then: `kb flag keep REQ-NF-001 --flag vague --by <handle>`",
             "   (c) It is not a real requirement",
             "       then: set `status: rejected` on REQ-NF-001; never delete the file",
         ]
@@ -460,3 +464,72 @@ def test_secret_remove_then_for_docx_asks_the_person(tmp_path):
         "it and tell you when it is done, then `kb source sync`; tell the person to rotate the key"
     )
     assert f"       then: {remove['then']}\n" in ok(root, "todo").stdout
+
+
+# --- `kb flag keep`: remember "keep it flagged" ---------------------------------------------------------------------
+
+DEC = "kb/eval/decisions.yaml"
+
+
+def kept(root, rid="REQ-NF-001", flag="vague"):
+    r = invoke(root, "flag", "keep", rid, "--flag", flag, "--by", "@alice")
+    assert r.exit_code == 0, r.output
+    commit(root, "kept")
+
+
+def test_kept_flag_is_not_asked_again(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague", "untestable")))
+    kept(root)
+    text = (root / DEC).read_text()
+    assert "finding: flag:vague:REQ-NF-001" in text and "decision: kept" in text and "record: REQ-NF-001" in text
+    assert list(asks(root)) == ["freeze:v1", "untestable:REQ-NF-001"]  # only that flag ask is quiet; freeze is offered
+
+
+def test_kept_flag_returns_when_record_changes(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
+    kept(root)
+    assert "vague:REQ-NF-001" not in asks(root)
+    path = root / "kb/requirements/REQ-NF-001.yaml"
+    path.write_text(path.read_text() + "owner: '@bob'\n")
+    assert "vague:REQ-NF-001" in asks(root)
+    # kept again, then a re-synced changed segment brings it back
+    kept(root)
+    assert "vague:REQ-NF-001" not in asks(root)
+    seg = next((root / "kb/sources").glob("*/segments.jsonl"))
+    seg.write_text(seg.read_text().replace('"hash": "', '"hash": "0', 1))
+    assert "vague:REQ-NF-001" in asks(root)
+
+
+def test_hand_written_kept_entry_is_checked(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
+    kept(root)
+    good = (root / DEC).read_text()
+    pin = next(line.split(": ")[1] for line in good.splitlines() if re.fullmatch(r"\s*record_sha256: [0-9a-f]{64}", line))
+    (root / DEC).write_text(good.replace(pin, "z" + pin[1:]))  # not a sha256
+    assert "vague:REQ-NF-001" in asks(root)
+    assert "eval.decisions_invalid" in invoke(root, "check").output
+    (root / DEC).write_text(good.replace("decision: kept", "decision:   kept"))  # not canonical
+    assert "vague:REQ-NF-001" in asks(root)
+    assert "eval.decisions_invalid" in invoke(root, "check").output
+    (root / DEC).write_text(good.replace("by: '@alice'", "by: alice").replace("by: \"@alice\"", "by: alice").replace("by: @alice", "by: alice"))
+    assert "vague:REQ-NF-001" in asks(root)
+    assert "eval.decisions_invalid" in invoke(root, "check").output
+
+
+def test_kept_flag_still_warns_in_check(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
+    kept(root)
+    r = invoke(root, "check")
+    assert r.exit_code == 0 and "requirement.vague" in r.output and "eval.decisions_invalid" not in r.output
+
+
+def test_flag_keep_refuses_without_writing(tmp_path):
+    root = flagged(tmp_path, ("REQ-NF-001", ("vague",)))
+    put(root, "kb/requirements/REQ-NF-002.yaml", req_yaml("REQ-NF-002", flags=("vague",)) + "status: rejected\n")
+    before = (root / DEC).read_bytes() if (root / DEC).exists() else None
+    for args in (("REQ-NF-009", "--flag", "vague"), ("REQ-NF-002", "--flag", "vague"),
+                 ("REQ-NF-001", "--flag", "untestable"), ("REQ-NF-001", "--flag", "bogus")):
+        r = invoke(root, "flag", "keep", *args, "--by", "@alice")
+        assert r.exit_code == 2, args
+    assert invoke(root, "flag", "keep", "REQ-NF-001", "--flag", "vague", "--by", "alice").exit_code == 2
+    assert ((root / DEC).read_bytes() if (root / DEC).exists() else None) == before

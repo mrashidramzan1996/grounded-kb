@@ -45,7 +45,7 @@ from kb.eval.judge import (
     JUDGE_BRIEF, JUDGE_ITEMS, SALT, VERDICTS, check_items_file, check_verdicts, judge_state, read_salt, require_eval_base,
     write_judge,
 )
-from kb.eval.decisions import DECISIONS, decide as record_decision, eval_status
+from kb.eval.decisions import DECISIONS, decide as record_decision, eval_status, keep_flag
 from kb.eval.sample import DEFAULT_N, build_sample
 from kb.textfmt import inline_code
 from kb.gates.coverage import coverage_stats
@@ -757,6 +757,27 @@ def eval_decide(
         raise _fail(e) from e
     named = f" ({entry.record})" if entry.record else ""
     typer.echo(f"recorded in {DECISIONS}: {entry.finding} {entry.decision}{named}; commit it")
+
+
+flag_app = typer.Typer(help="Answer flag questions about requirements.", no_args_is_help=True)
+app.add_typer(flag_app, name="flag")
+
+
+@flag_app.command("keep")
+def flag_keep(
+    ctx: typer.Context,
+    rid: Annotated[str, typer.Argument(help="The requirement's id (REQ-…).")],
+    flag: Annotated[str, typer.Option("--flag", help="vague, conflicting or untestable.")],
+    by: Annotated[str, typer.Option("--by", help="Who decided: @handle or @org/team.")],
+    date: Annotated[str | None, typer.Option("--date", help="When they decided, YYYY-MM-DD (default: today).")] = None,
+) -> None:
+    """Keep a requirement's flag: `kb todo` stops asking until the record or the text it cites changes."""
+    root = Path(ctx.obj["root"])
+    try:
+        entry = keep_flag(root, rid, flag, by, date)
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
+    typer.echo(f"recorded in {DECISIONS}: {entry.finding} {entry.decision}; commit it")
 
 
 @eval_app.command("sample")

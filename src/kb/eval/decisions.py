@@ -36,7 +36,7 @@ from kb.issues import Issue
 from kb.quotes.match import find_quote
 from kb.records.ids import ADR_ID, COMP_ID, EXCL_ID, FEAT_ID, INV_ID, REQ_ID, TERM_ID
 from kb.records.lifecycle import live_ids
-from kb.records.models import Evidence, Term
+from kb.records.models import Evidence, Requirement, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.safewrite import check_target, write_atomic
@@ -54,6 +54,8 @@ DECISIONS = "kb/eval/decisions.yaml"
 CATEGORIES = "categories"  # the pseudo-finding of the categories ask: no document states some kinds of requirement
 DISMISSED = "dismissed"  # the pseudo-finding of the dismissed ask: the judge's dismissals, agreed with as one list
 PUBLIC_ID = re.compile(r"F-[0-9a-f]{10}")
+FLAGS = ("vague", "conflicting", "untestable")
+FLAG_FINDING = re.compile(rf"flag:(?:{'|'.join(FLAGS)}):{REQ_ID}")  # the pseudo-finding of one flag ask: flag:<flag>:<rid>
 DECISION_VALUES = ("added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok", "reopen")
 SUPPRESSING = frozenset({"added", "covered", "not_a_rule"})  # decisions that settle a sentence: it stops warning
 # what changes a record: a decision naming such a record also settles that change (the summary stays current)
@@ -65,7 +67,7 @@ _RECORD_ID = re.compile(rf"(?:{REQ_ID}|{EXCL_ID}|{FEAT_ID}|{ADR_ID}|{INV_ID}|{CO
 _SHA = re.compile(r"[0-9a-f]{40}")
 _KEY = re.compile(r"[0-9a-f]{12}")
 
-Kind = Literal["omission", "entity", "relation", "unfaithful", "granularity", "categories", "dismissed", "dismissal"]
+Kind = Literal["omission", "entity", "relation", "unfaithful", "granularity", "categories", "dismissed", "dismissal", "flag"]
 # the decisions each kind of finding takes
 ALLOWED: dict[str, tuple[str, ...]] = {
     "omission": ("added", "covered", "not_a_rule", "product_decision"),
@@ -76,6 +78,7 @@ ALLOWED: dict[str, tuple[str, ...]] = {
     "categories": ("not_a_rule",),
     "dismissed": ("ok",),  # the judge's dismissals, as one list: a person agrees
     "dismissal": ("reopen",),  # one dismissed item: a person disagrees, and it becomes an open omission finding
+    "flag": ("kept",),  # one flag of one requirement: a person keeps it flagged; settles that flag ask and nothing else
 }
 
 
@@ -100,10 +103,10 @@ class SentenceRef(BaseModel):
 class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    finding: str = Field(pattern=rf"^(?:{PUBLIC_ID.pattern}|{CATEGORIES}|{DISMISSED})$")
+    finding: str = Field(pattern=rf"^(?:{PUBLIC_ID.pattern}|{CATEGORIES}|{DISMISSED}|{FLAG_FINDING.pattern})$")
     canonical: str
     sentences: list[SentenceRef] = []  # an S or B omission's: every sentence it settles
-    decision: Literal["added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok", "reopen"]
+    decision: Literal["added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok", "reopen", "kept"]
     record: str | None = Field(default=None, pattern=rf"^{_RECORD_ID.pattern}$")
     # the sha256 of the record file's bytes when the person decided: of `record`, or (a correct or ok on a record's
     # finding) of the finding's records (records_sha256). A decision stops applying once they change. For `dismissed`,
@@ -277,6 +280,8 @@ def canonical_kind(canonical: str) -> str | None:
         return "categories"
     if canonical == DISMISSED:
         return "dismissed"
+    if FLAG_FINDING.fullmatch(canonical):
+        return "flag"
     return {"S": "omission", "B": "omission", "E": "entity", "N": "relation", "R": "unfaithful", "T": "unfaithful",
             "L": "unfaithful", "M": "granularity"}.get(canonical.partition(":")[0] if ":" in canonical else "")
 
@@ -303,6 +308,44 @@ def _reason_problem(d: Decision) -> str | None:
         except ClarifyError as e:
             return str(e)
     return None
+
+
+def _kept_problem(d: Decision) -> str | None:
+    """Why a `kept` entry cannot stand as `kb flag keep` would have written it, or None: `kept` and a flag finding go
+    together, the canonical id is the finding, the record is the finding's requirement, it pins (record_sha256), and
+    it carries no sentence key. A flag finding settles nothing but that one flag ask."""
+    if d.decision != "kept" or not FLAG_FINDING.fullmatch(d.finding):
+        return "`kept` goes with a flag finding, `flag:<flag>:<requirement>`, and only with it"
+    if d.canonical != d.finding:
+        return "its canonical id is not its finding"
+    if d.record != d.finding.rpartition(":")[2]:
+        return "it names no record, or not the finding's requirement"
+    if d.sentences:
+        return "`kept` carries no sentence key"
+    if d.record_sha256 is None:
+        return "it has no record_sha256"
+    return _reason_problem(d)
+
+
+def flag_pin(repo: KbRepo, rid: str) -> str:
+    """The pin of a kept flag: the sha256 of the record file's bytes and the hash of each segment it quotes. Editing the
+    record, or a re-sync that changes a cited segment, changes it and the flag is asked again."""
+    h = hashlib.sha256(record_bytes(repo, rid) or b"")
+    rec = repo.records.get(rid)
+    for ref in sorted({q.source for q in rec.evidence.quotes}) if isinstance(rec, Requirement) else []:
+        src, _, seg_id = ref.partition("#")
+        seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
+        h.update(f"\n{ref} {seg.hash if seg else '-'}".encode())
+    return h.hexdigest()
+
+
+def _kept_current(repo: KbRepo, d: Decision, live: set[str]) -> bool:
+    """Whether a well-formed `kept` entry still holds: its requirement is live, still carries the flag, and the record
+    and the segments it cites are what the person kept. A change is not an error; the flag is asked again."""
+    rid = d.finding.rpartition(":")[2]
+    rec = repo.records.get(rid)
+    return (isinstance(rec, Requirement) and rid in live and d.finding.split(":")[1] in rec.flags
+            and d.record_sha256 == flag_pin(repo, rid))
 
 
 def _inconsistency(repo: KbRepo, d: Decision, live: set[str], f: SummaryFinding | None,
@@ -489,6 +532,11 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
         elif _seen_key(d) in seen:
             why = (f"{_shown_id(d.finding)} is reopened twice; only the first counts" if d.decision == "reopen"
                    else f"{_shown_id(d.finding)} is decided twice; only the first counts")
+        elif d.decision == "kept" or d.finding.startswith("flag:"):
+            why = _kept_problem(d)
+            stale = why is None and not _kept_current(repo, d, live)
+            if why is not None:
+                why = f"{d.finding}: {why}"
         elif d.decision == "reopen":
             why = _reopen_problem(d, dismissed.get(d.finding))
             if why is None and summary is not None and any(f.id == d.finding for f in summary.open_findings):
@@ -526,6 +574,16 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
         if not stale:  # its sentence changed in the document: nothing to settle any more
             out.append(d)  # type: ignore[arg-type]
     return out, issues
+
+
+def kept_flags(decisions: Iterable[Decision]) -> set[tuple[str, str]]:
+    """The (requirement id, flag) pairs a person kept flagged, by the entries that stand."""
+    out = set()
+    for d in decisions:
+        if d.decision == "kept" and FLAG_FINDING.fullmatch(d.finding):
+            _, flag, rid = d.finding.split(":")
+            out.add((rid, flag))
+    return out
 
 
 def _seen_key(d: Decision) -> tuple:
@@ -1086,5 +1144,39 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
                         "and earlier decisions name): run the evaluation again (`kb todo`)")
     check_target(root, DECISIONS, "file")  # never through a symlink (kb/, kb/eval/ or the file)
     data = [d.model_dump() for d in [*decisions, entry]]
+    write_atomic(root, DECISIONS, dump_yaml({"decisions": data}))
+    return entry
+
+
+def keep_flag(root: Path, rid: str, flag: str, by: str, date: str | None = None) -> Decision:
+    """Record that a person keeps flag `flag` of requirement `rid` flagged (`kb flag keep`): pinned to the record file
+    and the segments it cites, so the flag ask comes back when either changes. EvalError, and nothing written, when
+    the requirement does not exist, is not live or does not carry the flag. An earlier entry for the same flag (one
+    gone stale) is replaced."""
+    root = Path(root)
+    if flag not in FLAGS:
+        raise EvalError(f"--flag must be one of {', '.join(FLAGS)}")
+    if not re.compile(REQ_ID).fullmatch(rid):
+        raise EvalError("the argument is not a requirement id (REQ-F-… or REQ-NF-…)")
+    if len(by) > MAX_BY or not _HANDLE.fullmatch(by):
+        raise EvalError(f"--by must look like @handle or @org/team (at most {MAX_BY} characters)")
+    try:
+        day = _iso(date or datetime.date.today().isoformat())
+    except ValueError as e:
+        raise EvalError("--date must be a date, YYYY-MM-DD") from e
+    repo = KbRepo.load(root)
+    rec = repo.records.get(rid)
+    if not isinstance(rec, Requirement):
+        raise EvalError(f"{rid} does not exist")
+    if rid not in live_ids(repo):
+        raise EvalError(f"{rid} is not live (rejected or superseded)")
+    if flag not in rec.flags:
+        raise EvalError(f"{rid} does not carry the flag {flag}")
+    finding = f"flag:{flag}:{rid}"
+    decisions = read_decisions(root)
+    entry = Decision(finding=finding, canonical=finding, decision="kept", record=rid,
+                     record_sha256=flag_pin(repo, rid), by=by, date=day)
+    check_target(root, DECISIONS, "file")
+    data = [d.model_dump() for d in [*(d for d in decisions if d.finding != finding), entry]]
     write_atomic(root, DECISIONS, dump_yaml({"decisions": data}))
     return entry

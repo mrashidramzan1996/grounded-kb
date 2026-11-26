@@ -25,6 +25,7 @@ from kb.eval.decisions import (
     eval_status,
     finding_kind,
     finding_records,
+    kept_flags,
 )
 from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, RUN_B, _run_b_files
 from kb.eval.judge import JUDGE_ITEMS
@@ -295,7 +296,12 @@ def _triage_items(issues: list[Issue]) -> list[DoItem]:
     ]
 
 
-_KEEP = Option("keep", "Keep it flagged for now", "leave it; it stays a warning")
+def _keep(rid: str, flag: str) -> Option:
+    """`rid` and `flag` are kb's own (a validated id, a flag name); no document text goes into the command."""
+    return Option("keep", "Keep it flagged for now",
+                  f"`kb flag keep {rid} --flag {flag} --by <handle>`")
+
+
 _APPROVER_QUESTIONS = {
     "policy.approvers.intent": "Who approves changes to requirements? Give a forge handle such as @org/team or @user.",
     "policy.approvers.decisions":
@@ -348,17 +354,18 @@ def _flag_ask(flag: str, rid: str, rec: Requirement, repo: KbRepo) -> AskItem:
         answer = Option("define", "Describe how to check it",
                         f"record it with `kb clarify`; {_redraft_all(rid)}, {_REPORT_COMMIT}")
     retire = Option("retire", "It is not a real requirement", f"set `status: rejected` on {rid}; never delete the file")
-    return AskItem(f"{flag}:{rid}", flag, question[0], _evidence(rid, rec, repo), (answer, _KEEP, retire), question[1])
+    return AskItem(f"{flag}:{rid}", flag, question[0], _evidence(rid, rec, repo), (answer, _keep(rid, flag), retire), question[1])
 
 
-def _flag_asks(repo: KbRepo) -> list[AskItem]:
-    """One item per flag of every live requirement."""
+def _flag_asks(repo: KbRepo, kept: set[tuple[str, str]] = frozenset()) -> list[AskItem]:  # type: ignore[assignment]
+    """One item per flag of every live requirement, but those a person kept flagged (`kb flag keep`, still current)."""
     live = live_ids(repo)
     return [
         _flag_ask(flag, rid, rec, repo)
         for rid, rec in sorted(repo.records.items())
         if rid in live and isinstance(rec, Requirement)
         for flag in dict.fromkeys(rec.flags)
+        if (rid, flag) not in kept
     ]
 
 
@@ -729,7 +736,7 @@ def build_todo(root: Path) -> Todo:
     categories = _categories_ask(repo, status)
     # never the freeze beside an evaluation question: answering both at once fails (a decision dirties kb/, and the
     # freeze refuses a dirty kb/), and the freeze refuses an evaluation not yet settled
-    ask = (_flag_asks(repo) + blocking + categories
+    ask = (_flag_asks(repo, kept_flags(status.decisions) if status is not None else set()) + blocking + categories
            + _freeze_asks(root, repo, latest, errors, bool(do or blocking or categories), status))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
