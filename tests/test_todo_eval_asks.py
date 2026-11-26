@@ -170,3 +170,31 @@ def test_clarification_text_no_quote_covers_makes_eval_stale(tmp_path, case):
     assert "up to date" not in ok(root, "eval", "status").stdout
     assert any(i.startswith("eval:extract") for i in do_ids(todo_json(root)))
     assert invoke(root, "baseline", "freeze", "v1").exit_code == 1
+
+
+@pytest.mark.parametrize("case", ["rule_in_heading", "paragraph_before_decided_line"])
+def test_clarification_rule_outside_the_answer_makes_eval_stale(tmp_path, case):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    topic = "Admins must approve every refund over 500 EUR" if case == "rule_in_heading" else "Invoice payment"
+    out = ok(root, "clarify", "--topic", topic, "--text", ANSWER, "--by", "@alice", "--date", "2026-11-26").stdout
+    ref = re.search(r"SRC-clarifications#seg-\d+", out).group(0)
+    if case == "paragraph_before_decided_line":
+        path = root / "docs/clarifications.md"
+        path.write_text(path.read_text().replace(
+            "\nDecided by", "\nAdmins must approve every refund over 500 EUR.\n\nDecided by"))
+        ok(root, "ingest", "docs/clarifications.md")
+    put(root, "kb/requirements/REQ-F-002.yaml", (
+        "id: REQ-F-002\nstatement: Invoices are paid by bank transfer within 30 days.\nmodality: must\n"
+        f"actor: customer\norigin: stated\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: '{INVOICES}'\n"
+        f"  - source: {ref}\n    text: '{ANSWER}'\nmodules:\n- MOD-a\n"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    put(root, "kb/sources/SRC-clarifications/triage.yaml",
+        f"segments:\n  seg-01: 'none: heading: the clarifications file'\n  {ref.split('#')[1]}: [REQ-F-002]\n")
+    ok(root, "ingest", "--report")
+    r = invoke(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    assert r.exit_code == 2 and "run the evaluation again" in r.output
+    commit(root, "answer with a rule outside it")
+    assert "up to date" not in ok(root, "eval", "status").stdout
+    assert any(i.startswith("eval:extract") for i in do_ids(todo_json(root)))
+    assert invoke(root, "baseline", "freeze", "v1").exit_code == 1

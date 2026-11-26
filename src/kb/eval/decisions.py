@@ -21,8 +21,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from kb.clarify import _DATE, CLARIFICATIONS, MAX_BY, ClarifyError, _plain
+from kb.clarify import _HANDLE as CLARIFY_HANDLE
 from kb.clarify import _HEADER as CLARIFICATIONS_HEADER
-from kb.clarify import CLARIFICATIONS, MAX_BY, ClarifyError, _plain
 from kb.eval import EvalError
 from kb.eval.findings import SUMMARY, fingerprint
 from kb.gates.coverage import COVERING_TYPES
@@ -41,6 +42,7 @@ from kb.safepath import UnsafePath, read_regular
 from kb.safewrite import check_target, write_atomic
 from kb.sources.sentences import (
     Sentence,
+    cues,
     sentence_key,
     sentences,
     text_key,
@@ -782,15 +784,23 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
             and fingerprint(repo, skip=touched, skip_segments=answers) == fingerprint(base, skip=touched))
 
 
-_DECIDED_LINE = re.compile(r"^Decided by [^\n]* on [^\n]*\.[ \t]*$", re.MULTILINE)
+_SECTION = re.compile(r"\s*## (?P<topic>[^\r\n]*)\r?\n\r?\nDecided by (?P<by>\S+) on (?P<date>\S+)\.[ \t]*\r?\n"
+                      r"\r?\n(?P<answer>.*)", re.DOTALL)
+
+
+def _date_ok(value: str) -> bool:
+    try:
+        return bool(_DATE.fullmatch(value)) and bool(datetime.date.fromisoformat(value))
+    except ValueError:
+        return False
 
 
 def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[str, str]]:
     """The segments of docs/clarifications.md (kb clarify's file of a person's answers) that the freshness fingerprint
     leaves out, with the file's fixed header: a section that is new since the evaluated commit (absent there by segment
     id and by hash; a rewritten section never is) and whose answer text (after the `Decided by ... on ....` line)
-    the quotes of the records `rids` (pinned by a decision) cover character for character, whitespace aside, so that
-    all of it was decided on. Any other section, fenced text or rule-less wording included, needs a new evaluation."""
+    the quotes of the records `rids` (pinned by a decision) cover character for character, whitespace aside, and
+    whose layout is exactly kb clarify's (a rule-like topic must be covered too), so that all of it was decided on. Any other section, fenced text or rule-less wording included, needs a new evaluation."""
     src = next((sid for sid, s in repo.sources.items() if s.original == CLARIFICATIONS), None)
     if src is None:
         return set()
@@ -809,16 +819,18 @@ def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[st
         if body.strip() == CLARIFICATIONS_HEADER.strip():
             out.add((src, seg.id))
             continue
-        # the answer is what follows the `Decided by ... on ....` line kb clarify writes under the heading
-        m = _DECIDED_LINE.search(body)
-        if m is None:
+        # only the layout kb clarify writes: `## <topic>`, `Decided by <by> on <date>.`, then the answer
+        m = _SECTION.fullmatch(body)
+        if m is None or len(m["by"]) > MAX_BY or not CLARIFY_HANDLE.fullmatch(m["by"]) or not _date_ok(m["date"]):
             continue
         covered = [False] * len(body)
         for a, b in quoted:
             for i in range(max(a, seg.start) - seg.start, min(b, seg.end) - seg.start):
                 covered[i] = True
-        answer = range(m.end(), len(body))
-        if any(not body[i].isspace() for i in answer) and all(covered[i] or body[i].isspace() for i in answer):
+        answer = range(m.start("answer"), len(body))
+        topic = range(m.start("topic"), m.end("topic"))
+        if (any(not body[i].isspace() for i in answer) and all(covered[i] or body[i].isspace() for i in answer)
+                and (not cues(m["topic"]) or all(covered[i] or body[i].isspace() for i in topic))):
             out.add((src, seg.id))
     return out
 
