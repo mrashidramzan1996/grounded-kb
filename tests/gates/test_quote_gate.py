@@ -40,7 +40,7 @@ def test_quote_in_other_segment_is_not_enough(acme_kb_with):
 
 def test_too_many_quotes(acme_kb_with):
     def many(segment_id):
-        rec = req("REQ-F-011", "Seats can be added.", quote=(SPEC, "3.1 Adding seats", "An administrator can add seats at any time."))(segment_id)
+        rec = req("REQ-F-011", "Seats can be added.", quote=(SPEC, "3.1 Adding seats", "An administrator can add seats at any time."), modality="may")(segment_id)
         q = rec.evidence.quotes[0]
         return rec.model_copy(update={"evidence": rec.evidence.model_copy(update={"quotes": [q] * (MAX_QUOTES_PER_CLAIM + 1)})})
 

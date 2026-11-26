@@ -13,29 +13,43 @@ if TYPE_CHECKING:
     from kb.records.repo import KbRepo
 
 _BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"(])")
-_ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "u.s.", "no.", "fig.", "approx.", "incl.", "resp.")
+_ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "u.s.", "no.", "fig.", "approx.", "incl.", "resp.",
+                  "dr.", "mr.", "mrs.", "ms.", "inc.", "ltd.", "co.", "st.")
 _UNIT_START = re.compile(r"\s*(?:[-*+] |\d+[.)] |\| )")
 _MARKER = re.compile(r"\s*(?:[-*+] |\d+[.)] |\| )")
 _FENCE = re.compile(r"\s*(?:```|~~~)")
 _SEPARATOR = re.compile(r"\|?[\s:|-]+\|?")
 _HEADING_LINE = re.compile(r"#{1,6} ")
 
+# "can" and "will" in descriptive prose ("You can find...", "This document will describe...") are not rules
+_NOT_RULE_SUBJECT = r"(?<!\byou )(?<!\bwe )(?<!this document )(?<!this section )(?<!this guide )(?<!this page )"
+_NUMBER_WORDS = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen"
+                 r"|seventeen|eighteen|nineteen|twenty|hundred|thousand)")
+_UNITS = (r"(?:seconds?|minutes?|mins?|hours?|hrs?|h|days?|weeks?|months?|years?|ms|s|KB|MB|GB|TB|seats?|users?"
+          r"|requests?|times|per)")
+
 NORMATIVE_CUES: dict[str, re.Pattern] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
-        "must": r"\b(?:must(?!\s+(?:not|never)\b)|shall(?!\s+not\b)|required|requires|is required to|has to|needs to)\b",
-        "must_not": r"\b(?:must\s+not|shall\s+not|may\s+not|can\s*not|never|prohibited|not\s+allowed|no\s+longer)\b",
+        "must": r"\b(?:must(?!\s+(?:not|never)\b)|shall(?!\s+not\b)|required|requires?|is required to|has to|needs to"
+                r"|" + _NOT_RULE_SUBJECT + r"will(?!\s+(?:not|never)\b)|mandatory|ensures?|(?:is|are)\s+to)\b",
+        "must_not": r"\b(?:must\s+not|shall\s+not|may\s+not|can\s*not|never|prohibited|forbidden|not\s+permitted|not\s+allowed"
+                    r"|no\s+longer|" + _NOT_RULE_SUBJECT + r"will\s+not)\b",
         "should": r"\b(?:should|recommended)\b",
-        "may": r"\bmay\b(?!\s+not\b)",
+        "may": r"\bmay\b(?!\s+not\b)|" + _NOT_RULE_SUBJECT + r"\bcan\b(?!\s*not\b)|\boptional\b|(?<!not )(?<!not\n)\bpermitted\b",
         "limit": r"\b(?:at least|at most|no more than|no less than|up to|within|maximum|minimum|only)\b",
         # a quantity: a number with a currency, a percentage or a unit (a bare year, page or section number is not one)
         "number": r"(?:[$€£]\s?|\b(?:EUR|USD|GBP)\s?)\d+(?:[.,]\d+)*"
-                  r"|\b\d+(?:[.,]\d+)*(?:\s?(?:%|[$€£])|\s?(?:EUR|USD|GBP|seconds?|minutes?|hours?|days?|weeks?|months?"
-                  r"|years?|ms|s|KB|MB|GB|TB|seats?|users?|requests?|times|per)\b)",
+                  r"|\b\d+(?:[.,]\d+)*(?:\s?(?:%|[$€£])|\s?(?:EUR|USD|GBP|" + _UNITS[3:-1] + r")\b)"
+                  r"|\b" + _NUMBER_WORDS + r"\s+" + _UNITS + r"\b"
+                  r"|\b24/7\b|(?-i:\b[A-Z]+-\d+\b)",
     }.items()
 }
-# never quantities: masked placeholders ([EMAIL-1], [SECRET:aws]), ISO dates and times of day
-_NOT_QUANTITIES = re.compile(r"\[(?:EMAIL-\d+|SECRET:[^\]\n]*)\]|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+# never quantities: masked placeholders ([EMAIL-1], [SECRET:aws]), ISO dates, times of day and kb record IDs
+_NOT_QUANTITIES = re.compile(r"\[(?:EMAIL-\d+|SECRET:[^\]\n]*)\]|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+                             r"|\b(?:REQ-F|REQ-NF|FEAT|ADR|INV|EXCL|COMP|TERM|CLAIM|SRC)-\d+\b")
+_MODAL = ("must", "must_not", "should", "may")
+_CLAUSE_SEP = re.compile(r";\s+|,\s+(?:and|or|but)\s+")
 
 
 @dataclass(frozen=True)
@@ -111,15 +125,41 @@ def _split_block(text: str, start: int, end: int) -> list[tuple[int, int]]:
     return out
 
 
+def _split_clauses(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """Split a unit at "; " and ", and/or/but" when the clause after the separator has a modal cue of its own."""
+    if text[start:end].startswith("| "):
+        return [(start, end)]
+    out: list[tuple[int, int]] = []
+    cur = start
+    seps = list(_CLAUSE_SEP.finditer(text, start, end))
+    for i, m in enumerate(seps):
+        nxt = seps[i + 1].start() if i + 1 < len(seps) else end
+        if cues(text[m.end() : nxt]).isdisjoint(_MODAL):
+            continue
+        if text[cur : m.start()].strip():
+            out.append((cur, m.start()))
+            cur = m.end()
+    out.append((cur, end))
+    return out
+
+
 def segment_sentences(text: str, seg: Segment, src_id: str) -> list[Sentence]:
     result: list[Sentence] = []
+    inherited: frozenset[str] = frozenset()
     for bs, be in _blocks(text, seg.start, seg.end):
-        for s, e in _split_block(text, bs, be):
-            piece = text[s:e].rstrip()
-            if not piece:
-                continue
-            e = s + len(piece)
-            result.append(Sentence(f"{src_id}#{seg.id}", len(result), s, e, piece, cues(piece)))
+        is_item = bool(_UNIT_START.match(text[bs:be]))
+        if not is_item:
+            inherited = frozenset()
+        for ss, se in _split_block(text, bs, be):
+            for s, e in _split_clauses(text, ss, se):
+                piece = text[s:e].rstrip()
+                if not piece:
+                    continue
+                e = s + len(piece)
+                c = cues(piece) | inherited if is_item else cues(piece)
+                result.append(Sentence(f"{src_id}#{seg.id}", len(result), s, e, piece, c))
+        if not is_item and text[bs:be].rstrip().endswith(":"):
+            inherited = frozenset(result[-1].cues & set(_MODAL))
     return result
 
 

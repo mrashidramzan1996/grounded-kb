@@ -155,3 +155,52 @@ def test_wrapped_and_negated_must():
     assert cues("Seats can\nnot be removed.") == {"must_not"}
     assert cues("Seats are not\nallowed.") == {"must_not"}
     assert cues("Seats must never be removed.") == {"must_not"}
+
+
+def test_wider_cues():
+    assert "must" in cues("Invoices will be issued on the 1st.")
+    assert "may" in cues("Admins can remove seats.")
+    assert "must" in cues("Exports are mandatory.")
+    assert "must_not" in cues("Deleting invoices is forbidden.")
+    assert "must_not" in cues("Refunds are not permitted.")
+    assert "may" not in cues("Refunds are not permitted.")
+    assert "must" in cues("The system shall ensure backups.")
+    assert {"limit", "number"} <= cues("within fifteen minutes")
+    assert "number" in cues("15 min")
+    assert "number" in cues("24/7")
+    assert "number" in cues("AES-256")
+    assert "number" not in cues("See REQ-F-001 and ADR-12.")
+    assert cues("Invoices will not be issued.") == {"must_not"}
+    assert cues("Invoices will never be issued.") == {"must_not"}
+
+
+def test_wider_cues_stay_quiet_on_descriptive_text():
+    for text in ("You can find the guide at docs.acme.io.", "This document will describe the billing flow.",
+                 "See section 3 on page 2.", "We will explain the flow.", "This section will cover seats."):
+        assert cues(text) == set(), text
+
+
+def test_clause_units():
+    _, out = _units("The service must retry three times; it must email the owner, and refunds above $500 require approval.\n")
+    assert len(out) == 3, [s.text for s in out]
+    _, out = _units("The product helps teams, and it is fast.\n")
+    assert len(out) == 1
+
+
+def test_clause_units_slice_exactly():
+    n, out = _units("The service must retry three times; it must email the owner, and refunds above $500 require approval.\n"
+                    "- Admins can remove seats, or users must ask.\n")
+    assert len(out) >= 4
+    for s in out:
+        assert n.text[s.start : s.end] == s.text
+
+
+def test_list_items_inherit_lead_in_cue():
+    _, out = _units("The system must:\n- log every change\n- keep logs 90 days\n")
+    items = [s for s in out if s.text.startswith("- ")]
+    assert len(items) == 2 and all("must" in s.cues for s in items)
+
+
+def test_more_abbreviations():
+    _, out = _units("Dr. Smith approves. Acme Inc. pays.\n")
+    assert [s.text for s in out] == ["Dr. Smith approves.", "Acme Inc. pays."]
