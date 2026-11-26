@@ -173,8 +173,15 @@ Set `policy.unreadable_teams: defer` to restore the old behaviour (any approval 
 
 ## Upgrading to 0.4.0
 
-A 0.3.x knowledge base still passes `kb check`, with warnings. The new rules are errors only for records drafted in the
-current ingest or redraft range.
+A 0.3.x knowledge base passes `kb check` with warnings, with one exception: quotes now align to word and number
+boundaries, so a live record whose quote cuts a word or number in half fails with `quote.not_found`, an error for
+every record, not only drafted ones (with the default `evidence.mode: all`). Fix them before upgrading CI and the hooks to 0.4.0: run 0.4.0's `kb check`
+locally to list them, then `kb redraft <ID>` each (or fix its quote by hand). The other new rules are errors only for records drafted in the current
+ingest or redraft range.
+
+Upgrade in this order: fix those quotes; add the requirement fields (below) with `kb redraft` before the first
+evaluation, since a redraft changes the records and so re-runs any evaluation done before it; then let `kb todo`
+run the evaluation.
 
 - Quotes must now align to word and number boundaries: a quote that cuts a word or number in half (for example `seat`
   inside `seats`, or `2` inside `25`) now counts as not found. Quotes shorter than 12 non-space characters are reported
@@ -184,8 +191,9 @@ current ingest or redraft range.
   and `out-of-scope` warns `triage.use_exclusion` (record an `EXCL` record instead). A triage list must name a live
   record that quotes the segment (`triage.not_quoted`).
 - Requirements have new fields: `modality` (must, must_not, should or may), `actor`, `category` (REQ-NF only) and
-  `origin` (stated or implied). A requirement without them warns `requirement.fields_missing`. Add them when you next
-  redraft (`kb redraft <ID>`). An `implied` requirement needs a confirming quote from `docs/clarifications.md`.
+  `origin` (stated or implied). A requirement without them warns `requirement.fields_missing`. Add the requirement
+  fields with a redraft (`kb redraft <ID>`) before the first evaluation: adding them later changes the records, and
+  the evaluation runs again. An `implied` requirement needs a confirming quote from `docs/clarifications.md`.
 - CODEOWNERS: the block an older `kb init` wrote lacks `/kb/exclusions/`, `/kb/sources/*/triage.yaml`, `/kb/eval/` and
   `/kb/baseline/` (for the intent approvers), and names single workflow files where the decision approvers now own the
   whole `/.github/workflows/` directory (a pull request that adds any workflow needs them). A block from before 0.3.1
@@ -201,8 +209,11 @@ current ingest or redraft range.
   `policy.unreadable_teams: defer` (see [Upgrading to 0.3.1](#upgrading-to-031)).
 - The evaluation is new: `kb todo` lists `eval:extract` once the knowledge base is otherwise settled, and
   `kb baseline freeze` now refuses (exit 1) until a current evaluation has no open finding and its dismissals are
-  agreed with; `--unevaluated` freezes anyway. See [Evaluate the extraction](#evaluate-the-extraction). Run `kb agents install <name>` to update
-  the playbook in `AGENTS.md` (and the Claude Code skill).
+  agreed with; `--unevaluated` freezes anyway. See [Evaluate the extraction](#evaluate-the-extraction).
+- Run `kb agents install <name>` to update the playbook in `AGENTS.md` (and the Claude Code skill). It also refreshes
+  `kb/README.md` when kb wrote it (its first line is kb's title; a file you wrote is left alone), refreshes kb's
+  CODEOWNERS block while its lines are still commented out, and otherwise lists the paths your edited CODEOWNERS block
+  lacks: add those yourself.
 
 ## Upgrading to 0.3.1
 

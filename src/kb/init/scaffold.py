@@ -164,6 +164,68 @@ def upsert_agents_md(root: Path) -> str:
     return "updated AGENTS.md (kb block)"
 
 
+README = "kb/README.md"
+
+
+def refresh_kb_readme(root: Path) -> str:
+    """Set kb/README.md to the current guide when kb wrote it (its first line is the guide's title), as `kb agents
+    install` does on an upgrade; leave one kb did not write, or none, alone. Raises WriteRefused (nothing written)
+    for a symlinked or non-regular file. Returns what it did."""
+    root = Path(root)
+    template = _template("kb_readme.md")
+    if not check_target(root, README, "file"):
+        return f"{README} is missing; `kb init` writes it in a new repository"
+    current = read_text(root, README)
+    if current == template:
+        return f"{README} is up to date"
+    if current.split("\n", 1)[0] != template.split("\n", 1)[0]:
+        return f"{README} was not written by kb (its first line is not kb's title): left as is"
+    write_atomic(root, README, template)
+    return f"updated {README} (kb's guide, as this kb version writes it; review the diff)"
+
+
+def _paths_in(block: str) -> set[str]:
+    """The CODEOWNERS patterns a block's lines name, commented out or not."""
+    return {line.lstrip("#").split()[0] for line in block.splitlines() if line.lstrip("#").strip()}
+
+
+def codeowners_notice(root: Path) -> list[str]:
+    """For `kb agents install`: refresh kb's block in the CODEOWNERS file GitHub reads while the person has not named
+    an owner in it (every line still commented out); otherwise say which of the paths kb routes the block lacks.
+    Raises WriteRefused (nothing written) for a symlinked or non-regular file or unbalanced markers."""
+    root = Path(root)
+    begin, end = "# kb:begin kb", "# kb:end kb"
+    rel, current = None, ""
+    for p in CODEOWNERS_LOCATIONS:  # the one kb init wrote its block into
+        text = read_text(root, p) if check_target(root, p, "file") else ""
+        if begin in (x.strip() for x in text.splitlines()):
+            rel, current = p, text
+            break
+    lines = current.splitlines()
+    if rel is None:
+        return [("CODEOWNERS has no kb block: add the lines `kb init` writes (run it in an empty scratch repository to "
+                 "see them) and name the approvers")]
+    try:
+        block = "\n".join(lines[[x.strip() for x in lines].index(begin) + 1:[x.strip() for x in lines].index(end)])
+    except ValueError as e:
+        raise WriteRefused(f"{rel}: unbalanced '{begin}' / '{end}' markers") from e
+    if all(x.lstrip().startswith("#") or not x.strip() for x in block.splitlines()):
+        try:
+            text = upsert_block(current, "kb", _codeowners_block(), "hash")
+        except ValueError as e:
+            raise WriteRefused(f"{rel}: {e}") from e
+        if text == current:
+            return [f"{rel} is up to date (kb block)"]
+        write_atomic(root, rel, text)
+        return [f"updated {rel} (kb block; its lines are still commented out: name the approvers)"]
+    missing = [p for p in (*_APPROVAL_PATHS, *_GATE_PATHS) if p not in _paths_in(block)]
+    if not missing:
+        return []
+    return [(f"{rel}: kb's block lacks {', '.join(missing)}: add them (the kb/ paths and /kb.config.yaml for the "
+             "intent approvers as `kb init` lists them, the gate's files for the decision approvers); kb leaves a block "
+             "you edited alone")]
+
+
 def _codeowners_block() -> str:
     lines = [
         "# kb: approvals for the knowledge base. Set policy.approvers in kb.config.yaml, then",

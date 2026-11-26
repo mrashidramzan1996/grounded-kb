@@ -180,3 +180,54 @@ def test_installed_pre_commit_passes_kb_exit_code_through(acme_repo, tmp_path):
     passing = _fake_kb(tmp_path / "pass", 0)
     assert _run_hook_script(hook, [failing, Path("/usr/bin"), Path("/bin")], acme_repo) == 1
     assert _run_hook_script(hook, [passing, Path("/usr/bin"), Path("/bin")], acme_repo) == 0
+
+
+# --- kb/README.md and the CODEOWNERS block (0.4.0 upgrade) -------------------------------------------------------
+
+OLD_README = "# kb: product knowledge base\n\nAn older kb's guide.\n"
+OLD_BLOCK = ("# kb:begin kb\n# kb: approvals for the knowledge base.\n# /kb/requirements/ TODO\n"
+             "# /.github/workflows/kb.yml TODO\n# kb:end kb\n")
+
+
+def _template() -> str:
+    from importlib.resources import files
+
+    return (files("kb.init") / "templates" / "kb_readme.md").read_text(encoding="utf-8")
+
+
+def test_install_refreshes_the_kb_readme_kb_wrote(acme_repo):
+    (acme_repo / "kb").mkdir(exist_ok=True)
+    (acme_repo / "kb/README.md").write_text(OLD_README)
+    r = invoke(acme_repo, "agents", "install", "generic")
+    assert r.exit_code == 0, r.output
+    assert (acme_repo / "kb/README.md").read_text() == _template()
+    assert "updated kb/README.md" in r.stdout
+    again = invoke(acme_repo, "agents", "install", "generic")
+    assert "kb/README.md is up to date" in again.stdout
+
+
+def test_install_leaves_a_readme_kb_did_not_write(acme_repo):
+    (acme_repo / "kb").mkdir(exist_ok=True)
+    (acme_repo / "kb/README.md").write_text("# Our knowledge base\n\nMine.\n")
+    r = invoke(acme_repo, "agents", "install", "generic")
+    assert r.exit_code == 0 and (acme_repo / "kb/README.md").read_text() == "# Our knowledge base\n\nMine.\n"
+    assert "kb/README.md was not written by kb" in r.stdout
+
+
+def test_install_refreshes_an_untouched_codeowners_block_and_reminds_about_an_edited_one(acme_repo):
+    from kb.init.scaffold import _codeowners_block
+
+    (acme_repo / "CODEOWNERS").write_text("* @acme/all\n" + OLD_BLOCK)
+    r = invoke(acme_repo, "agents", "install", "generic")
+    assert r.exit_code == 0, r.output
+    text = (acme_repo / "CODEOWNERS").read_text()
+    assert text.startswith("* @acme/all\n") and _codeowners_block() in text and "updated CODEOWNERS" in r.stdout
+    # once the person has named owners in it, kb only says what the block lacks
+    edited = OLD_BLOCK.replace("# /kb/requirements/ TODO", "/kb/requirements/ @acme/product")
+    (acme_repo / "CODEOWNERS").write_text(edited)
+    r = invoke(acme_repo, "agents", "install", "generic")
+    assert (acme_repo / "CODEOWNERS").read_text() == edited
+    assert "CODEOWNERS: kb's block lacks" in r.stdout
+    for p in ("/kb/eval/", "/kb/baseline/", "/.github/workflows/"):
+        assert p in r.stdout
+    assert "/kb/requirements/," not in r.stdout

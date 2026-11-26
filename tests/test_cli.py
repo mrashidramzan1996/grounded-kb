@@ -108,3 +108,24 @@ def test_readme_covers_the_evaluation_and_the_040_upgrade():
     for cmd in ("kb eval extract", "kb eval judge", "kb eval report --write", "kb eval decide", "kb eval status",
                 "kb eval sample"):
         assert f"`{cmd}" in kb_readme, cmd
+
+
+def test_upgrade_notes_say_what_breaks_and_in_which_order():
+    """0.4.0 upgrade notes (final review): live records whose quotes cut a word or number fail with quote.not_found
+    (errors, not warnings), so they are redrafted before upgrading; the requirement fields are added before the first
+    evaluation; `kb agents install` refreshes kb/README.md and reminds about the CODEOWNERS block."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    readme = (root / "README.md").read_text()
+    intro, rest = readme.split("## Upgrading to 0.4.0\n", 1)[1].split("\n## ", 1)[0].split("\n- ", 1)
+    intro = " ".join(intro.split())
+    assert "with warnings" not in intro or "quote.not_found" in intro
+    assert "`quote.not_found`" in intro and "error" in intro and "kb redraft" in intro and "before upgrading" in intro
+    upgrade = " ".join(rest.split())
+    assert re.search(r"requirement fields.*before the first evaluation", upgrade)
+    assert "kb agents install" in upgrade and "kb/README.md" in upgrade and "CODEOWNERS" in upgrade
+    kb_readme = " ".join((root / "src/kb/init/templates/kb_readme.md").read_text().split())
+    assert "non-space characters is rejected" not in kb_readme
+    assert re.search(r"shorter than 12 non-space characters .*`quote.too_short`.*warning.*error.*drafted", kb_readme)

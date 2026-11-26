@@ -17,7 +17,7 @@ from kb.agents.registry import agent_names, get_agent
 from kb.hooks import run_hook
 from kb.safewrite import WriteRefused
 from kb.baseline import BaselineError, BaselineRefused, freeze_baseline
-from kb.init.scaffold import InitError, init_repo, upsert_agents_md
+from kb.init.scaffold import InitError, codeowners_notice, init_repo, refresh_kb_readme, upsert_agents_md
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, rev_parse, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, recorded_base, write_base, write_brief
@@ -838,7 +838,7 @@ def agents_install(
     ctx: typer.Context,
     names: Annotated[list[str], typer.Argument(help=f"One or more of: {', '.join(agent_names())}.")],
 ) -> None:
-    """Install the session-start and stop hooks (claude-code, codex; claude-code also gets the kb skill) or a git pre-commit hook (generic), and update the kb block of AGENTS.md."""
+    """Install the session-start and stop hooks (claude-code, codex; claude-code also gets the kb skill) or a git pre-commit hook (generic), update the kb block of AGENTS.md and kb's kb/README.md, and check kb's CODEOWNERS block."""
     try:
         integrations = [get_agent(n) for n in names]
     except KeyError as e:
@@ -847,6 +847,9 @@ def agents_install(
     # repositories set up before the playbook existed get it too; checked first, so a refusal writes nothing
     try:
         typer.echo(upsert_agents_md(Path(ctx.obj["root"])))
+        typer.echo(refresh_kb_readme(Path(ctx.obj["root"])))
+        for line in codeowners_notice(Path(ctx.obj["root"])):
+            typer.echo(line)
     except (WriteRefused, OSError) as e:
         typer.echo(f"kb agents install: {e}", err=True)
         raise typer.Exit(2) from e
