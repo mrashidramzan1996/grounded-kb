@@ -3,6 +3,8 @@ followed as written."""
 
 import re
 
+from kb.eval.decisions import _answer_segments, read_summary
+from kb.records.repo import KbRepo
 from helpers import TODO_TRIAGE, commit, invoke, ok, put, todo_json
 from test_todo_eval import INVOICES, ask_ids, do_ids, drafted, evaluate, omission
 
@@ -63,5 +65,70 @@ def test_a_clarification_no_decided_record_quotes_needs_a_new_evaluation(tmp_pat
         "id: REQ-F-002\nstatement: Invoices are paid within 30 days.\nmodality: must\nactor: customer\norigin: stated\n"
         f"evidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: '{INVOICES}'\nmodules:\n- MOD-a\n"))
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    r = invoke(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    assert r.exit_code == 2 and "run the evaluation again" in r.output
+
+
+EXTRA = " Admins must approve every refund over 500 EUR. Users must change their password every 90 days."
+
+
+def _answered(root, text):
+    """The omission answered with `kb clarify` (the given text), a record quoting only ANSWER, decided as added and
+    committed: the same steps as the option-(d) path above."""
+    out = ok(root, "clarify", "--topic", "Invoice payment", "--text", text, "--by", "@alice",
+             "--date", "2026-11-26").stdout
+    ref = re.search(r"SRC-clarifications#seg-\d+", out).group(0)
+    put(root, "kb/requirements/REQ-F-002.yaml", (
+        "id: REQ-F-002\nstatement: Invoices are paid by bank transfer within 30 days.\nmodality: must\n"
+        f"actor: customer\norigin: stated\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: '{INVOICES}'\n"
+        f"  - source: {ref}\n    text: '{ANSWER}'\nmodules:\n- MOD-a\n"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    put(root, "kb/sources/SRC-clarifications/triage.yaml",
+        f"segments:\n  seg-01: 'none: heading: the clarifications file'\n  {ref.split('#')[1]}: [REQ-F-002]\n")
+    ok(root, "ingest", "--report")
+    r = invoke(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    if text == ANSWER:
+        assert r.exit_code == 0, r.output
+    else:  # the answer's section holds rules the record does not quote: no decision can settle it
+        assert r.exit_code == 2 and "run the evaluation again" in r.output
+    commit(root, "the user's answer, recorded")
+    return ref
+
+
+def test_clarification_with_extra_rules_makes_eval_stale(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    _answered(root, ANSWER + EXTRA)
+    # two rules in the answer's section were never evaluated nor quoted: the summary is stale
+    assert "up to date" not in ok(root, "eval", "status").stdout
+    t = todo_json(root)
+    assert any(i.startswith("eval:extract") for i in do_ids(t))
+    r = invoke(root, "baseline", "freeze", "v1")
+    assert r.exit_code == 1
+
+
+def test_rewritten_clarification_section_makes_eval_stale(tmp_path):
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    ok(root, "clarify", "--topic", "Invoice payment", "--text", "Payments are made by card.", "--by", "@alice",
+       "--date", "2026-11-26")
+    commit(root, "an earlier answer")
+    evaluate(root, (omission(root),))
+    # the earlier section is rewritten (not new), and a record quotes the rewritten text
+    path = root / "docs/clarifications.md"
+    path.write_text(path.read_text().replace("Payments are made by card.", ANSWER + EXTRA))
+    ref = "SRC-clarifications#seg-02"
+    ok(root, "ingest", "docs/clarifications.md")
+    put(root, "kb/requirements/REQ-F-002.yaml", (
+        "id: REQ-F-002\nstatement: Invoices are paid by bank transfer within 30 days.\nmodality: must\n"
+        f"actor: customer\norigin: stated\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: '{INVOICES}'\n"
+        f"  - source: {ref}\n    text: '{ANSWER}'\nmodules:\n- MOD-a\n"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    put(root, "kb/sources/SRC-clarifications/triage.yaml",
+        f"segments:\n  seg-01: 'none: heading: the clarifications file'\n  seg-02: [REQ-F-002]\n")
+    ok(root, "ingest", "--report")
+    # a rewritten section is never one of the person's new answers, whatever a decided record quotes of it
+    base = KbRepo.at_ref(root, read_summary(root).commit)
+    assert _answer_segments(KbRepo.load(root), base, {"REQ-F-002"}) == set()
     r = invoke(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
     assert r.exit_code == 2 and "run the evaluation again" in r.output

@@ -39,7 +39,13 @@ from kb.records.models import Evidence, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.safewrite import check_target, write_atomic
-from kb.sources.sentences import Sentence, sentence_key, sentences, text_key
+from kb.sources.sentences import (
+    Sentence,
+    is_normative,
+    sentence_key,
+    sentences,
+    text_key,
+)
 from kb.textfmt import inline_code
 from kb.yamlio import YamlError, dump_yaml, load_yaml_strict
 
@@ -778,10 +784,11 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
 
 
 def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[str, str]]:
-    """The segments of docs/clarifications.md (kb clarify's file of a person's answers) new since the evaluated
-    commit that one of the records `rids` (pinned by a decision) quotes, with the file's fixed header: the answer a
-    person gave for that decision, which the decided record holds. Any other new clarification needs a new
-    evaluation."""
+    """The segments of docs/clarifications.md (kb clarify's file of a person's answers) that the freshness fingerprint
+    leaves out, with the file's fixed header: a section that is new since the evaluated commit (absent there by segment
+    id and by hash; a rewritten section never is) and whose rule-like sentences the records `rids` (pinned by a
+    decision) all quote, so that every rule in it was decided on. A section with a rule no such record quotes, or one
+    that was rewritten, needs a new evaluation."""
     src = next((sid for sid, s in repo.sources.items() if s.original == CLARIFICATIONS), None)
     if src is None:
         return set()
@@ -789,11 +796,20 @@ def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[st
               for _, s, a, b in located_quotes(repo, ev) if s == src]
     if not quoted:
         return set()
-    before = {(seg.id, seg.hash) for seg in base.segments(src)} if src in base.sources else set()
+    old = base.segments(src) if src in base.sources else []
+    ids, hashes = {seg.id for seg in old}, {seg.hash for seg in old}
     text = repo.source_text(src)
-    return {(src, seg.id) for seg in repo.segments(src) if (seg.id, seg.hash) not in before
-            and (any(max(a, seg.start) < min(b, seg.end) for a, b in quoted)
-                 or text[seg.start:seg.end].strip() == CLARIFICATIONS_HEADER.strip())}
+    rules = [s for s in sentences(repo, src) if is_normative(s)]
+    out: set[tuple[str, str]] = set()
+    for seg in repo.segments(src):
+        if seg.id in ids or seg.hash in hashes:
+            continue
+        header = text[seg.start:seg.end].strip() == CLARIFICATIONS_HEADER.strip()
+        in_seg = [r for r in rules if max(r.start, seg.start) < min(r.end, seg.end)]
+        quoted_here = any(max(a, seg.start) < min(b, seg.end) for a, b in quoted)
+        if header or (quoted_here and all(any(max(a, r.start) < min(b, r.end) for a, b in quoted) for r in in_seg)):
+            out.add((src, seg.id))
+    return out
 
 
 @dataclass(frozen=True)
