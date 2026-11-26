@@ -2,7 +2,7 @@
 
 import json
 
-from helpers import apply_drafts, codes, commit, git, invoke, make_git_repo, req
+from helpers import apply_drafts, codes, commit, git, invoke, make_git_repo, put, req
 
 from kb.gates.base import run_gates
 from kb.gates.quotes import quote_gate
@@ -169,3 +169,66 @@ def test_must_never_is_not_must(tmp_path):
     q = "Seats must never be removed."
     assert _mismatch(_check(tmp_path / "a", q, "must")[0]) == ["requirement.modality_mismatch"]
     assert _mismatch(_check(tmp_path / "b", q, "must_not")[0]) == []
+
+
+# --- statement vs quote (0.4.1) ---------------------------------------------------------------
+
+
+def _stmt(tmp_path, quote, statement, actor="the system", modality="must", extra=None):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    files = {"kb.config.yaml": CONFIG, "docs/n.md": f"# Rules\n\n{quote}\n"} | (extra or {})
+    root = make_git_repo(None, tmp_path, extra=files)
+    assert invoke(root, "ingest").exit_code == 0
+    (root / "kb/requirements").mkdir(parents=True, exist_ok=True)
+    (root / "kb/requirements/REQ-F-001.yaml").write_text(
+        f"id: REQ-F-001\nstatement: {statement!r}\nmodality: {modality}\nactor: {actor!r}\norigin: stated\n"
+        f"evidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: {quote!r}\nmodules:\n- MOD-a\n")
+    return root, _issues(root)
+
+
+def test_statement_modal_differs_from_quote(tmp_path):
+    _, issues = _stmt(tmp_path, "Seats should not be charged.", "Seats must not be charged.", modality="should")
+    assert "requirement.statement_modality_mismatch" in codes(issues)
+    _, ok = _stmt(tmp_path / "ok", "Seats must not be charged.", "Seats must not be charged.", modality="must_not")
+    assert "requirement.statement_modality_mismatch" not in codes(ok)
+
+
+def test_number_present_but_wrong_place(tmp_path):
+    q = "Retries happen 5 times; refunds above 3 days need approval."
+    _, issues = _stmt(tmp_path, q, "Retries happen 3 times.", modality="must")
+    assert "requirement.number_mismatch" in codes(issues)
+    _, ok = _stmt(tmp_path / "ok", q, "Retries happen 5 times.", modality="must")
+    assert "requirement.number_mismatch" not in codes(ok)
+
+
+def test_actor_not_in_quote(tmp_path):
+    q = "Seats must be removed at the end of the cycle."
+    _, issues = _stmt(tmp_path, q, q, actor="billing admin")
+    assert "requirement.actor_not_in_quote" in codes(issues)
+    _, ok = _stmt(tmp_path / "ok", q, q, actor="seats")
+    assert "requirement.actor_not_in_quote" not in codes(ok)
+
+
+def test_actor_term_name_in_quote_passes(tmp_path):
+    q = "Billing admins must approve refunds."
+    term = "kb/glossary/TERM-billing-admin.yaml"
+    root, _ = _stmt(tmp_path, q, q, actor="the system")
+    put(root, term, "id: TERM-billing-admin\nname: Billing admin\naliases: [billing admins]\ndefinition: Pays.\n")
+    path = root / "kb/requirements/REQ-F-001.yaml"
+    path.write_text(path.read_text().replace("actor: the system", "actor: TERM-billing-admin"))
+    assert "requirement.actor_not_in_quote" not in codes(_issues(root))
+
+
+def test_duplicate_quote(tmp_path):
+    q = "Seats must be removed at the end of the cycle."
+    root, _ = _stmt(tmp_path, q, q)
+    put(root, "kb/requirements/REQ-F-002.yaml", (root / "kb/requirements/REQ-F-001.yaml").read_text().replace("REQ-F-001", "REQ-F-002"))
+    hits = [(i.record, i.severity) for i in _issues(root) if i.code == "record.duplicate_quote"]
+    assert hits == [("REQ-F-002", "warning")]
+
+
+def test_new_checks_escalate_only_for_the_two_statement_codes():
+    from kb.ingest.report import DRAFTED_ERRORS
+
+    assert {"requirement.statement_modality_mismatch", "requirement.number_mismatch"} <= set(DRAFTED_ERRORS)
+    assert not {"requirement.actor_not_in_quote", "record.duplicate_quote"} & set(DRAFTED_ERRORS)

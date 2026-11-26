@@ -65,7 +65,7 @@ def test_numbers_in_adr_title_and_body_must_be_quoted(valid_ctx_with):
 
     quote = {"quotes": [{"source": "SRC-pricing-spec-v3#seg-04", "text": "All amounts are stored and calculated in integer cents."}]}
     ctx = valid_ctx_with(add_adr("ADR-0050", title="Keep 3 decimals", evidence=quote))
-    (issue,) = [i for i in run_gates(ctx, [quote_gate]) if i.record == "ADR-0050"]
+    (issue,) = [i for i in run_gates(ctx, [quote_gate]) if i.record == "ADR-0050" and i.code != "record.duplicate_quote"]  # it reuses ADR-0002's quote
     assert issue.code == "statement.number_not_in_quote" and "3" in issue.message
 
     def body_number(files):
@@ -75,7 +75,7 @@ def test_numbers_in_adr_title_and_body_must_be_quoted(valid_ctx_with):
             b"---\nRounding happens 2 times per invoice.\n"
         )
 
-    assert codes([i for i in run_gates(valid_ctx_with(body_number), [quote_gate]) if i.record == "ADR-0051"]) == [
+    assert codes([i for i in run_gates(valid_ctx_with(body_number), [quote_gate]) if i.record == "ADR-0051" and i.code != "record.duplicate_quote"]) == [
         "statement.number_not_in_quote"
     ]
 

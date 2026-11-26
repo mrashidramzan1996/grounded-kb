@@ -14,9 +14,10 @@ from kb.records.models import (
     Invariant,
     Quote,
     Requirement,
+    Term,
 )
 from kb.records.repo import KbRepo
-from kb.sources.sentences import cues
+from kb.sources.sentences import cues, sentences
 from kb.textfmt import inline_code
 
 MAX_QUOTES_PER_CLAIM = 5
@@ -125,6 +126,103 @@ def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], pat
     return issues
 
 
+_WORD = re.compile(r"[a-z0-9]+")
+_SEMICOLON = re.compile(r";\s*")
+_GENERIC_ACTORS = {"system", "the system", "it", "kb"}
+DUPLICATE_OVERLAP = 0.8
+
+
+def _words(text: str) -> list[str]:
+    """Lower-cased words, a plural s dropped, articles left out."""
+    return [w.rstrip("s") or w for w in _WORD.findall(text.lower()) if w not in ("a", "an", "the")]
+
+
+def _statement_modals(statement: str) -> set[str]:
+    return {_MODALITY_CUES[c] for c in cues(statement) if c in _MODALITY_CUES}
+
+
+def _clauses(repo: KbRepo, located: list[tuple[Quote, str, int, int]]) -> list[tuple[str, frozenset[str]]]:
+    """(text, cues) of each clause (Task 1 units) inside the found quotes, clipped to the quote."""
+    out: list[tuple[str, frozenset[str]]] = []
+    for _, src, start, end in located:
+        text = repo.source_text(src)
+        for s in sentences(repo, src):
+            a, b = max(s.start, start), min(s.end, end)
+            if a < b:  # a clause unit can still hold two statements joined by a semicolon
+                out.extend((part, cues(part) or s.cues) for part in _SEMICOLON.split(text[a:b]) if part.strip())
+    return out
+
+
+def _number_issue(repo: KbRepo, rec: Requirement, located: list[tuple[Quote, str, int, int]]) -> str | None:
+    """The statement numbers a found quote carries, but not in the clause that says what the statement says."""
+    clauses = _clauses(repo, located)
+    wanted = _statement_modals(rec.statement)
+    pool = [c for c in clauses if wanted & {_MODALITY_CUES[k] for k in c[1] if k in _MODALITY_CUES}] or clauses
+    mine = set(_words(_ID_LIKE.sub(" ", rec.statement)))
+    scored = [(len(mine & set(_words(c[0]))), c[0]) for c in pool]
+    best = max((n for n, _ in scored), default=0)
+    main = [t for n, t in scored if n == best] if best else [t for _, t in scored]
+    in_quotes = set().union(*(numbers(c[0]) for c in clauses)) if clauses else set()
+    wrong = sorted(n for n in numbers(rec.statement) & in_quotes if not any(n in numbers(t) for t in main))
+    return ", ".join(wrong) or None
+
+
+def _actor_names(repo: KbRepo, actor: str) -> list[str]:
+    term = repo.records.get(actor)
+    return [term.name, *term.aliases] if isinstance(term, Term) else [actor]
+
+
+def statement_issues(repo: KbRepo, rid: str, rec: Requirement, ev: Evidence, path: str) -> list[Issue]:
+    """The statement and the actor against the found quotes: modality, numbers, actor (all warnings in check)."""
+    located = located_quotes(repo, ev)
+    if not located:
+        return []
+    issues: list[Issue] = []
+    seen = {_MODALITY_CUES[c] for q, *_ in located for c in cues(q.text) if c in _MODALITY_CUES}
+    stated = _statement_modals(rec.statement)
+    if seen and stated and stated.isdisjoint(seen):
+        issues.append(Issue("requirement.statement_modality_mismatch",
+                            f"{rid}: the statement says {', '.join(sorted(stated))} but the quote says {', '.join(sorted(seen))}",
+                            "warning", path, rid))
+    wrong = _number_issue(repo, rec, located)
+    if wrong:
+        issues.append(Issue("requirement.number_mismatch",
+                            f"{rid}: statement numbers not in the quote clause that says the same thing: {wrong}", "warning", path, rid))
+    actor = (rec.actor or "").strip()
+    if actor and actor.lower() not in _GENERIC_ACTORS and not actor.lower().endswith(" system"):  # "the billing system"
+        quoted = {w for q, *_ in located for w in _words(q.text)}
+        if not any(ws and set(ws) <= quoted for ws in (_words(n) for n in _actor_names(repo, actor))):
+            issues.append(Issue("requirement.actor_not_in_quote",
+                                f"{rid}: actor {inline_code(actor)} is not named in the quote; check it against the document", "warning", path, rid))
+    return issues
+
+
+def duplicate_quote_issues(repo: KbRepo) -> list[Issue]:
+    """record.duplicate_quote on the later of two live covering records whose found quotes overlap by at least 80% of the
+    shorter one, unless one supersedes the other. Records of different types (an ADR and a requirement drafted from the
+    same sentence) are not duplicates."""
+    from kb.gates.coverage import quote_spans
+
+    linked = {frozenset((rid, rec.supersedes)) for rid, rec in repo.records.items() if isinstance(rec, (Decision, Invariant)) and rec.supersedes}
+    issues: list[Issue] = []
+    reported: set[tuple[str, str]] = set()
+    for spans in quote_spans(repo).values():
+        for i, (a1, b1, r1) in enumerate(spans):
+            for a2, b2, r2 in spans[i + 1 :]:
+                if a2 >= b1:
+                    break  # sorted by start: nothing later overlaps
+                if r1 == r2 or frozenset((r1, r2)) in linked or type(repo.records[r1]) is not type(repo.records[r2]):
+                    continue
+                shorter = min(b1 - a1, b2 - a2)
+                if min(b1, b2) - a2 >= DUPLICATE_OVERLAP * shorter:
+                    early, late = sorted((r1, r2))
+                    if (early, late) not in reported:
+                        reported.add((early, late))
+                        issues.append(Issue("record.duplicate_quote", f"{late}: quotes the same text as {early}; merge them or supersede one",
+                                            "warning", repo.paths[late], late))
+    return sorted(issues, key=lambda i: (i.record or "", i.message))
+
+
 def evidence_issues(repo: KbRepo, rid: str, ev: Evidence, found: list[Quote], live: bool, path: str) -> list[Issue]:
     """quote.too_many, quote.too_short and quote.not_found for one record's evidence; `found` is quote_results'."""
     issues: list[Issue] = []
@@ -155,6 +253,7 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
     repo, issues = ctx.repo, []
     live = live_ids(repo)
     issues.extend(feature_number_issues(repo))
+    issues.extend(duplicate_quote_issues(repo))
     for rid, rec in sorted(repo.records.items()):
         if not isinstance(rec, QUOTED_TYPES):
             continue
@@ -171,6 +270,7 @@ def quote_gate(ctx: GateContext) -> list[Issue]:
         found, _ = quote_results(repo, ev)
         if isinstance(rec, Requirement):
             issues.extend(requirement_field_issues(rid, rec, found, path))
+            issues.extend(statement_issues(repo, rid, rec, ev, path))
         issues.extend(evidence_issues(repo, rid, ev, found, rid in live, path))
         grounded = set().union(*(numbers(q.text) for q in found))  # only quotes that exist ground a number
         missing = sorted(numbers(_claimed_text(rec)) - grounded)

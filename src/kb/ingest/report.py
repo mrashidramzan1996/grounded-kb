@@ -35,7 +35,8 @@ GATES = [id_gate, decision_guard, quote_gate, entity_gate, anchor_gate, source_g
 BASE_GATES = [g for g in GATES if g is not source_gate]
 TRIAGE_ERRORS = ("triage.none_uncoded", "triage.not_quoted")
 # warnings in `kb check` that are errors on a record drafted in the range
-DRAFTED_ERRORS = ("requirement.fields_missing", "requirement.modality_mismatch", "entity.name_not_in_quote",
+DRAFTED_ERRORS = ("requirement.fields_missing", "requirement.modality_mismatch", "requirement.statement_modality_mismatch",
+                  "requirement.number_mismatch", "entity.name_not_in_quote",
                   "relation.entities_not_in_quote", "entity.alias_invalid", "entity.alias_conflict", "entity.unquoted")
 TRIAGE_FILE = re.compile(r"kb/sources/SRC-[^/]+/triage\.yaml")
 ORIGINAL_CHANGED = (

@@ -98,6 +98,7 @@ def test_supersede_adr_after_document_change(tmp_path):
 def _req(rid: str, text: str, seg: str) -> str:
     req = REQ.format(statement=text, quote=text, flags="")
     req = req if rid.startswith("REQ-NF-") else req.replace("category: performance\n", "")  # category is for REQ-NF only
+    req = req.replace("actor: the pages", "actor: " + text.split()[0].lower())  # the actor is named in the quote
     return (req.replace("REQ-NF-001", rid)
             .replace("seg-01", seg).replace("kb ingest brief", "kb redraft brief"))
 
