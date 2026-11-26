@@ -267,3 +267,23 @@ def test_new_checks_escalate_only_for_the_two_statement_codes():
 
     assert {"requirement.statement_modality_mismatch", "requirement.number_mismatch"} <= set(DRAFTED_ERRORS)
     assert not {"requirement.actor_not_in_quote", "record.duplicate_quote"} & set(DRAFTED_ERRORS)
+
+
+def test_only_may_also_says_must_not(tmp_path):
+    q = "Only an Admin may change the plan."
+    assert _mismatch(_check(tmp_path / "a", q, "may")[0]) == []
+    assert _mismatch(_check(tmp_path / "b", q, "must_not")[0]) == []
+    assert _mismatch(_check(tmp_path / "c", q, "must")[0]) == ["requirement.modality_mismatch"]
+    # without `only`, may stays may
+    assert _mismatch(_check(tmp_path / "d", "An Admin may change the plan.", "must_not")[0]) == ["requirement.modality_mismatch"]
+
+
+def test_only_may_quote_accepts_a_must_not_statement(tmp_path):
+    q = "Only an Admin may change the plan."
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": CONFIG, "docs/n.md": f"# Rules\n\n{q}\n"})
+    assert invoke(root, "ingest").exit_code == 0
+    (root / "kb/requirements").mkdir(parents=True, exist_ok=True)
+    (root / "kb/requirements/REQ-F-001.yaml").write_text(
+        "id: REQ-F-001\nstatement: Non-admins must not change the plan.\nmodality: must_not\nactor: the system\n"
+        f"evidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: {q!r}\nmodules:\n- MOD-a\n")
+    assert [i.code for i in _issues(root) if i.code.startswith("requirement.")] == []

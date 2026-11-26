@@ -107,6 +107,22 @@ def quote_results(repo: KbRepo, evidence: Evidence) -> tuple[list[Quote], list[Q
 _MODALITY_CUES = {"must": "must", "must_not": "must_not", "should": "should", "may": "may"}
 
 
+_ONLY = re.compile(r"\bonly\b", re.IGNORECASE)
+
+
+def _seen_modals(texts) -> set[str]:
+    """The modalities the quote texts say. "Only an Admin may change X" also says that everyone else must not: a
+    clause that has `only` together with `may` counts as must_not too."""
+    seen: set[str] = set()
+    for text in texts:
+        for part in re.split(r";\s*", text):
+            found = cues(part)
+            seen |= {_MODALITY_CUES[c] for c in found if c in _MODALITY_CUES}
+            if "may" in found and _ONLY.search(part):
+                seen.add("must_not")
+    return seen
+
+
 def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], path: str) -> list[Issue]:
     """The classification fields against the record's found quotes."""
     issues: list[Issue] = []
@@ -119,7 +135,7 @@ def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], pat
     if rec.origin == "implied" and not any(q.source.partition("#")[0] == "SRC-clarifications" for q in found):
         issues.append(Issue("requirement.implied_unconfirmed",
                             f"{rid}: origin is implied and no found quote cites SRC-clarifications; a person must confirm it", "warning", path, rid))
-    seen = {_MODALITY_CUES[c] for q in found for c in cues(q.text) if c in _MODALITY_CUES}
+    seen = _seen_modals(q.text for q in found)
     if seen and rec.modality is not None and rec.modality not in seen:
         issues.append(Issue("requirement.modality_mismatch",
                             f"{rid}: modality {rec.modality} but the quote says {', '.join(sorted(seen))}", "warning", path, rid))
@@ -196,7 +212,7 @@ def statement_issues(repo: KbRepo, rid: str, rec: Requirement, ev: Evidence, pat
     if not located:
         return []
     issues: list[Issue] = []
-    seen = {_MODALITY_CUES[c] for q, *_ in located for c in cues(q.text) if c in _MODALITY_CUES}
+    seen = _seen_modals(q.text for q, *_ in located)
     stated = _statement_modals(rec.statement)
     if seen and stated and stated.isdisjoint(seen):
         issues.append(Issue("requirement.statement_modality_mismatch",
