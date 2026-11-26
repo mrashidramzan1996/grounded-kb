@@ -332,3 +332,18 @@ def test_gitlink_codeowners_raises_and_does_not_fall_through(tmp_path):
     _gitlink(root, ".github/CODEOWNERS")
     with pytest.raises(GitError, match="CODEOWNERS.*not a file"):
         load_policy(root, "main", head_cfg(root))
+
+
+def test_workflows_dir_replaced_by_a_symlink_is_a_change_not_an_error(tmp_path):
+    """`.github/workflows` replaced by a symlink makes the tip's workflow unreadable as a file: that is a changed
+    policy file (it needs the decision approvers), not a git error that stops the run."""
+    import shutil
+
+    from kb.verify.approvals import policy_files_changed
+
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": BASE_CONFIG, ".github/workflows/ci.yml": "on: push\n"})
+    tip = sha(root)
+    shutil.rmtree(root / ".github/workflows")
+    (root / "elsewhere").mkdir()
+    (root / ".github/workflows").symlink_to(root / "elsewhere")
+    assert ".github/workflows/ci.yml" in policy_files_changed(root, tip)
