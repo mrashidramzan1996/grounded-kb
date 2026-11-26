@@ -14,6 +14,8 @@ These come first: where the rules below say otherwise, follow these.
 
 - Do not read kb/glossary/, kb/sources/*/triage.yaml or .kb/cache/ingest/ either: they hold the first extraction's
   entities, triage and brief. Read only this brief and, for module names, `kb.config.yaml`.
+- Do not run `git log` or `git show`, and do not read commit messages or branch names: they leak titles and ids of the
+  first extraction's records.
 - Write every file under `$run_b/`, laid out like `kb/`: requirements in `$run_b/requirements/B-REQ-F-….yaml`
   and `$run_b/requirements/B-REQ-NF-….yaml`, exclusions in `$run_b/exclusions/B-EXCL-….yaml`, decisions in
   `$run_b/decisions/B-ADR-….md`, invariants in `$run_b/invariants/B-INV-….md` and entities in

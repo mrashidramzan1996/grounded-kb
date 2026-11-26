@@ -17,8 +17,8 @@ Once nothing else is left to do, `kb todo` lists the evaluation's `eval:` items,
 
 - `eval:extract`: run `kb eval extract`.
 - `eval:run-b`: start a fresh session or subagent and have it follow `.kb/cache/eval/extract.md`. It must not read
-  the existing records under `kb/`, the triage files or `.kb/cache/ingest/`; it writes only under
-  `.kb/cache/eval/run-b/`. Then run `kb eval judge`.
+  the existing records under `kb/`, the triage files or `.kb/cache/ingest/`, and must not run `git log` or `git show`
+  or read commit messages; it writes only under `.kb/cache/eval/run-b/`. You never write or edit run-b files yourself. Then run `kb eval judge`.
 - `eval:judge`: run `kb eval judge`.
 - `eval:verdicts`: have another fresh session or subagent follow `.kb/cache/eval/judge.md`, judging each item on its
   own and flagging whenever it is unsure. It writes `.kb/cache/eval/verdicts.yaml`. Then run

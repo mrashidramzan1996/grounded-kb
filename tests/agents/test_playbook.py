@@ -214,9 +214,11 @@ def test_playbook_says_when_to_start_the_branch():
 EVAL_STEPS = [
     "Before freezing a baseline, and after adding or changing documents, evaluate the extraction: when `kb todo` lists "
     "`eval:` items, follow them in order; do the blind extraction in a fresh session or subagent that does not read the "
-    "existing records.",
+    "existing records. The blind extraction subagent writes `.kb/cache/eval/run-b/`; you never write or edit run-b "
+    "files yourself.",
     "Judge each evaluation item on its own and over-flag; never decide a finding yourself — ask the user, then record "
-    "their answer with `kb eval decide --by <their handle>`.",
+    "their answer with `kb eval decide --by <their handle>`. Resolve evaluation findings one at a time: make the "
+    "edit, then run its `kb eval decide` before the next edit.",
     "Put the output of `kb eval sample` in every pull-request description after the baseline.",
 ]
 
@@ -231,3 +233,26 @@ def test_playbook_has_eval_steps(tmp_path, acme_repo):
     skill = (acme_repo / SKILL).read_text()
     for line in EVAL_STEPS:
         assert line in agents and line in skill
+
+
+def test_playbook_keeps_run_b_blind_and_decides_findings_one_at_a_time():
+    text = "\n".join(PLAYBOOK)
+    assert ("The blind extraction subagent writes `.kb/cache/eval/run-b/`; you never write or edit run-b files "
+            "yourself.") in text
+    assert ("Resolve evaluation findings one at a time: make the edit, then run its `kb eval decide` before the next "
+            "edit.") in text
+
+
+def test_blind_brief_forbids_git_history(md_repo_ingested):
+    from kb.config.load import load_config
+    from kb.eval.extract import build_extract_brief
+
+    root = md_repo_ingested
+    brief = build_extract_brief(root, load_config(root / "kb.config.yaml"))
+    assert "`git log`" in brief and "`git show`" in brief and "commit messages" in brief
+
+
+def test_skill_run_b_bullet_forbids_git_history(acme_repo):
+    get_agent("claude-code").install(acme_repo)
+    text = (acme_repo / SKILL).read_text()
+    assert "`git log`" in text and "`git show`" in text
