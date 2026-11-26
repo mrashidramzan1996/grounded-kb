@@ -21,7 +21,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from kb.clarify import MAX_BY, ClarifyError, _plain
+from kb.clarify import _HEADER as CLARIFICATIONS_HEADER
+from kb.clarify import CLARIFICATIONS, MAX_BY, ClarifyError, _plain
 from kb.eval import EvalError
 from kb.eval.findings import SUMMARY, fingerprint
 from kb.gates.coverage import COVERING_TYPES
@@ -740,8 +741,9 @@ def dismissed_open(summary: Summary, decisions: Iterable[Decision]) -> list[Dism
 def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decision]) -> bool:
     """Whether the summary still describes the knowledge base: its fingerprint is the current one, or the only
     changes since the evaluated commit are to records a person's decision on one of this summary's findings named
-    (a record added for an omission, or fixed). Anything else (another record, any document text) needs a new
-    evaluation."""
+    (a record added for an omission, or fixed), and the new sections of docs/clarifications.md those records quote
+    (the person's answer, recorded with `kb clarify`). Anything else (another record, any other document text) needs
+    a new evaluation."""
     if summary.fingerprint == fingerprint(repo):
         return True
     by_id = {f.id: f for f in summary_findings(summary, decisions)}
@@ -768,7 +770,28 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
     if any(d.decision == "added" and finding_kind(f) == "omission" and d.record in base.records for d, f in pins):
         return False
     touched = {d.record for d, _ in pins if d.record}
-    return fingerprint(base) == summary.fingerprint and fingerprint(repo, skip=touched) == fingerprint(base, skip=touched)
+    answers = _answer_segments(repo, base, touched)
+    return (fingerprint(base) == summary.fingerprint
+            and fingerprint(repo, skip=touched, skip_segments=answers) == fingerprint(base, skip=touched))
+
+
+def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[str, str]]:
+    """The segments of docs/clarifications.md (kb clarify's file of a person's answers) new since the evaluated
+    commit that one of the records `rids` (pinned by a decision) quotes, with the file's fixed header: the answer a
+    person gave for that decision, which the decided record holds. Any other new clarification needs a new
+    evaluation."""
+    src = next((sid for sid, s in repo.sources.items() if s.original == CLARIFICATIONS), None)
+    if src is None:
+        return set()
+    quoted = [(a, b) for rid in sorted(rids) if (ev := getattr(repo.records.get(rid), "evidence", None)) is not None
+              for _, s, a, b in located_quotes(repo, ev) if s == src]
+    if not quoted:
+        return set()
+    before = {(seg.id, seg.hash) for seg in base.segments(src)} if src in base.sources else set()
+    text = repo.source_text(src)
+    return {(src, seg.id) for seg in repo.segments(src) if (seg.id, seg.hash) not in before
+            and (any(max(a, seg.start) < min(b, seg.end) for a, b in quoted)
+                 or text[seg.start:seg.end].strip() == CLARIFICATIONS_HEADER.strip())}
 
 
 @dataclass(frozen=True)

@@ -156,19 +156,22 @@ def dismissed_dict(d: Dismissed) -> dict:
     return asdict(d) | {"related": list(d.related), "ends": [list(e) for e in d.ends]}
 
 
-def fingerprint(repo: KbRepo, skip: Iterable[str] = ()) -> str:
+def fingerprint(repo: KbRepo, skip: Iterable[str] = (), skip_segments: Iterable[tuple[str, str]] = ()) -> str:
     """What was evaluated: sha256 over the live records (id and raw bytes, by id) and every stored source's segment
     hashes, first 16 hex characters. kb/eval/ holds no record, so the summary and decisions never change it. `skip`
-    leaves those records out (kb.eval.decisions.is_fresh: records a person's decision settled)."""
+    leaves those records out (kb.eval.decisions.is_fresh: records a person's decision settled), `skip_segments` those
+    (source id, segment id) segments (the person's answers such a record quotes)."""
     # triage is left out on purpose: which S items exist depends only on quotes (records) and decisions, not on triage
     h = hashlib.sha256()
     for rid in sorted(live_ids(repo) - set(skip)):
         data = repo.raw.get(repo.paths[rid], b"")
         h.update(f"record {rid} {len(data)}\n".encode())
         h.update(data)
+    left_out = set(skip_segments)
     for src in sorted(repo.sources):
         for seg in repo.segments(src):
-            h.update(f"segment {src}#{seg.id} {seg.hash}\n".encode())
+            if (src, seg.id) not in left_out:
+                h.update(f"segment {src}#{seg.id} {seg.hash}\n".encode())
     return h.hexdigest()[:16]
 
 

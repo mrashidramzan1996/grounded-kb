@@ -449,7 +449,7 @@ def _baseline_requirements(root: Path, version: str) -> object:
 def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pending: bool,
                  status: EvalStatus | None = None) -> list[AskItem]:
     """Offer the next baseline when nothing else is left (no error, no do item, no ask but flag asks: keeping a
-    flag is a valid answer), there is a live requirement, HEAD is the tip of the default branch with kb/ and
+    flag is a valid answer; not even the optional categories question, whose answer dirties kb/), there is a live requirement, HEAD is the tip of the default branch with kb/ and
     kb.config.yaml committed (once a baseline exists, also checked out by name: never on a pull-request branch, even
     one still at that tip, nor on a detached HEAD), the live requirements differ from the `latest` baseline (or there
     is none), and `kb baseline freeze` would accept the next version (kb and kb/baseline are no symlinks, its tag is
@@ -480,9 +480,9 @@ def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pend
     return [AskItem(
         f"freeze:{version}", "freeze", question[0], {},
         (
-            Option("freeze", "Freeze it", f"`kb baseline freeze {version}`, then commit `kb/baseline/{version}.yaml` on "
-                   f"a new branch (not named kb-baseline-{version}) and open a pull request for review; never merge it "
-                   "yourself"),
+            Option("freeze", "Freeze it", f"commit pending changes and run `kb todo` again, then `kb baseline freeze "
+                   f"{version}`, then commit `kb/baseline/{version}.yaml` on a new branch (not named "
+                   f"kb-baseline-{version}) and open a pull request for review; never merge it yourself"),
             Option("later", "Not yet", "leave it"),
         ),
         question[1],
@@ -566,7 +566,8 @@ def _finding_ask(f: SummaryFinding, repo: KbRepo) -> AskItem:
             Option("covered", "Already covered by a record", _decide(fid, "--as covered --record <id>")),
             Option("not_a_rule", "Not a rule", _decide(fid, "--as not_a_rule --reason <why>")),
             Option("product", "Needs a product decision",
-                   "record the user's answer with `kb clarify`, draft from it, then decide `--as added`"),
+                   "record the user's answer with `kb clarify`, draft a record that quotes both the document sentence and "
+                   "the clarification, run `kb ingest --report`, then " + _decide(fid, "--as added --record <new id>")),
         )
         ask_kind = "omission"
     elif kind in ("entity", "relation"):
@@ -725,8 +726,11 @@ def build_todo(root: Path) -> Todo:
     frozen = latest is not None or has_tag_matching(root, "kb-baseline-*")
     if do and frozen and (branch := _on_default_branch(root)) is not None:
         do.insert(0, _branch_item(root, branch))
-    ask = (_flag_asks(repo) + blocking + _categories_ask(repo, status)
-           + _freeze_asks(root, repo, latest, errors, bool(do or blocking), status))
+    categories = _categories_ask(repo, status)
+    # never the freeze beside an evaluation question: answering both at once fails (a decision dirties kb/, and the
+    # freeze refuses a dirty kb/), and the freeze refuses an evaluation not yet settled
+    ask = (_flag_asks(repo) + blocking + categories
+           + _freeze_asks(root, repo, latest, errors, bool(do or blocking or categories), status))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
         "warnings": len(issues) - errors, "baseline": latest, "clean": not errors and not do and not blocking,

@@ -182,9 +182,14 @@ def test_full_eval_loop(tmp_path):
     assert do_ids(todo(repo)) == ["commit"]
     commit(repo, "added what the evaluation found")
 
-    # nothing open, the summary still current (only decided records changed): clean, and the freeze is offered
+    # nothing open, the summary still current (only decided records changed): clean; the optional categories question
+    # comes first (the freeze waits for it: its answer dirties kb/), then the freeze is offered
     t = todo(repo)
     assert t["do"] == [] and t["state"]["clean"] and t["state"]["blocking_asks"] == 0 and t["state"]["errors"] == 0
+    assert [a["id"] for a in t["ask"]] == ["categories"]
+    kb(repo, "eval", "decide", "categories", "--as", "not_a_rule", "--reason", "An internal tool.", "--by", BY)
+    commit(repo, "categories")
+    t = todo(repo)
     assert "freeze:v1" in [a["id"] for a in t["ask"]]
     assert not any(a["id"].startswith("finding:") for a in t["ask"])
     out = kb(repo, "check").output

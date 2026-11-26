@@ -68,6 +68,12 @@ def evaluate(root: Path, findings: tuple[Finding, ...] = ()) -> None:
     commit(root, "evaluated")
 
 
+def none_apply(root: Path) -> None:
+    """A person's answer to the categories question (no security, privacy or availability requirement), committed."""
+    ok(root, "eval", "decide", "categories", "--as", "not_a_rule", "--reason", "None apply.", "--by", "@alice")
+    commit(root, "categories")
+
+
 def omission(root: Path, fid: str = "F-0123456789") -> Finding:
     return Finding(fid, f"S:{key_of(root, INVOICES)}", "omission", "SRC-n#seg-01", INVOICES, "high", 3, (), "",
                    "requirement")
@@ -137,7 +143,9 @@ def test_todo_eval_sequence(tmp_path):
                                     f"`kb eval decide {fid} --as added --record <new id> --by <handle>`")),
         ("Already covered by a record", f"`kb eval decide {fid} --as covered --record <id> --by <handle>`"),
         ("Not a rule", f"`kb eval decide {fid} --as not_a_rule --reason <why> --by <handle>`"),
-        ("Needs a product decision", "record the user's answer with `kb clarify`, draft from it, then decide `--as added`"),
+        ("Needs a product decision", ("record the user's answer with `kb clarify`, draft a record that quotes both the "
+                                      "document sentence and the clarification, run `kb ingest --report`, then "
+                                      f"`kb eval decide {fid} --as added --record <new id> --by <handle>`")),
     ]
     # canonical ids never appear: not in the JSON, not in the text form
     text = ok(root, "todo").stdout
@@ -150,12 +158,15 @@ def test_todo_eval_sequence(tmp_path):
     commit(root, "decided")
     t = todo_json(root)
     assert do_ids(t) == [] and t["state"]["clean"] and t["state"]["blocking_asks"] == 0
-    assert f"finding:{fid}" not in ask_ids(t) and "freeze:v1" in ask_ids(t)
+    assert f"finding:{fid}" not in ask_ids(t) and ask_ids(t) == ["categories"]  # the freeze waits for it
+    none_apply(root)
+    assert "freeze:v1" in ask_ids(todo_json(root))
 
 
 def test_open_findings_block_freeze(tmp_path):
     root = drafted(tmp_path)
     evaluate(root)
+    none_apply(root)
     t = todo_json(root)
     assert t["state"]["clean"] and "freeze:v1" in ask_ids(t)  # evaluated, nothing open
     evaluate(root, (omission(root),))
@@ -182,6 +193,7 @@ def test_implied_requirement_ask(tmp_path):
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
     commit(root, "implied")
     evaluate(root)
+    none_apply(root)
     t = todo_json(root)
     assert "implied:REQ-F-002" in ask_ids(t) and not any(a.startswith("freeze:") for a in ask_ids(t))
     assert not t["state"]["clean"] and t["state"]["blocking_asks"] == 1
@@ -211,8 +223,8 @@ def test_categories_ask_optional(tmp_path):
         ("Correct, none apply", "`kb eval decide categories --as not_a_rule --reason <why> --by <handle>`"),
         ("I will give them", "record each with `kb clarify`, then draft a REQ-NF requirement quoting it"),
     ]
-    # optional: the KB is clean and the freeze is offered all the same
-    assert t["state"]["clean"] and t["state"]["blocking_asks"] == 0 and "freeze:v1" in ask_ids(t)
+    # optional: the KB is clean, but the freeze waits for it (answering both at once would fail: the decision dirties kb/)
+    assert t["state"]["clean"] and t["state"]["blocking_asks"] == 0 and "freeze:v1" not in ask_ids(t)
     nf = req_yaml("REQ-NF-001").replace("category: performance", "category: security")
     put(root, "kb/requirements/REQ-NF-001.yaml", nf)
     put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-NF-001]\n")

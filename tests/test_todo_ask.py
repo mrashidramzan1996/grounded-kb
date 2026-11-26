@@ -179,7 +179,7 @@ FREEZE_V1 = {
     "evidence": {},
     "options": [
         {"key": "freeze", "label": "Freeze it",
-         "then": "`kb baseline freeze v1`, then commit `kb/baseline/v1.yaml` on a new branch (not named kb-baseline-v1) "
+         "then": "commit pending changes and run `kb todo` again, then `kb baseline freeze v1`, then commit `kb/baseline/v1.yaml` on a new branch (not named kb-baseline-v1) "
                  "and open a pull request for review; never merge it yourself"},
         {"key": "later", "label": "Not yet", "then": "leave it"},
     ],
@@ -322,7 +322,7 @@ def test_freeze_next_version_after_v1(tmp_path):
     item = asks(root)["freeze:v2"]
     assert item["question"] == "The knowledge base has no errors. Freeze baseline v2? The evaluation agent dismissed no item."
     assert item["options"][0]["then"] == (
-        "`kb baseline freeze v2`, then commit `kb/baseline/v2.yaml` on a new branch (not named kb-baseline-v2) "
+        "commit pending changes and run `kb todo` again, then `kb baseline freeze v2`, then commit `kb/baseline/v2.yaml` on a new branch (not named kb-baseline-v2) "
         "and open a pull request for review; never merge it yourself"
     )
 
