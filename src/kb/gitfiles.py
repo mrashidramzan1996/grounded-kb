@@ -248,8 +248,19 @@ def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:
 
 
 def file_at(root: Path, ref: str, path: str) -> bytes | None:
-    """The bytes of `path` at `ref`, or None when it is not in that tree."""
-    return read_tree_files(root, ref, path).get(path)
+    """The bytes of `path` at `ref` (a symlink entry gives its target), or None when it is not in that tree. A path that
+    exists there as anything else (a submodule, a directory) is a GitError: callers read policy files this way, and
+    must fail closed rather than treat it as absent."""
+    out = _git(root, "ls-tree", "-z", ref, "--", path).stdout
+    for entry in _split(out):
+        meta, _, found = entry.partition("\t")
+        if found != path:
+            continue
+        _mode, kind, oid = meta.split(" ")
+        if kind != "blob":
+            raise GitError(f"{path} at {ref} is not a file")
+        return _cat_file_batch(root, [oid])[0]
+    return None
 
 
 def tree_symlinks(root: Path, ref: str, prefix: str) -> set[str]:

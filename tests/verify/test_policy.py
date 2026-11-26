@@ -304,3 +304,31 @@ def test_a_new_or_deleted_workflow_counts_as_a_policy_change(tmp_path):
     assert policy_files_changed(root, tip) == [".github/workflows/spoof.yml"]
     (root / ".github/workflows/ci.yml").unlink()
     assert policy_files_changed(root, tip) == [".github/workflows/ci.yml", ".github/workflows/spoof.yml"]
+
+
+def _gitlink(root, path):
+    git(root, "update-index", "--add", "--cacheinfo", f"160000,{sha(root)},{path}")
+    git(root, "commit", "-m", f"gitlink at {path}")
+
+
+def test_gitlink_config_on_the_tip_fails_closed(tmp_path):
+    from helpers import invoke
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": BASE_CONFIG})
+    branch(root)
+    (root / "kb.config.yaml").write_text(HEAD_CONFIG)
+    commit(root, "loosen")
+    git(root, "checkout", "-q", "main")
+    git(root, "rm", "-q", "--cached", "kb.config.yaml")
+    _gitlink(root, "kb.config.yaml")
+    git(root, "checkout", "-q", "feature")
+    with pytest.raises(GitError, match="kb.config.yaml.*not a file"):
+        load_policy(root, "main", head_cfg(root))
+    r = invoke(root, "verify", "--base", "main", "--forge", "none")
+    assert r.exit_code == 2, r.output
+
+
+def test_gitlink_codeowners_raises_and_does_not_fall_through(tmp_path):
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": BASE_CONFIG, "CODEOWNERS": "src/** @first\n"})
+    _gitlink(root, ".github/CODEOWNERS")
+    with pytest.raises(GitError, match="CODEOWNERS.*not a file"):
+        load_policy(root, "main", head_cfg(root))

@@ -170,3 +170,23 @@ def test_read_tree_files_bad_ref_raises(tmp_path):
     repo = make_git_repo(None, tmp_path, extra={"a.md": "a"})
     with pytest.raises(GitError):
         read_tree_files(repo, "nope", ".")
+
+
+def test_file_at_raises_for_a_gitlink_or_tree_but_lists_skip_gitlinks(tmp_path):
+    from kb.gitfiles import file_at
+    repo = make_git_repo(None, tmp_path, extra={"docs/a.md": "a"})
+    head = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},docs/sub")
+    git(repo, "commit", "-m", "gitlink")
+    with pytest.raises(GitError, match="docs/sub at HEAD is not a file"):
+        file_at(repo, "HEAD", "docs/sub")
+    with pytest.raises(GitError, match="not a file"):
+        file_at(repo, "HEAD", "docs")  # a tree
+    assert file_at(repo, "HEAD", "docs/a.md") == b"a" and file_at(repo, "HEAD", "docs/none") is None
+    assert read_tree_files(repo, "HEAD", "docs") == {"docs/a.md": b"a"}
+
+
+def test_blob_with_a_header_like_line_round_trips(tmp_path):
+    body = "x\n" + "0" * 40 + " blob 5\nabcde\n" + "1" * 40 + " missing\n"
+    repo = make_git_repo(None, tmp_path, extra={"docs/a.md": body, "docs/b.md": "b"})
+    assert read_tree_files(repo, "HEAD", "docs") == {"docs/a.md": body.encode(), "docs/b.md": b"b"}
