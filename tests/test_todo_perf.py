@@ -3,7 +3,7 @@ finding (and once per decision)."""
 
 import time
 
-from helpers import TODO_CONFIG, TODO_TRIAGE, commit, make_git_repo, ok, put, req_yaml
+from helpers import TODO_CONFIG, TODO_DOC, TODO_TRIAGE, commit, make_git_repo, ok, put, req_yaml
 from test_todo_eval import evaluate
 
 import kb.sources.sentences as sentences_module
@@ -71,3 +71,17 @@ def test_sentences_are_split_once_per_source_and_repository(tmp_path, monkeypatc
     calls.clear()
     sentences(KbRepo.load(root), "SRC-n")
     assert sorted(calls) == sorted(segments)
+
+
+def test_todo_with_300_requirements_is_fast(tmp_path):
+    # Reading the tree with one cat-file stream: measured well under a second; the bound is 3x and then some for CI.
+    extra = {"kb.config.yaml": TODO_CONFIG, "docs/n.md": TODO_DOC}
+    root = make_git_repo(None, tmp_path, extra=extra)
+    ok(root, "ingest")
+    for i in range(300):
+        put(root, f"kb/requirements/REQ-F-{i:03d}.yaml", req_yaml(f"REQ-F-{i:03d}"))
+    commit(root, "300 requirements")
+    start = time.perf_counter()
+    build_todo(root)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 2.5, f"kb todo took {elapsed:.1f}s for 300 requirements"

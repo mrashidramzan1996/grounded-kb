@@ -124,3 +124,49 @@ def test_branch_tip_looks_only_among_branches(tmp_path):
     with pytest.raises(GitError, match="a tag named 'origin/release' shadows the branch"):
         branch_tip(repo, "release")  # found as origin/release, which the tag shadows
     assert branch_tip(repo, "refs/remotes/origin/release") == ("refs/remotes/origin/release", main)
+
+
+def _show_each(root, ref, prefix):
+    """The 0.4.0 implementation: one `git show` per file."""
+    from kb.gitfiles import _git, _split
+    out = _git(root, "ls-tree", "-r", "-z", "--name-only", ref, "--", prefix).stdout
+    return {p: _git(root, "show", f"{ref}:{p}").stdout for p in _split(out)}
+
+
+def test_batch_read_matches_show_for_odd_paths(tmp_path):
+    import os
+    repo = make_git_repo(None, tmp_path, extra={"docs/plain.md": "p", "docs/with space.md": "s", "docs/üñí.md": "u",
+                                                "docs/-dash.md": "d", "docs/nl\nname.md": "n", "docs/empty.md": "",
+                                                "other/o.md": "o"})
+    (repo / "docs" / "blob.bin").write_bytes(bytes(range(256)) + b"\n\n")
+    os.symlink("plain.md", repo / "docs" / "link")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "odd")
+    for prefix in ("docs", ".", "docs/-dash.md", "nothing"):
+        got = read_tree_files(repo, "HEAD", prefix)
+        assert got == _show_each(repo, "HEAD", prefix)
+    got = read_tree_files(repo, "HEAD", "docs")
+    assert got["docs/link"] == b"plain.md" and got["docs/nl\nname.md"] == b"n" and got["docs/empty.md"] == b""
+    assert read_tree_files(repo, "HEAD", ".").keys() >= {"other/o.md", "docs/blob.bin"}
+
+
+def test_read_tree_files_spawns_two_processes(tmp_path, monkeypatch):
+    import subprocess
+    repo = make_git_repo(None, tmp_path, extra={f"docs/f{i}.md": str(i) for i in range(20)})
+    calls = []
+    real = subprocess.run
+
+    def counting(*a, **k):
+        calls.append(a[0])
+        return real(*a, **k)
+
+    monkeypatch.setattr(subprocess, "run", counting)
+    assert len(read_tree_files(repo, "HEAD", "docs")) == 20
+    assert len(calls) == 2, calls
+    assert calls[1][-2:] == ["cat-file", "--batch"]
+
+
+def test_read_tree_files_bad_ref_raises(tmp_path):
+    repo = make_git_repo(None, tmp_path, extra={"a.md": "a"})
+    with pytest.raises(GitError):
+        read_tree_files(repo, "nope", ".")

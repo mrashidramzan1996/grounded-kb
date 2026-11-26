@@ -214,9 +214,37 @@ def read_tree_files_names(root: Path, ref: str, prefix: str) -> list[str]:
     return _split(_git(root, "ls-tree", "-r", "-z", "--name-only", ref, "--", prefix).stdout)
 
 
+def _cat_file_batch(root: Path, oids: list[str]) -> list[bytes]:
+    """The content of each object id, in order, from one `git cat-file --batch` process."""
+    r = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"], input="".join(f"{o}\n" for o in oids).encode(),
+                       capture_output=True, check=False, env=_env())
+    if r.returncode != 0:
+        raise GitError(f"git cat-file --batch failed: {r.stderr.decode(errors='replace').strip()}")
+    out, pos, contents = r.stdout, 0, []
+    for oid in oids:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].split(b" ")  # `<oid> <type> <size>`, or `<oid> missing`
+        if len(header) != 3:
+            raise GitError(f"git cat-file --batch could not read object {oid}")
+        size = int(header[2])
+        contents.append(out[end + 1:end + 1 + size])
+        pos = end + 1 + size + 1  # the content is followed by a newline
+    return contents
+
+
 def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:
-    out = _git(root, "ls-tree", "-r", "-z", "--name-only", ref, "--", prefix).stdout
-    return {p: _git(root, "show", f"{ref}:{p}").stdout for p in _split(out)}
+    """path -> bytes for every blob and symlink entry (its target) under `prefix` at `ref`; submodules are skipped.
+    Two processes: one `ls-tree`, one `cat-file --batch` fed object ids (paths may hold newlines)."""
+    out = _git(root, "ls-tree", "-r", "-z", ref, "--", prefix).stdout
+    entries: list[tuple[str, str]] = []  # (path, oid)
+    for entry in _split(out):
+        meta, _, path = entry.partition("\t")
+        _mode, kind, oid = meta.split(" ")
+        if kind == "blob":  # 100644, 100755 and 120000 (symlink); a gitlink (type commit) has no content here
+            entries.append((path, oid))
+    if not entries:
+        return {}
+    return dict(zip((p for p, _ in entries), _cat_file_batch(root, [o for _, o in entries]), strict=True))
 
 
 def file_at(root: Path, ref: str, path: str) -> bytes | None:
