@@ -218,9 +218,9 @@ def _ids(entry: list[str] | str | None) -> set[str]:
 
 
 def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[str], selected: set[str],
-                  fresh: set[str]) -> list[Issue]:
+                  fresh: set[str], new_terms: frozenset[str] | set[str] = frozenset()) -> list[Issue]:
     """redraft.out_of_scope for drafted files that are not the selection's or allowed new records (a triage file:
-    see _triage_scope); redraft.id_changed for selected records whose file is gone or now holds another id."""
+    see _triage_scope; `new_terms` exempt only their own files and widen nothing else); redraft.id_changed for selected records whose file is gone or now holds another id."""
     at_head, at_base = {p: r for r, p in head.id_paths}, {p: r for r, p in before.id_paths}
     # superseding and drafted records are new, so at base only the selected records cite anything
     cited_base, cited_head = _cited(before, selected), _cited(head, allowed)
@@ -231,7 +231,7 @@ def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[
             issues.extend(_triage_scope(head, before, m.group(1), path, cited_base, cited_head, fresh, selected))
         elif rid is None:
             issues.append(Issue("redraft.out_of_scope", f"{path} is not in this redraft; redraft only the listed records", path=path))
-        elif at_base.get(path) not in selected and rid not in allowed:
+        elif at_base.get(path) not in selected and rid not in allowed and rid not in new_terms:
             rec = head.records.get(rid)
             new = rid not in before.records and isinstance(rec, QUOTED_TYPES)
             if new and (old := getattr(rec, "supersedes", None)):
@@ -318,7 +318,8 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
     caused = [i for i in g.caused if i not in demoted]
     rejected = (
         [i for i in mine if i.severity == "error"]
-        + _scope_issues(head, before, g.drafted, chosen | set(superseding) | set(drafting) | _new_terms(head, before), chosen, fresh)
+        + _scope_issues(head, before, g.drafted, chosen | set(superseding) | set(drafting), chosen, fresh,
+                      _new_terms(head, before))
         + [i for i in flags if i.severity == "error"]
         + _config_issues(root, ref)
         + [i for i in sources if i.severity == "error" and i.code != "source.secret_in_original"]

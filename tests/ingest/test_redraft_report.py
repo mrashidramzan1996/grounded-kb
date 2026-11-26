@@ -550,3 +550,16 @@ def test_editing_an_existing_glossary_term_stays_out_of_scope(kb):
     put(kb, "kb/glossary/TERM-seat.yaml", TERM.format(id="TERM-seat").replace("A paid place.", "A chair."))
     r = redraft_report(kb, None)
     assert ("TERM-seat", "redraft.out_of_scope") in rejected(r)
+
+
+def test_new_term_does_not_widen_the_triage_scope(kb):
+    """A new term quoting segment X (no selected record cites it) is accepted as a file, but it must not let the
+    redraft change X's triage entry."""
+    triaged(kb)
+    redraft(kb, "REQ-NF-001")
+    put(kb, "kb/glossary/TERM-seat.yaml", TERM.format(id="TERM-seat"))
+    assert not [i for i in redraft_report(kb, None).rejected if i.code == "redraft.out_of_scope"]
+    put(kb, "kb/sources/SRC-n/triage.yaml",
+        "segments:\n  seg-01: [ADR-0001, REQ-F-001, REQ-NF-001]\n  seg-02: [REQ-NF-001]\n")
+    r = redraft_report(kb, None)
+    assert any(i.code == "redraft.out_of_scope" and i.path == "kb/sources/SRC-n/triage.yaml" for i in r.rejected), r.rejected

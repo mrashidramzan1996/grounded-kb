@@ -37,7 +37,8 @@ def test_needs_a_product_decision_can_be_followed_as_written(tmp_path):
     assert product["then"] == (
         "record the user's answer with `kb clarify`, draft a record that quotes both the document sentence and the "
         "clarification, run `kb ingest --report`, then "
-        "`kb eval decide F-0123456789 --as added --record <new id> --by <handle>`")
+        "`kb eval decide F-0123456789 --as added --record <new id> --by <handle>`"
+        "; edit, then decide this finding immediately, before editing the next record")
     # the agent follows it: the user's answer, then a record quoting the sentence and the answer
     out = ok(root, "clarify", "--topic", "Invoice payment", "--text", ANSWER, "--by", "@alice",
              "--date", "2026-11-26").stdout

@@ -40,6 +40,7 @@ RUN_B_REQ = (
     f"    text: '{INVOICES}'\nmodules: [MOD-a]\n"
 )
 EXTRACT_MESSAGE = "follow .kb/cache/eval/extract.md in a fresh session or subagent, then run `kb eval judge`"
+NOW = "; edit, then decide this finding immediately, before editing the next record"
 VERDICTS_MESSAGE = "follow .kb/cache/eval/judge.md, then run `kb eval report --write`"
 
 
@@ -140,12 +141,12 @@ def test_todo_eval_sequence(tmp_path):
     assert ask["evidence"]["quote"] == INVOICES and ask["evidence"]["document"] == "docs/n.md"
     assert [(o["label"], o["then"]) for o in ask["options"]] == [
         ("Add it as a new record", ("write a record quoting this sentence, run `kb ingest --report`, then "
-                                    f"`kb eval decide {fid} --as added --record <new id> --by <handle>`")),
+                                    f"`kb eval decide {fid} --as added --record <new id> --by <handle>`{NOW}")),
         ("Already covered by a record", f"`kb eval decide {fid} --as covered --record <id> --by <handle>`"),
         ("Not a rule", f"`kb eval decide {fid} --as not_a_rule --reason <why> --by <handle>`"),
         ("Needs a product decision", ("record the user's answer with `kb clarify`, draft a record that quotes both the "
                                       "document sentence and the clarification, run `kb ingest --report`, then "
-                                      f"`kb eval decide {fid} --as added --record <new id> --by <handle>`")),
+                                      f"`kb eval decide {fid} --as added --record <new id> --by <handle>`{NOW}")),
     ]
     # canonical ids never appear: not in the JSON, not in the text form
     text = ok(root, "todo").stdout

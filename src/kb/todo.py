@@ -52,7 +52,7 @@ from kb.ingest.redraft import (
 )
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
-from kb.records.models import Requirement
+from kb.records.models import Requirement, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath
 from kb.safewrite import check_target
@@ -568,6 +568,24 @@ def _finding_evidence(f: SummaryFinding, repo: KbRepo, records: list[str]) -> di
     return ({"record": ", ".join(records)} if records else {}) | ev
 
 
+_DECIDE_NOW = "; edit, then decide this finding immediately, before editing the next record"
+# an edit changes the knowledge base, which makes the evaluation summary stale for every other decision
+_EDITING = ("add", "product", "fix")
+
+
+def _fix_then(records: list[str], repo: KbRepo, rids: str, tail: str) -> str:
+    """How to fix the records of a finding: a glossary term is edited in its file (kb redraft refuses it), the other
+    records are redrafted."""
+    terms = [r for r in records if isinstance(repo.records.get(r), Term)]
+    others = " ".join(r for r in records if r not in terms)
+    steps = []
+    if others or not records:
+        steps.append(f"`kb redraft {others or rids}`, follow the brief, `kb redraft --report`")
+    for t in terms:
+        steps.append(f"edit `kb/glossary/{t}.yaml` (add or correct a quote containing the name), run `kb ingest --report`")
+    return ", ".join(steps) + f", then {tail}"
+
+
 def _finding_ask(f: SummaryFinding, repo: KbRepo) -> AskItem:
     fid, kind = f.id, finding_kind(f)
     records = [r for r in finding_records(f) if r in repo.records]  # record ids kb holds: never text of the summary
@@ -600,8 +618,7 @@ def _finding_ask(f: SummaryFinding, repo: KbRepo) -> AskItem:
         question = _question(f"Finding {fid}: {rids} may not say what its quote says ({{note}}). Is the record right?",
                              note=f.note)
         options = (
-            Option("fix", "Fix the record",
-                   f"`kb redraft {rids}`, follow the brief, `kb redraft --report`, then decide `--as fixed`"),
+            Option("fix", "Fix the record", _fix_then(records, repo, rids, _decide(fid, "--as fixed"))),
             Option("correct", "It is correct", _decide(fid, "--as correct")),
         )
         ask_kind = "unfaithful"
@@ -611,11 +628,11 @@ def _finding_ask(f: SummaryFinding, repo: KbRepo) -> AskItem:
             "merge": f"Finding {fid}: {rids} may state one rule. Merge them into one record?",
         }.get(f.kind, f"Finding {fid}: should {rids} be split or merged?"))
         options = (
-            Option("fix", "Split or merge as suggested",
-                   f"`kb redraft {rids}`, follow the brief, `kb redraft --report`, then " + _decide(fid, "--as fixed")),
+            Option("fix", "Split or merge as suggested", _fix_then(records, repo, rids, _decide(fid, "--as fixed"))),
             Option("keep", "Keep as is", _decide(fid, "--as ok")),
         )
         ask_kind = f.kind if f.kind in ("split", "merge") else "granularity"
+    options = tuple(Option(o.key, o.label, o.then + _DECIDE_NOW) if o.key in _EDITING else o for o in options)
     return AskItem(f"finding:{fid}", ask_kind, question[0], _finding_evidence(f, repo, records), options, question[1])
 
 
