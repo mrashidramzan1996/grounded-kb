@@ -194,6 +194,25 @@ records drafted in the current ingest or redraft range.
 - Redraft briefs show before and after sentences and list only the records whose quoted sentence changed; the others
   go on one "Unchanged quotes" line. A redraft may add triage entries (list values only) for new `SRC-clarifications`
   segments that its own records cite. The `segment.untriaged_cited` message names the exact action.
+- `kb codeowners sync` rewrites only kb's marked CODEOWNERS block from `policy.approvers` (intent handles on the
+  intent paths, decision handles on decisions, invariants, components, the config and the gate's files; uncommented,
+  idempotent, refused while the approvers are TODO). `kb todo` lists it as the `codeowners` do item while the block is
+  still the TODO template or differs from what sync would write, so CODEOWNERS routing is not left off by accident.
+- A redraft may add a new glossary term (`kb redraft --report` no longer calls it out of scope; its quotes, name and
+  relations are still checked and the intent approvers still approve it). Existing terms outside the selection stay out
+  of scope, and a new term widens nothing else. `kb todo` tells you to edit a term's file (`kb/glossary/TERM-x.yaml`)
+  and run `kb ingest --report`, not `kb redraft`, because `kb redraft` takes only requirements, exclusions, decisions
+  and invariants. `kb redraft --changed` now offers a changed segment only when every record citing it is selected, so
+  `kb redraft --report` accepts what `--changed` wrote.
+- Evaluation findings are decided one at a time: make the edit, then run its `kb eval decide` before the next edit
+  (a second edit first makes the summary stale and `kb eval decide` refuses; the error names the changed records).
+  `kb eval decide` takes one finding per command. The blind run B brief also forbids `git log`, `git show` and reading
+  commit messages, and the agent never writes run-b files itself.
+- The tag `kb-baseline-vN` marks the commit the baseline was computed from; the baseline file `kb/baseline/vN.yaml`
+  lands in the next commit.
+- Policy files: a `.github/workflows/` directory replaced by a symlink counts as a changed policy file (it needs the
+  decision approvers) instead of stopping `kb verify` with exit 2; submodules under `kb/` and `docs/` are skipped, and the
+  policy-file rule covers every workflow under `.github/workflows/`, not only kb's.
 - Git trees are read with one `cat-file --batch` stream, so `kb todo` is faster. The policy files (`kb.config.yaml`,
   `CODEOWNERS`) at the target tip must be regular files: a submodule or directory there stops `kb verify` with exit 2.
 
@@ -283,6 +302,7 @@ does not rewrite an existing setup), and see the prerequisites under [Approvals]
 | `kb eval status` | The last evaluation: coverage, agreement, open and decided findings, every item the judge dismissed, whether it is current, and the decisions. |
 | `kb eval sample [--n 10]` | A QC checklist for the pull-request description: records with their quotes and unquoted sentences, seeded by HEAD. |
 | `kb status` | Per module: how many live requirements are built (`r[impl]`) and tested (`r[verify]`). |
+| `kb codeowners sync` | Rewrite only kb's marked CODEOWNERS block from `policy.approvers` (idempotent; refused while the approvers are TODO). |
 | `kb baseline freeze v1 [--unevaluated]` | Record the agreed requirement set and its evaluation on the default branch's tip (refused while `kb check` reports errors, and with exit 1 while the evaluation is missing, stale or not decided unless `--unevaluated`). |
 | `kb agents install claude-code / codex / generic` | Wire the session-start and stop hooks, or a git pre-commit hook, and update the kb block (rules and playbook) in `AGENTS.md`. |
 | `kb hook <event>` | The hook entry point the agents call; it blocks only on errors new since the default branch. |

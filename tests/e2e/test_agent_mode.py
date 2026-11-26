@@ -152,6 +152,9 @@ def set_up_from_docs(tmp_path: Path) -> Path:
 
     # 7. no errors and no blocking asks: the extraction is evaluated (tests/test_todo_eval.py runs that loop; here it
     #    finds nothing), then only the optional freeze is asked
+    assert do_ids(todo(repo)) == ["codeowners"]  # the approvers are set: CODEOWNERS routing is switched on first
+    kb(repo, "codeowners", "sync")
+    commit(repo, "CODEOWNERS: approvers")
     assert do_ids(todo(repo)) == ["eval:extract"]
     evaluated(repo)
     t = todo(repo)
@@ -360,7 +363,7 @@ class LiteralAgent:
         elif item["id"].startswith("report:"):
             self.report(item["id"].split(":")[1])
         else:
-            assert item["id"] in ("init", "eval:extract", "eval:judge"), item
+            assert item["id"] in ("init", "eval:extract", "eval:judge", "codeowners"), item
 
     def follow_ingest_brief(self) -> None:
         brief = (self.repo / ".kb/cache/ingest/brief.md").read_text()
