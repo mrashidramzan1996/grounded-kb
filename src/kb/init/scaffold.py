@@ -26,6 +26,7 @@ _APPROVAL_PATHS = [
     "/kb/glossary/",
     "/kb/sources/*/triage.yaml",
     "/kb/eval/",
+    "/kb/baseline/",
     "/kb/decisions/",
     "/kb/invariants/",
     "/kb/components/",

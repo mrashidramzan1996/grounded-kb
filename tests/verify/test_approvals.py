@@ -392,7 +392,7 @@ def test_empty_approver_groups_with_changed_records_warn_once(tmp_path):
     warnings = no_approver_warnings(empty, head, base, files, [])
     assert [(i.code, i.severity, i.message) for i in warnings] == [
         ("owner_approval.no_approvers", "warning", "intent approvers are empty in the approval policy; changes to "
-         "requirements, exclusions, features, glossary terms, triage and evaluation decisions need no approval"),
+         "requirements, exclusions, features, glossary terms, triage, evaluation decisions and baselines need no approval"),
         ("owner_approval.no_approvers", "warning", "decisions approvers are empty in the approval policy; changes to "
          "decisions, invariants and components need no approval"),
     ]
@@ -438,4 +438,4 @@ def test_exclusion_change_requires_intent_approvers(tmp_path):
     assert required_owners(tmp_path, cfg(), broken, repo_of({}), changes(path), []) == {"@pm": [f"{path} changed"]}
     (w,) = no_approver_warnings(policy_cfg(intent=[]), head, repo_of({}), changes(path), [])
     assert w.message == ("intent approvers are empty in the approval policy; changes to requirements, exclusions, features, "
-                         "glossary terms, triage and evaluation decisions need no approval")
+                         "glossary terms, triage, evaluation decisions and baselines need no approval")

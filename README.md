@@ -53,7 +53,10 @@ checks everything they write.
    Each finding lists its supporters among kb's coverage gate (or entity detector), run B and the judge. A missing or
    invalid verdict exits 1. `--write` also writes `kb/eval/summary.yaml`, which you commit.
 4. Each open finding becomes a blocking `ask` item in `kb todo` (`finding:F-…`), with evidence and options, and an
-   open finding blocks the freeze. The person answers, and the agent records each answer with
+   open finding blocks the freeze: `kb baseline freeze` refuses (exit 1) while the evaluation is missing or stale, a
+   finding is open or the judge's dismissals are not agreed with, unless `--unevaluated` (which records `eval: null`).
+   A baseline records the evaluation it was frozen with (`eval:` commit, fingerprint, open, decided and dismissed
+   counts). The person answers, and the agent records each answer with
    `kb eval decide F-… --as <decision> --by @handle`: `added --record <new id>` (a new record, or a TERM, that quotes
    the text; run `kb ingest --report` first), `covered --record <id>`, `not_a_rule --reason "…"`,
    `product_decision --reason "…"`, `correct`, `fixed --record <id>` (redrafted since the evaluation) or `ok`. kb
@@ -111,7 +114,7 @@ exists. `kb verify --skip-tests` runs no project test: claims that need tests ar
 
 On a pull request, `kb verify` reports `missing_owner_approval` until the right people approve the head commit:
 CODEOWNERS (or, without one, the module owners) for the files changed, `policy.approvers.intent` for changed or stale
-requirements, exclusions, features and glossary terms, triage files and evaluation decisions (`kb/eval/`), and `policy.approvers.decisions` for changed decisions, invariants and
+requirements, exclusions, features and glossary terms, triage files, evaluation decisions (`kb/eval/`) and baselines (`kb/baseline/`), and `policy.approvers.decisions` for changed decisions, invariants and
 components. Numbers in a live feature's claims, title and body must appear in the statements or quotes of its linked
 requirements; otherwise `kb check` warns `claim.number_not_in_requirement`. The approval policy
 (`policy.approvers`, `teams`, `bots`, module owners, `fail_on` and `mode`) and CODEOWNERS are read from the current tip
@@ -175,8 +178,8 @@ current ingest or redraft range.
 - Requirements have new fields: `modality` (must, must_not, should or may), `actor`, `category` (REQ-NF only) and
   `origin` (stated or implied). A requirement without them warns `requirement.fields_missing`. Add them when you next
   redraft (`kb redraft <ID>`). An `implied` requirement needs a confirming quote from `docs/clarifications.md`.
-- CODEOWNERS: the block an older `kb init` wrote lacks `/kb/exclusions/`, `/kb/sources/*/triage.yaml` and `/kb/eval/`
-  (for the intent approvers) and the workflow file `/.github/workflows/kb-claims.yml` (for the decision approvers). A
+- CODEOWNERS: the block an older `kb init` wrote lacks `/kb/exclusions/`, `/kb/sources/*/triage.yaml`, `/kb/eval/` and
+  `/kb/baseline/` (for the intent approvers) and the workflow file `/.github/workflows/kb-claims.yml` (for the decision approvers). A
   block from before 0.3.1 also lacks `/.github/workflows/kb.yml`, `/.gitlab-ci.yml` and the CODEOWNERS files. `kb init`
   does not run on a set-up repository, so replace your kb block with the one `kb init` writes now (run it in an empty
   scratch repository to see it), or add those lines to yours.
@@ -187,8 +190,9 @@ current ingest or redraft range.
   `.github/workflows/kb-claims.yml`. Then make `kb-policy`, not the old `check` job, the required status check.
 - Team approvers (`@org/team`) fail closed since 0.3.1: list each team's members under `teams.<name>.members`, or set
   `policy.unreadable_teams: defer` (see [Upgrading to 0.3.1](#upgrading-to-031)).
-- The evaluation is new: `kb todo` lists `eval:extract` once the knowledge base is otherwise settled, and open findings
-  block the freeze. See [Evaluate the extraction](#evaluate-the-extraction). Run `kb agents install <name>` to update
+- The evaluation is new: `kb todo` lists `eval:extract` once the knowledge base is otherwise settled, and
+  `kb baseline freeze` now refuses (exit 1) until a current evaluation has no open finding and its dismissals are
+  agreed with; `--unevaluated` freezes anyway. See [Evaluate the extraction](#evaluate-the-extraction). Run `kb agents install <name>` to update
   the playbook in `AGENTS.md` (and the Claude Code skill).
 
 ## Upgrading to 0.3.1
@@ -233,7 +237,7 @@ does not rewrite an existing setup), and see the prerequisites under [Approvals]
 | `kb eval status` | The last evaluation: coverage, agreement, open and decided findings, every item the judge dismissed, whether it is current, and the decisions. |
 | `kb eval sample [--n 10]` | A QC checklist for the pull-request description: records with their quotes and unquoted sentences, seeded by HEAD. |
 | `kb status` | Per module: how many live requirements are built (`r[impl]`) and tested (`r[verify]`). |
-| `kb baseline freeze v1` | Record the agreed requirement set on the default branch's tip (refused while `kb check` reports errors). |
+| `kb baseline freeze v1 [--unevaluated]` | Record the agreed requirement set and its evaluation on the default branch's tip (refused while `kb check` reports errors, and with exit 1 while the evaluation is missing, stale or not decided unless `--unevaluated`). |
 | `kb agents install claude-code / codex / generic` | Wire the session-start and stop hooks, or a git pre-commit hook, and update the kb block (rules and playbook) in `AGENTS.md`. |
 | `kb hook <event>` | The hook entry point the agents call; it blocks only on errors new since the default branch. |
 

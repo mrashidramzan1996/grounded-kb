@@ -16,7 +16,7 @@ from kb.context import ContextError, governing, render_pack, session_brief
 from kb.agents.registry import agent_names, get_agent
 from kb.hooks import run_hook
 from kb.safewrite import WriteRefused
-from kb.baseline import BaselineError, freeze_baseline
+from kb.baseline import BaselineError, BaselineRefused, freeze_baseline
 from kb.init.scaffold import InitError, init_repo, upsert_agents_md
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, rev_parse, toplevel
 from kb.modules import suggest_paths
@@ -53,7 +53,7 @@ from kb.graph import build_graph, render_mermaid
 from kb.testrun import TestRunError
 from kb.verify.report import render_json, render_markdown, render_text, summary_line, write_outputs
 from kb.verify.run import run_verify
-from kb.yamlio import YamlError
+from kb.yamlio import YamlError, load_yaml_strict
 
 app = typer.Typer(help="Git-native knowledge base.", no_args_is_help=True)
 
@@ -432,14 +432,22 @@ def baseline_freeze(
     ctx: typer.Context,
     version: Annotated[str, typer.Argument(help="Baseline version, e.g. v1.")],
     allow_branch: Annotated[bool, typer.Option("--allow-branch", help="Freeze even when HEAD is not the default branch's tip.")] = False,
+    unevaluated: Annotated[bool, typer.Option("--unevaluated", help="Freeze even when the extraction evaluation is missing, stale or not decided.")] = False,
 ) -> None:
     """Write kb/baseline/VERSION.yaml and tag HEAD (the file is left for you to commit). Refuses while
-    `kb check` reports errors, and off the default branch's tip unless --allow-branch."""
+    `kb check` reports errors, off the default branch's tip unless --allow-branch, and (exit 1) while the extraction
+    evaluation is missing, stale, has open findings or dismissals no person agreed with, unless --unevaluated."""
     try:
-        path = freeze_baseline(Path(ctx.obj["root"]), version, allow_branch=allow_branch)
+        path = freeze_baseline(Path(ctx.obj["root"]), version, allow_branch=allow_branch, unevaluated=unevaluated)
+    except BaselineRefused as e:
+        typer.echo(f"kb baseline freeze: {e}", err=True)
+        raise typer.Exit(1) from e
     except TOOL_ERRORS as e:
         raise _fail(e) from e
     rel = path.relative_to(Path(ctx.obj["root"])).as_posix()
+    if unevaluated and load_yaml_strict(path.read_text(encoding="utf-8")).get("eval") is None:
+        typer.echo(f"warning: --unevaluated: {rel} is frozen not evaluated (eval: null); the extraction evaluation was "
+                   "missing, stale or not decided", err=True)
     typer.echo(f"wrote {rel}; tagged HEAD as kb-baseline-{version}; commit the baseline file")
 
 

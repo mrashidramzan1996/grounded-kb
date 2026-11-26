@@ -22,6 +22,10 @@ class BaselineError(Exception):
     pass
 
 
+class BaselineRefused(BaselineError):
+    """The freeze is refused by a gate the person can settle (the evaluation): exit 1, not a tool error."""
+
+
 def _load_problems(repo: KbRepo) -> list[str]:
     problems = [f"{i.path}: {i.message}" for i in repo.errors]
     by_id: dict[str, list[str]] = {}
@@ -61,10 +65,54 @@ def _gate_errors(root: Path) -> None:
         raise BaselineError(f"kb check reports {len(errors)} errors; fix them before freezing a baseline:\n" + "\n".join(shown + more))
 
 
-def freeze_baseline(root: Path, version: str, *, allow_branch: bool = False) -> Path:
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _evaluation(root: Path, repo: KbRepo, unevaluated: bool) -> dict | None:
+    """What the baseline records of the extraction evaluation: {commit, fingerprint, open, decided, dismissed} of a
+    current summary with every finding decided and its dismissals agreed with; None when there is nothing to evaluate
+    (no live record and no summary) or, with `unevaluated`, when the evaluation is not settled. Otherwise
+    BaselineRefused: an evaluation is due (there are live records) or exists, and it is missing, stale or not decided."""
+    # imported here: kb.todo imports this module, and kb.eval.decisions imports much of kb
+    from kb.eval import EvalError
+    from kb.eval.decisions import eval_status
+
+    hint = "follow `kb todo`, or pass --unevaluated to freeze anyway"
+    try:
+        st = eval_status(root, repo)
+    except EvalError as e:
+        if unevaluated:
+            return None
+        raise BaselineRefused(f"the evaluation cannot be read ({e}): {hint}") from e
+    s = st.summary
+    if s is None:
+        if unevaluated or not live_ids(repo):
+            return None
+        raise BaselineRefused("the knowledge base was never evaluated (no kb/eval/summary.yaml): run `kb eval extract` "
+                              "and the steps `kb todo` lists after it, or pass --unevaluated to freeze anyway")
+    problems = []
+    if not st.fresh:
+        problems.append("the evaluation is stale: the knowledge base or its documents changed since kb/eval/summary.yaml "
+                        "was written (run `kb eval extract` again)")
+    if st.open:
+        problems.append(f"{_plural(len(st.open), 'open finding')} no person has decided (`kb todo` asks them)")
+    if st.dismissed:
+        problems.append(f"{_plural(len(st.dismissed), 'item')} the evaluation agent dismissed that no person has agreed "
+                        "with (`kb eval decide dismissed --as ok`)")
+    if problems:
+        if unevaluated:
+            return None
+        raise BaselineRefused("the evaluation is not settled: " + "; ".join(problems) + f"; {hint}")
+    return {"commit": s.commit, "fingerprint": s.fingerprint, "open": len(st.open),
+            "decided": len(st.findings) - len(st.open), "dismissed": len(s.dismissed)}
+
+
+def freeze_baseline(root: Path, version: str, *, allow_branch: bool = False, unevaluated: bool = False) -> Path:
     """Write kb/baseline/<version>.yaml (uncommitted) and tag HEAD as kb-baseline-<version>.
-    Refuses unless HEAD is the default branch's tip (or allow_branch) and `kb check` reports no error.
-    Nothing is left behind if any step fails."""
+    Refuses unless HEAD is the default branch's tip (or allow_branch), `kb check` reports no error, and the extraction
+    evaluation is current with every finding decided and its dismissals agreed with (BaselineRefused; `unevaluated`
+    freezes anyway, recording `eval: null`). Nothing is left behind if any step fails."""
     root = Path(root)
     if not _VERSION.fullmatch(version):
         raise BaselineError(f"version must look like v1, v2, ...: got {version!r}")
@@ -90,9 +138,11 @@ def freeze_baseline(root: Path, version: str, *, allow_branch: bool = False) -> 
     if problems := _load_problems(repo):
         raise BaselineError("KB files have problems (run `kb check`):\n" + "\n".join(problems))
     _gate_errors(root)
+    evaluation = _evaluation(root, repo, unevaluated)
     reqs = requirement_hashes(repo)
     frozen_at = datetime.fromtimestamp(commit_time(root, "HEAD"), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    text = dump_yaml({"version": version, "commit": head_commit(root), "frozen_at": frozen_at, "requirements": reqs})
+    text = dump_yaml({"version": version, "commit": head_commit(root), "frozen_at": frozen_at, "requirements": reqs,
+                      "eval": evaluation})
 
     made_dir = not folder.exists()
     made_tag = False

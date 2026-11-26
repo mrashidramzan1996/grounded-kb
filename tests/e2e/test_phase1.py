@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from helpers import SECRET_KEY, apply_drafts, git, invoke, payload, remove_secret_paragraph, write
+from helpers import SECRET_KEY, apply_drafts, evaluated, git, invoke, payload, remove_secret_paragraph, write
 from kb.hooks import run_hook
 
 
@@ -86,7 +86,10 @@ def test_phase1_docs_only_story(story, fixtures):
     assert r.exit_code == 0, [i for i in issues if i["severity"] == "error"]
     assert not [i for i in issues if i["severity"] == "error"]
 
-    # 5. baseline freeze creates the tag; nothing is built yet
+    # 5. baseline freeze creates the tag once the extraction is evaluated (the loop itself: e2e/test_eval.py); nothing
+    #    is built yet
+    assert invoke(repo, "baseline", "freeze", "v1").exit_code == 1  # never evaluated
+    evaluated(repo)
     r = invoke(repo, "baseline", "freeze", "v1")
     assert r.exit_code == 0, r.output
     assert "kb-baseline-v1" in git(repo, "tag", "--list")

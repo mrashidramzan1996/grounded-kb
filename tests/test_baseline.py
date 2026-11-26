@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from helpers import apply_drafts, clean_drafted_acme, git, invoke
+from helpers import apply_drafts, clean_drafted_acme, evaluated, git, invoke
 from kb.gitfiles import GitError
 from kb.baseline import BaselineError, freeze_baseline
 from kb.records.repo import KbRepo
@@ -11,13 +11,20 @@ from kb.yamlio import load_yaml_strict
 
 
 @pytest.fixture
-def committed(acme_repo_ingested, fixtures):
-    """The drafted acme repo with what kb check reports resolved, committed on main."""
+def unevaluated(acme_repo_ingested, fixtures):
+    """The drafted acme repo with what kb check reports resolved, committed on main; never evaluated."""
     apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
     clean_drafted_acme(acme_repo_ingested)
     git(acme_repo_ingested, "add", "-A")
     git(acme_repo_ingested, "commit", "-m", "drafts")
     return acme_repo_ingested
+
+
+@pytest.fixture
+def committed(unevaluated):
+    """`unevaluated` with a settled evaluation of it committed: what `kb baseline freeze` needs."""
+    evaluated(unevaluated)
+    return unevaluated
 
 
 def test_freeze_baseline(committed):
@@ -184,3 +191,108 @@ def test_freeze_refuses_off_the_default_branch_unless_allowed(committed):
     out = invoke(committed, "baseline", "freeze", "v1")
     assert out.exit_code == 2 and "--allow-branch" in out.stderr
     assert invoke(committed, "baseline", "freeze", "v1", "--allow-branch").exit_code == 0
+
+
+# --- the evaluation gates the freeze -------------------------------------------------------------------------------
+
+def _summary_with(root, *, open_findings=(), dismissed=()):
+    """A current summary of the KB as it is, with these open findings and dismissed items, committed."""
+    import datetime
+
+    from helpers import head, put
+    from kb.eval.findings import fingerprint, summary, write_summary
+    from kb.gates.coverage import coverage_stats
+    from kb.yamlio import dump_yaml
+
+    repo = KbRepo.load(root)
+    agr = {"matched": 0}
+    data = summary(head(root), fingerprint(repo), "0" * 32, coverage_stats(repo), agr, list(open_findings),
+                   datetime.date.today().isoformat(), list(dismissed))
+    write_summary(root, data)
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [{
+        "finding": "categories", "canonical": "categories", "sentences": [], "decision": "not_a_rule",
+        "record": None, "record_sha256": None, "reason": "None apply.", "by": "@alice", "date": "2026-11-26"}]}))
+    git(root, "add", "-A")
+    git(root, "commit", "-m", "evaluated")
+
+
+def test_freeze_refuses_without_an_evaluation(unevaluated):
+    committed = unevaluated
+    with pytest.raises(BaselineError, match="kb eval extract") as e:
+        freeze_baseline(committed, "v1")
+    assert "--unevaluated" in str(e.value)
+    assert not (committed / "kb/baseline").exists() and git(committed, "tag", "-l") == ""
+    r = invoke(committed, "baseline", "freeze", "v1")
+    assert r.exit_code == 1 and "never evaluated" in r.stderr
+    # --unevaluated overrides, with a warning, and the baseline says so
+    r = invoke(committed, "baseline", "freeze", "v1", "--unevaluated")
+    assert r.exit_code == 0, r.output
+    assert "warning" in r.stderr and "not evaluated" in r.stderr
+    assert load_yaml_strict((committed / "kb/baseline/v1.yaml").read_text())["eval"] is None
+
+
+def test_freeze_records_a_settled_evaluation(committed):
+    from helpers import head
+
+    _summary_with(committed)
+    p = freeze_baseline(committed, "v1")
+    data = load_yaml_strict(p.read_text())
+    summary = load_yaml_strict((committed / "kb/eval/summary.yaml").read_text())
+    assert list(data) == ["version", "commit", "frozen_at", "requirements", "eval"]
+    assert data["eval"] == {"commit": summary["commit"], "fingerprint": summary["fingerprint"], "open": 0, "decided": 0,
+                            "dismissed": 0}
+    assert summary["commit"] != head(committed)  # the evaluated commit, not HEAD
+
+
+def test_freeze_refuses_open_findings_dismissals_and_a_stale_evaluation(committed):
+    from kb.eval.findings import Dismissed, Finding
+
+    finding = Finding("F-0123456789", "R:REQ-F-002", "unfaithful", "SRC-x#seg-01", "Some text.", "high", 1, (), "x")
+    _summary_with(committed, open_findings=[finding])
+    with pytest.raises(BaselineError, match="1 open finding"):
+        freeze_baseline(committed, "v1")
+    assert invoke(committed, "baseline", "freeze", "v1").exit_code == 1
+    dismissed = Dismissed("F-1111111111", "S:000000000000", "omission", "SRC-x#seg-01", "Some text.", "not_a_rule", (), "")
+    _summary_with(committed, dismissed=[dismissed])
+    with pytest.raises(BaselineError, match="dismissed"):
+        freeze_baseline(committed, "v1")
+    # a person agreeing with the dismissals settles it; the baseline counts them
+    assert invoke(committed, "eval", "decide", "dismissed", "--as", "ok", "--by", "@alice").exit_code == 0
+    git(committed, "add", "-A")
+    git(committed, "commit", "-m", "agreed")
+    assert invoke(committed, "baseline", "freeze", "v1").exit_code == 0
+    assert load_yaml_strict((committed / "kb/baseline/v1.yaml").read_text())["eval"]["dismissed"] == 1
+    # a record changed since the evaluation: stale
+    git(committed, "tag", "-d", "kb-baseline-v1")
+    (committed / "kb/baseline/v1.yaml").unlink()
+    p = committed / "kb/requirements/REQ-F-002.yaml"
+    p.write_text(p.read_text().replace("statement: ", "statement: Changed. ", 1))
+    git(committed, "add", "-A")
+    git(committed, "commit", "-m", "edited")
+    with pytest.raises(BaselineError, match="stale"):
+        freeze_baseline(committed, "v1")
+    assert freeze_baseline(committed, "v1", unevaluated=True).is_file()
+
+
+def test_baseline_changes_need_intent_approvers(tmp_path):
+    from helpers import make_git_repo
+    from kb.config.schema import KbConfig
+    from kb.init.scaffold import init_repo
+    from kb.verify.approvals import no_approver_warnings, required_owners
+    from kb.verify.changes import ChangeSet
+
+    cfg = KbConfig.model_validate({"version": 1, "modules": [],
+                                   "policy": {"approvers": {"intent": ["@pm"], "decisions": ["@arch"]}}})
+    path = "kb/baseline/v1.yaml"
+    head, base = KbRepo.from_files({path: b"version: v1\n"}), KbRepo.from_files({})
+    changes = ChangeSet("main", (path,), {}, {}, {}, frozenset())
+    assert required_owners(tmp_path, cfg, head, base, changes, []) == {"@pm": ["baseline changed"]}
+    assert required_owners(tmp_path, cfg, head, KbRepo.from_files({path: b"version: v1\n"}),
+                           ChangeSet("main", (), {}, {}, {}, frozenset()), []) == {}
+    empty = KbConfig.model_validate({"version": 1, "modules": [], "policy": {"approvers": {"intent": [], "decisions": ["@a"]}}})
+    (w,) = no_approver_warnings(empty, head, base, changes, [])
+    assert "baselines" in w.message
+    (tmp_path / "init").mkdir()
+    repo = make_git_repo(None, tmp_path / "init")
+    init_repo(repo)
+    assert "# /kb/baseline/ TODO" in (repo / "CODEOWNERS").read_text()

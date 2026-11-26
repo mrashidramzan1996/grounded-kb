@@ -33,6 +33,9 @@ _TRIAGE = re.compile(r"kb/sources/(SRC-[^/]+)/triage\.yaml")
 # the evaluation's summary and a person's decisions on its findings (kb eval decide): the intent approvers sign off
 _EVAL_DIR = "kb/eval/"
 EVAL_REASON = "evaluation decisions changed"
+# a baseline (kb baseline freeze) records the agreed requirement set and its evaluation: the intent approvers sign off
+_BASELINE_DIR = "kb/baseline/"
+BASELINE_REASON = "baseline changed"
 
 
 def codeowners_rules(root: Path) -> CodeownersRules | None:
@@ -113,11 +116,20 @@ def _changed_triage(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet |
     return {m.group(1): p for p in sorted(paths) if (m := _TRIAGE.fullmatch(p))}
 
 
-def _eval_changed(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None) -> bool:
-    """Whether a file under kb/eval/ is new, changed or deleted relative to the base (by bytes), or in `changes`."""
+def _dir_changed(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None, folder: str) -> bool:
+    """Whether a file under `folder` (kb/eval/, kb/baseline/) is new, changed or deleted relative to the base (by
+    bytes), or in `changes`."""
     base_raw = base_repo.raw if base_repo else {}
-    paths = {p for p in set(repo.raw) | set(base_raw) if p.startswith(_EVAL_DIR) and repo.raw.get(p) != base_raw.get(p)}
-    return bool(paths) or any(p.startswith(_EVAL_DIR) for p in (changes.files if changes else ()))
+    paths = {p for p in set(repo.raw) | set(base_raw) if p.startswith(folder) and repo.raw.get(p) != base_raw.get(p)}
+    return bool(paths) or any(p.startswith(folder) for p in (changes.files if changes else ()))
+
+
+def _eval_changed(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None) -> bool:
+    return _dir_changed(repo, base_repo, changes, _EVAL_DIR)
+
+
+def _baseline_changed(repo: KbRepo, base_repo: KbRepo | None, changes: ChangeSet | None) -> bool:
+    return _dir_changed(repo, base_repo, changes, _BASELINE_DIR)
 
 
 def _handles(entries: Sequence[str], config: KbConfig) -> list[str]:
@@ -192,6 +204,9 @@ def required_owners(
     if _eval_changed(repo, base_repo, changes):
         for h in intent:
             need(h, EVAL_REASON)
+    if _baseline_changed(repo, base_repo, changes):
+        for h in intent:
+            need(h, BASELINE_REASON)
     # a changed record file that does not parse is in no record map: route it by its path, so it cannot dodge approval
     parsed = set(_changed_records(repo, base_repo).values())
     for path in sorted(changes.files if changes and base_repo is not None else ()):
@@ -211,7 +226,7 @@ def required_owners(
     return {h: _ordered(rs) for h, rs in sorted(reasons.items())}
 
 
-_GROUP_RECORDS = {"intent": "requirements, exclusions, features, glossary terms, triage and evaluation decisions", "decisions": "decisions, invariants and components"}
+_GROUP_RECORDS = {"intent": "requirements, exclusions, features, glossary terms, triage, evaluation decisions and baselines", "decisions": "decisions, invariants and components"}
 
 
 def no_approver_warnings(
@@ -226,7 +241,7 @@ def no_approver_warnings(
         paths |= {p for p in changes.files if p.startswith((*_INTENT_DIRS, *_DECISION_DIRS))}
     changed = {
         "intent": any(p.startswith(_INTENT_DIRS) for p in paths) or bool(_changed_triage(repo, base_repo, changes))
-        or _eval_changed(repo, base_repo, changes)
+        or _eval_changed(repo, base_repo, changes) or _baseline_changed(repo, base_repo, changes)
         or any(v.kind == "requirement" and v.status == "stale" for v in verdicts),
         "decisions": any(p.startswith(_DECISION_DIRS) for p in paths),
     }
