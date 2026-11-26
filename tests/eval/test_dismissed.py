@@ -180,6 +180,12 @@ def test_reopen_takes_only_a_dismissed_item(tmp_path):
     assert r.exit_code == 2 and "dismissed" in r.output
     r = invoke(root, "eval", "decide", "dismissed", "--as", "ok", "--by", "@alice")
     assert r.exit_code == 2 and "nothing" in r.output  # the evaluation dismissed nothing
+    # nor does a hand-written one stand
+    key = summary_of(root)["open_findings"][0]["canonical"]
+    put(root, "kb/eval/decisions.yaml", dump_yaml({"decisions": [{
+        "finding": fid, "canonical": key, "sentences": [], "decision": "reopen", "record": None, "record_sha256": None,
+        "reason": None, "by": "@x", "date": "2026-11-26"}]}))
+    assert "it names an open finding, not an item the evaluation dismissed" in invoke(root, "check").output
 
 
 def test_hand_written_dismissed_and_reopen_entries_are_checked(tmp_path):

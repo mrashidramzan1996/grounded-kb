@@ -484,6 +484,8 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
                    else f"{_shown_id(d.finding)} is decided twice; only the first counts")
         elif d.decision == "reopen":
             why = _reopen_problem(d, dismissed.get(d.finding))
+            if why is None and summary is not None and any(f.id == d.finding for f in summary.open_findings):
+                why = "it names an open finding, not an item the evaluation dismissed"
             why = f"{_shown_id(d.finding)}: {why}" if why is not None else None
         else:
             f = current.get(d.finding)  # the finding it names, if the current summary has it
