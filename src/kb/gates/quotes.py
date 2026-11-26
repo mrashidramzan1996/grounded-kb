@@ -128,13 +128,23 @@ def requirement_field_issues(rid: str, rec: Requirement, found: list[Quote], pat
 
 _WORD = re.compile(r"[a-z0-9]+")
 _SEMICOLON = re.compile(r";\s*")
-_GENERIC_ACTORS = {"system", "the system", "it", "kb"}
+_GENERIC_WORDS = {"system", "service", "team", "user", "module", "component", "app"}
 DUPLICATE_OVERLAP = 0.8
 
 
+def _singular(w: str) -> str:
+    if w.endswith("sses"):
+        return w[:-2]
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if re.search(r"(?:s|x|z|ch|sh)es$", w):
+        return w[:-2]
+    return w[:-1] if w.endswith("s") and not w.endswith("ss") and len(w) > 3 else w
+
+
 def _words(text: str) -> list[str]:
-    """Lower-cased words, a plural s dropped, articles left out."""
-    return [w.rstrip("s") or w for w in _WORD.findall(text.lower()) if w not in ("a", "an", "the")]
+    """Lower-cased words in singular form, articles left out."""
+    return [_singular(w) for w in _WORD.findall(text.lower()) if w not in ("a", "an", "the")]
 
 
 def _statement_modals(statement: str) -> set[str]:
@@ -154,16 +164,24 @@ def _clauses(repo: KbRepo, located: list[tuple[Quote, str, int, int]]) -> list[t
 
 
 def _number_issue(repo: KbRepo, rec: Requirement, located: list[tuple[Quote, str, int, int]]) -> str | None:
-    """The statement numbers a found quote carries, but not in the clause that says what the statement says."""
+    """The statement numbers a found quote carries, but in none of the clauses that share the statement's modal cue
+    (a statement without a modal: the clauses without one that
+    share most words with it). No such clause: nothing is flagged."""
     clauses = _clauses(repo, located)
     wanted = _statement_modals(rec.statement)
-    pool = [c for c in clauses if wanted & {_MODALITY_CUES[k] for k in c[1] if k in _MODALITY_CUES}] or clauses
-    mine = set(_words(_ID_LIKE.sub(" ", rec.statement)))
-    scored = [(len(mine & set(_words(c[0]))), c[0]) for c in pool]
-    best = max((n for n, _ in scored), default=0)
-    main = [t for n, t in scored if n == best] if best else [t for _, t in scored]
-    in_quotes = set().union(*(numbers(c[0]) for c in clauses)) if clauses else set()
-    wrong = sorted(n for n in numbers(rec.statement) & in_quotes if not any(n in numbers(t) for t in main))
+
+    def modals(c: tuple[str, frozenset[str]]) -> set[str]:
+        return {_MODALITY_CUES[k] for k in c[1] if k in _MODALITY_CUES}
+
+    pool = [c[0] for c in clauses if (modals(c) & wanted if wanted else not modals(c))]
+    if not pool:
+        return None
+    if not wanted:  # no modal to tell the clauses apart: the ones that say what the statement says
+        mine = set(_words(_ID_LIKE.sub(" ", rec.statement)))
+        score = {t: len(mine & set(_words(t))) for t in pool}
+        pool = [t for t in pool if score[t] == max(score.values())]
+    in_quotes = set().union(*(numbers(c[0]) for c in clauses))
+    wrong = sorted(n for n in numbers(rec.statement) & in_quotes if not any(n in numbers(t) for t in pool))
     return ", ".join(wrong) or None
 
 
@@ -189,9 +207,12 @@ def statement_issues(repo: KbRepo, rid: str, rec: Requirement, ev: Evidence, pat
         issues.append(Issue("requirement.number_mismatch",
                             f"{rid}: statement numbers not in the quote clause that says the same thing: {wrong}", "warning", path, rid))
     actor = (rec.actor or "").strip()
-    if actor and actor.lower() not in _GENERIC_ACTORS and not actor.lower().endswith(" system"):  # "the billing system"
+    if actor and not actor.lower().endswith("system"):  # "the billing system": the product itself
         quoted = {w for q, *_ in located for w in _words(q.text)}
-        if not any(ws and set(ws) <= quoted for ws in (_words(n) for n in _actor_names(repo, actor))):
+        names = _actor_names(repo, actor)
+        distinctive = {w for n in names for w in _words(n) if len(w) >= 4 and w not in _GENERIC_WORDS}
+        whole = {" ".join(_words(n)) for n in names}
+        if distinctive and not (distinctive & quoted) and not any(w and w in " ".join(_words(q.text)) for q, *_ in located for w in whole):
             issues.append(Issue("requirement.actor_not_in_quote",
                                 f"{rid}: actor {inline_code(actor)} is not named in the quote; check it against the document", "warning", path, rid))
     return issues

@@ -209,14 +209,49 @@ def test_actor_not_in_quote(tmp_path):
     assert "requirement.actor_not_in_quote" not in codes(ok)
 
 
-def test_actor_term_name_in_quote_passes(tmp_path):
+def _with_term(tmp_path, quote, name, aliases):
+    root, _ = _stmt(tmp_path, quote, quote, actor="TERM-cashier")
+    put(root, "kb/glossary/TERM-cashier.yaml", f"id: TERM-cashier\nname: {name}\naliases: {aliases}\ndefinition: Pays.\n")
+    return codes(_issues(root))
+
+
+def test_actor_term_name_or_alias_in_quote_passes(tmp_path):
     q = "Billing admins must approve refunds."
-    term = "kb/glossary/TERM-billing-admin.yaml"
-    root, _ = _stmt(tmp_path, q, q, actor="the system")
-    put(root, term, "id: TERM-billing-admin\nname: Billing admin\naliases: [billing admins]\ndefinition: Pays.\n")
-    path = root / "kb/requirements/REQ-F-001.yaml"
-    path.write_text(path.read_text().replace("actor: the system", "actor: TERM-billing-admin"))
-    assert "requirement.actor_not_in_quote" not in codes(_issues(root))
+    assert "requirement.actor_not_in_quote" not in _with_term(tmp_path / "a", q, "Cashier", "[billing admins]")
+    assert "requirement.actor_not_in_quote" not in _with_term(tmp_path / "b", q, "Billing admins", "[]")
+    assert "requirement.actor_not_in_quote" in _with_term(tmp_path / "c", q, "Cashier", "[till]")
+
+
+def test_actor_plural_forms_and_generic_words(tmp_path):
+    def warns(n, actor, quote):
+        return "requirement.actor_not_in_quote" in codes(_stmt(tmp_path / n, quote, quote, actor=actor)[1])
+
+    assert not warns("a", "the billing service", "Billing must retry failed charges.")
+    assert not warns("b", "batch process", "Batch processes must run nightly.")
+    assert not warns("c", "the batch processes", "The batch process must run nightly.")
+    assert warns("d", "finance team", "Billing admins must approve refunds.")
+    assert not warns("e", "the app", "Billing admins must approve refunds.")  # only generic words: nothing to check
+
+
+def test_number_from_two_quoted_clauses_is_fine(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    a, b = "Invoices must be sent on the 1st of the month.", "Invoices must carry a 14 day term."
+    root = make_git_repo(None, tmp_path, extra={"kb.config.yaml": CONFIG, "docs/n.md": f"# Rules\n\n{a} {b}\n"})
+    assert invoke(root, "ingest").exit_code == 0
+    (root / "kb/requirements").mkdir(parents=True, exist_ok=True)
+    (root / "kb/requirements/REQ-F-001.yaml").write_text(
+        "id: REQ-F-001\nstatement: Invoices must be sent on the 1st of the month and carry a 14 day term.\nmodality: must\n"
+        f"actor: invoices\norigin: stated\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: {a!r}\n"
+        f"  - source: SRC-n#seg-01\n    text: {b!r}\nmodules:\n- MOD-a\n")
+    assert "requirement.number_mismatch" not in codes(_issues(root))
+
+
+def test_drafted_number_not_in_quote_is_an_error_in_the_report(acme_repo_ingested, fixtures):
+    apply_drafts(acme_repo_ingested, fixtures / "drafts/acme-billing")
+    path = acme_repo_ingested / "kb/requirements/REQ-NF-001.yaml"
+    path.write_text(path.read_text().replace("statement: ", "statement: Within 987 ms. ", 1))
+    r = ingest_report(acme_repo_ingested, "HEAD")
+    assert ("REQ-NF-001", "statement.number_not_in_quote") in [(i.record, i.code) for i in r.rejected]
 
 
 def test_duplicate_quote(tmp_path):
