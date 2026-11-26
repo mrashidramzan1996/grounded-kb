@@ -238,6 +238,79 @@ def _codeowners_block() -> str:
     return "\n".join(lines + [f"# {p} TODO" for p in _APPROVAL_PATHS] + gate + [f"# {p} TODO" for p in _GATE_PATHS])
 
 
+_INTENT_PATHS = [p for p in _APPROVAL_PATHS if p not in ("/kb/decisions/", "/kb/invariants/", "/kb/components/", "/kb.config.yaml")]
+_HANDLE = re.compile(r"^@[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
+
+
+def _approver_handles(config) -> tuple[list[str], list[str]]:
+    """(intent, decision) handles from policy.approvers. WriteRefused when either group is empty, still TODO, or not a
+    forge handle (@user or @org/team): the block never gets a made-up owner."""
+    out = []
+    for group, entries in (("intent", config.policy.approvers.intent), ("decisions", config.policy.approvers.decisions)):
+        if not entries or any(not _HANDLE.fullmatch(e) for e in entries):
+            raise WriteRefused(f"policy.approvers.{group} in kb.config.yaml must list forge handles (@org/team or @user) "
+                               "before `kb codeowners sync` can write them")
+        out.append(list(entries))
+    return out[0], out[1]
+
+
+def codeowners_block_for(config) -> str:
+    """kb's CODEOWNERS block with the owners of policy.approvers: the intent approvers on the intent paths, the decision
+    approvers on decisions, invariants, components, the config and the gate's own files."""
+    intent, decisions = _approver_handles(config)
+    owners_i, owners_d = " ".join(intent), " ".join(decisions)
+    lines = ["# kb: approvals for the knowledge base, written by `kb codeowners sync` from policy.approvers in kb.config.yaml."]
+    lines += [f"{p} {owners_i}" for p in _INTENT_PATHS]
+    lines += [f"{p} {owners_d}" for p in _APPROVAL_PATHS if p not in _INTENT_PATHS]
+    lines += ["# The gate itself (the config, CODEOWNERS and every CI workflow: any of them can run or fake kb verify):"]
+    lines += [f"{p} {owners_d}" for p in _GATE_PATHS]
+    return "\n".join(lines)
+
+
+def _kb_codeowners(root: Path) -> tuple[str, str] | None:
+    """(path, text) of the CODEOWNERS file holding kb's block, or None. WriteRefused for an unsafe file."""
+    begin = "# kb:begin kb"
+    for p in CODEOWNERS_LOCATIONS:
+        text = read_text(root, p) if check_target(root, p, "file") else ""
+        if begin in (x.strip() for x in text.splitlines()):
+            return p, text
+    return None
+
+
+def sync_codeowners(root: Path, config) -> str:
+    """`kb codeowners sync`: rewrite only kb's marked block from the config. One message line; the same file is
+    left byte for byte when the block already says it. WriteRefused (nothing written) when approvers are TODO,
+    there is no kb block, or the file or markers are unsafe."""
+    root = Path(root)
+    found = _kb_codeowners(root)
+    if found is None:
+        raise WriteRefused("no CODEOWNERS file holds a kb block: run `kb init` in an empty scratch repository to see "
+                           "the lines to add")
+    rel, current = found
+    block = codeowners_block_for(config)
+    try:
+        text = upsert_block(current, "kb", block, "hash")
+    except ValueError as e:
+        raise WriteRefused(f"{rel}: {e}") from e
+    if text == current:
+        return f"{rel} is up to date (kb block)"
+    write_atomic(root, rel, text)
+    return f"updated {rel} (kb block: owners from policy.approvers); commit it"
+
+
+def codeowners_out_of_date(root: Path, config) -> str | None:
+    """The CODEOWNERS path when approvers are set and kb's block differs from what sync would write; None when there is
+    nothing to do (no kb block, approvers TODO, or already in sync)."""
+    try:
+        found = _kb_codeowners(Path(root))
+        if found is None:
+            return None
+        rel, current = found
+        return rel if upsert_block(current, "kb", codeowners_block_for(config), "hash") != current else None
+    except (WriteRefused, ValueError, OSError):
+        return None
+
+
 def _check_target(root: Path, rel: str, kind: Literal["file", "dir"]) -> bool:
     return check_target(root, rel, kind, InitError)
 

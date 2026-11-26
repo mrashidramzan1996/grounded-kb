@@ -50,6 +50,7 @@ from kb.ingest.redraft import (
     new_text,
     unfound,
 )
+from kb.init.scaffold import codeowners_out_of_date
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement, Term
@@ -734,6 +735,10 @@ def build_todo(root: Path) -> Todo:
     if outdated:
         do.append(DoItem("sync", "kb.sync", "documents changed since they were stored", "kb source sync", None, None))
     do += _redraft_items(repo, head, stale) + _fix_items(issues, repo, outdated, broken, stale) + _triage_items(issues)
+    if (owners_path := codeowners_out_of_date(root, config)) is not None:
+        do.append(DoItem("codeowners", "kb.codeowners",
+                         f"{owners_path}: kb's block is not active or differs from policy.approvers; write it so approvals "
+                         "are routed by CODEOWNERS", "kb codeowners sync", owners_path, None))
     status = _eval_status(root, repo)
     if not do and dirty:
         do.append(COMMIT)

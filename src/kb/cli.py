@@ -17,7 +17,7 @@ from kb.agents.registry import agent_names, get_agent
 from kb.hooks import run_hook
 from kb.safewrite import WriteRefused
 from kb.baseline import BaselineError, BaselineRefused, freeze_baseline
-from kb.init.scaffold import InitError, codeowners_notice, init_repo, refresh_kb_readme, upsert_agents_md
+from kb.init.scaffold import InitError, codeowners_notice, init_repo, refresh_kb_readme, sync_codeowners, upsert_agents_md
 from kb.gitfiles import GitError, changed_files, head_commit, repo_files, rev_parse, toplevel
 from kb.modules import suggest_paths
 from kb.ingest.brief import BRIEF_PATH, build_brief, ingest_sources, recorded_base, write_base, write_brief
@@ -763,6 +763,20 @@ def eval_decide(
         raise _fail(e) from e
     named = f" ({entry.record})" if entry.record else ""
     typer.echo(f"recorded in {DECISIONS}: {entry.finding} {entry.decision}{named}; commit it")
+
+
+codeowners_app = typer.Typer(help="Keep kb's block of the CODEOWNERS file in step with policy.approvers.", no_args_is_help=True)
+app.add_typer(codeowners_app, name="codeowners")
+
+
+@codeowners_app.command("sync")
+def codeowners_sync(ctx: typer.Context) -> None:
+    """Rewrite only kb's marked CODEOWNERS block from policy.approvers in kb.config.yaml (uncommented)."""
+    root = Path(ctx.obj["root"])
+    try:
+        typer.echo(sync_codeowners(root, load_config(root / "kb.config.yaml")))
+    except TOOL_ERRORS as e:
+        raise _fail(e) from e
 
 
 flag_app = typer.Typer(help="Answer flag questions about requirements.", no_args_is_help=True)
