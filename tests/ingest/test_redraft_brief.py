@@ -236,10 +236,11 @@ def test_changed_text_selects_a_citing_exclusion(md_repo_ingested):
 DIFF_DOC = "# Seats\n\nA seat costs 5 EUR.\n\nChildren enter for free on Sundays.\n"
 
 
-def diff_setup(root, new_doc: str, kids: str = "Children enter for free on Sundays."):
+def diff_setup(root, new_doc: str, kids: str = "Children enter for free on Sundays.", old_doc: str = DIFF_DOC,
+               price: str = "A seat costs 5 EUR."):
     """REQ-F-001 (price) and REQ-F-002 (kids) cite seg-01; commit, then sync new_doc. Returns (before, repo, base)."""
-    sync(root, DIFF_DOC)
-    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001"))
+    sync(root, old_doc)
+    put(root, "kb/requirements/REQ-F-001.yaml", req_yaml("REQ-F-001", price))
     put(root, "kb/requirements/REQ-F-002.yaml", req_yaml("REQ-F-002", kids))
     git(root, "add", "-A")
     git(root, "commit", "-qm", "drafts")
@@ -257,7 +258,7 @@ def test_redraft_brief_lists_only_moved_records(md_repo_ingested):
     assert list(sel) == ["REQ-F-001"]
     brief = build_redraft_brief(root, repo, sel, base)
     assert "## REQ-F-001" in brief and "## REQ-F-002" not in brief
-    assert "Unchanged quotes: REQ-F-002" in brief
+    assert "Unchanged quotes: `REQ-F-002`" in brief
 
 
 def test_redraft_brief_shows_old_and_new_text(md_repo_ingested):
@@ -276,3 +277,16 @@ def test_redraft_brief_diff_is_fenced(md_repo_ingested):
     brief = build_redraft_brief(root, repo, select(repo, [], flagged_=False, changed=True, before=before), base)
     assert f"after:\n\n{INJECTION_FLAG}\n````\n{evil}\n````" in brief
     assert "before:\n\n```\nA seat costs 5 EUR.\n```" in brief
+
+
+def test_redraft_brief_selects_record_when_its_sentence_changed_around_an_unchanged_quote(md_repo_ingested):
+    root = md_repo_ingested
+    old = "# Seats\n\nA seat costs 5 EUR for adults.\n\nChildren enter for free on Sundays.\n"
+    new = old.replace("for adults.", "for adults only, never for children.")
+    before, repo, base = diff_setup(root, new, old_doc=old, price="A seat costs 5 EUR")
+    sel = select(repo, [], flagged_=False, changed=True, before=before)
+    assert list(sel) == ["REQ-F-001"]
+    brief = build_redraft_brief(root, repo, sel, base)
+    assert "before:\n\n```\nA seat costs 5 EUR for adults.\n```" in brief
+    assert "never for children" in brief.split("after:")[1]
+    assert "Unchanged quotes: `REQ-F-002` (their quoted sentences did not change)" in brief

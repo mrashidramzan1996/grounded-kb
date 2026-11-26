@@ -132,10 +132,23 @@ def _found_text(repo: KbRepo, rid: str) -> list[tuple[str, str]]:
     return [(q.source, repo.source_text(src)[a:b]) for q, src, a, b in located_quotes(repo, rec.evidence)]
 
 
+def _sentences_of(repo: KbRepo, rid: str) -> list[tuple[str, str]]:
+    """(source ref, sentence text) of each sentence a found quote of `rid` overlaps: the unit whose meaning the quote carries."""
+    rec = repo.records.get(rid)
+    if rec is None or not getattr(rec, "evidence", None):
+        return []
+    out = []
+    for ref in sorted({q.source for q in rec.evidence.quotes}):
+        out += [(ref, t) for t in _cited_sentences(repo, rid, ref).split("\n") if t]
+    return out
+
+
 def moved(before: KbRepo, repo: KbRepo, rid: str) -> bool:
-    """Whether the text `rid` quotes changed since `before`: its found quote text differs, or a quote is no longer found."""
+    """Whether the text `rid` quotes changed since `before`: its found quote text differs, a quote is no longer found, or a
+    sentence it overlaps changed (a negation next to an unchanged quote)."""
     now = _found_text(repo, rid)
-    return now != _found_text(before, rid) or len(now) < len(repo.records[rid].evidence.quotes)  # type: ignore[union-attr]
+    return (now != _found_text(before, rid) or len(now) < len(repo.records[rid].evidence.quotes)  # type: ignore[union-attr]
+            or _sentences_of(before, rid) != _sentences_of(repo, rid))
 
 
 def select(repo: KbRepo, ids: list[str], *, flagged_: bool, changed: bool, before: KbRepo | None) -> dict[str, list[str]]:
@@ -284,7 +297,7 @@ def build_redraft_brief(root: Path, repo: KbRepo, selection: dict[str, list[str]
         records = "\n\n".join(_record_section(repo, rid, selection[rid], before) for rid in sorted(selection))
         same = _unmoved(repo, before, set(selection)) if before is not None else []
         if same:
-            records += "\n\nUnchanged quotes: " + ", ".join(same) + " (their segment changed but the quoted text did not; do not edit them)"
+            records += "\n\nUnchanged quotes: " + ", ".join(inline_code(r) for r in same) + " (their quoted sentences did not change)"
         parts.append(_template("redraft_records.md").substitute(version=BRIEF_VERSION, records=records))
     if new:
         parts.append(_template("redraft_new.md").substitute(

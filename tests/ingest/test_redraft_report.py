@@ -469,22 +469,57 @@ def clarified(kb):
     commit(kb)
 
 
+TRI = "kb/sources/SRC-clarifications/triage.yaml"
+
+
+def scope(r):
+    return [i.message.split(":")[0] for i in r.rejected if i.code == "redraft.out_of_scope"]
+
+
+def redraft_citing_clarification(kb, *extra: str):
+    """Select REQ-NF-001 (and extra), then re-quote it from the new clarification segment seg-01."""
+    assert invoke(kb, "clarify", "--topic", "Price", "--text", "A seat costs 5 EUR for members.", "--by", "@alice").exit_code == 0
+    assert invoke(kb, "clarify", "--topic", "Kids", "--text", "Children enter for free on Sundays.", "--by", "@alice").exit_code == 0
+    commit(kb)
+    redraft(kb, "REQ-NF-001", *extra)
+    text = req_yaml("REQ-NF-001", "A seat costs 5 EUR for members.").replace("SRC-n#seg-01", "SRC-clarifications#seg-01")
+    put(kb, "kb/requirements/REQ-NF-001.yaml", text)
+
+
 def test_clarification_triage_allowed_in_redraft(kb):
-    clarified(kb)
-    redraft(kb, "REQ-NF-001")
-    tri = "kb/sources/SRC-clarifications/triage.yaml"
-    put(kb, tri, "segments:\n  seg-01: [REQ-F-003]\n")
-    r = redraft_report(kb, None)
-    assert [i for i in r.rejected if i.code == "redraft.out_of_scope"] == []
-    # a clarification segment no record cites stays out of scope, and so does another source's triage
-    put(kb, tri, "segments:\n  seg-01: [REQ-F-003]\n  seg-02: 'none: other: x'\n")
-    r = redraft_report(kb, None)
-    assert [(i.code, i.message.split(':')[0]) for i in r.rejected if i.code == "redraft.out_of_scope"] == [
-        ("redraft.out_of_scope", "SRC-clarifications#seg-02")]
-    put(kb, tri, "segments:\n  seg-01: [REQ-F-003]\n")
+    redraft_citing_clarification(kb)
+    put(kb, TRI, "segments:\n  seg-01: [REQ-NF-001]\n")
+    assert scope(redraft_report(kb, None)) == []
+    # only the cited segment: another clarification segment, or another source's triage, stays out of scope
+    put(kb, TRI, "segments:\n  seg-01: [REQ-NF-001]\n  seg-02: 'none: other: x'\n")
+    assert scope(redraft_report(kb, None)) == ["SRC-clarifications#seg-02"]
+    put(kb, TRI, "segments:\n  seg-01: [REQ-NF-001]\n")
     put(kb, "kb/sources/SRC-n/triage.yaml", "segments:\n  seg-01: [REQ-F-001]\n")
-    r = redraft_report(kb, None)
-    assert any(i.code == "redraft.out_of_scope" and "SRC-n#seg-01" in i.message for i in r.rejected)
+    assert "SRC-n#seg-01" in scope(redraft_report(kb, None))
+
+
+def test_clarification_triage_for_unselected_citer_rejected(kb):
+    other = req_yaml("REQ-F-003", "Children enter for free on Sundays.").replace("SRC-n#seg-01", "SRC-clarifications#seg-02")
+    put(kb, "kb/requirements/REQ-F-003.yaml", other)  # committed with the clarifications, never selected
+    redraft_citing_clarification(kb)
+    put(kb, TRI, "segments:\n  seg-01: [REQ-NF-001]\n  seg-02: [REQ-F-003]\n")
+    assert "SRC-clarifications#seg-02" in scope(redraft_report(kb, None))
+
+
+def test_clarification_triage_none_entry_rejected(kb):
+    redraft_citing_clarification(kb)
+    put(kb, TRI, "segments:\n  seg-01: 'none: other: hidden'\n")
+    assert "SRC-clarifications#seg-01" in scope(redraft_report(kb, None))
+
+
+def test_clarification_triage_dropping_an_id_rejected(kb):
+    put(kb, "kb/requirements/REQ-F-009.yaml", req_yaml("REQ-F-009", "A seat costs 5 EUR for members.").replace("SRC-n#seg-01", "SRC-clarifications#seg-01"))
+    assert invoke(kb, "clarify", "--topic", "Price", "--text", "A seat costs 5 EUR for members.", "--by", "@alice").exit_code == 0
+    put(kb, TRI, "segments:\n  seg-01: [REQ-F-009]\n")
+    commit(kb)
+    redraft(kb, "REQ-NF-001")
+    put(kb, TRI, "segments:\n  seg-01: [REQ-NF-001]\n")  # reassigns, dropping REQ-F-009
+    assert "SRC-clarifications#seg-01" in scope(redraft_report(kb, None))
 
 
 def test_segment_untriaged_cited_message_gives_next_step(kb):

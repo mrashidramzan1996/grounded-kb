@@ -17,7 +17,6 @@ from kb.ingest.redraft import (
     RedraftError,
     changed_segments,
     check_named,
-    citers,
     citing,
     present,
     ref_key,
@@ -191,15 +190,18 @@ def _triage_scope(head: KbRepo, before: KbRepo, src: str, path: str, at_base: se
     """Triage entries changed since base, per segment id. An entry may change freely for an offered segment with no
     records (new, or changed and uncited). For a segment the selection cited at base, the only ids it may lose are
     selected ones (a superseded id is a selected one). For one cited only at head, ids may only be added (a
-    "none: ..." entry may become a list). A segment of SRC-clarifications that a live record cites at head may change
-    freely: the answer was recorded for that record, and only the redraft can triage it. Any other change is out of scope."""
+    "none: ..." entry may become a list). A segment of SRC-clarifications that no record cited at base and that a selected or
+    new record cites at head gets the same treatment as one cited only at head, even where `kb clarify` stored it after
+    the base ("none: ..." is never allowed through it). Any other change is out of scope."""
     now, then = head.triage(src), before.triage(src)
     a, b = (now.segments if now else {}), (then.segments if then else {})
     issues = []
     for seg in sorted(set(a) | set(b)):
         old, new, ref = b.get(seg), a.get(seg), f"{src}#{seg}"
-        if old == new or ref in fresh or ref in clarified:
+        if old == new or ref in fresh:
             continue
+        if ref in clarified and isinstance(new, list) and (not isinstance(old, list) or set(old) <= set(new)):
+            continue  # a new clarification answer the redraft cites: triaged with a list, ids only added
         if ref in at_base and _ids(old) - _ids(new) <= selected:
             continue
         if ref in at_head and isinstance(new, list) and (not isinstance(old, list) or set(old) <= set(new)):
@@ -220,7 +222,7 @@ def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[
     at_head, at_base = {p: r for r, p in head.id_paths}, {p: r for r, p in before.id_paths}
     # superseding and drafted records are new, so at base only the selected records cite anything
     cited_base, cited_head = _cited(before, selected), _cited(head, allowed)
-    clarified = {ref for ref in citers(head) if ref.partition("#")[0] == "SRC-clarifications"}
+    clarified = {r for r in cited_head if r.partition("#")[0] == "SRC-clarifications" and not citing(before, {r})}
     issues = []
     for path in sorted(drafted):
         rid = at_head.get(path) or at_base.get(path)
