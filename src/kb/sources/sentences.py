@@ -20,6 +20,7 @@ _MARKER = re.compile(r"\s*(?:[-*+] |\d+[.)] |\| )")
 _FENCE = re.compile(r"\s*(?:```|~~~)")
 _SEPARATOR = re.compile(r"\|?[\s:|-]+\|?")
 _HEADING_LINE = re.compile(r"#{1,6} ")
+_BREAK = re.compile(r"(?m)^(?:#{1,6} |\s*(?:```|~~~))")
 
 # "can" and "will" in descriptive prose ("You can find...", "This document will describe...") are not rules.
 # Third-person uses ("The tool can parse YAML") are accepted false positives: a missed rule costs more than a dismissed item.
@@ -36,10 +37,10 @@ NORMATIVE_CUES: dict[str, re.Pattern] = {
     for name, pattern in {
         "must": r"\b(?:must(?!\s+(?:not|never)\b)|shall(?!\s+not\b)|required|requires?|is required to|has to|needs to"
                 r"|limited\s+to|expected\s+to|entitled\s+to"
-                r"|" + _NOT_RULE_SUBJECT + _WILL + r"(?!\s+(?:not|never)\b)|mandatory|ensures?|(?:is|are)\s+to)\b",
-        "must_not": r"\b(?:must\s+not|shall\s+not|may\s+not|can\s*not|can['\u2019]t|won['\u2019]t|never|prohibited|forbidden"
+                r"|" + _NOT_RULE_SUBJECT + _WILL + r"(?!\s+(?:not|never)\b)|mandatory|ensures?|are\s+to)\b",  # not "is to": "The goal of this section is to explain"
+        "must_not": r"\b(?:must\s+not|mustn['\u2019]t|shouldn['\u2019]t|(?:is|are)n['\u2019]t\s+allowed|shall\s+not|may\s+not|can\s*not|can['\u2019]t|won['\u2019]t|never|prohibited|forbidden"
                     r"|not\s+(?:be\s+)?permitted|not\s+allowed|no\s+longer|" + _NOT_RULE_SUBJECT + _WILL + r"\s+not)\b",
-        "should": r"\b(?:should|recommended)\b",
+        "should": r"\b(?:should(?!n['\u2019]t)|recommended)\b",
         "may": r"\bmay\b(?!\s+not\b)|" + _NOT_RULE_SUBJECT + r"\bcan\b(?!\s*not\b|['\u2019]t)|\boptional\b"
                r"|(?:is|are)\s+allowed\s+to\b"
                r"|(?<!not\s)(?<!never\s)(?<!longer\s)(?<!not\sbe\s)(?<!never\sbe\s)(?<!longer\sbe\s)\bpermitted\b",
@@ -152,10 +153,12 @@ def _split_clauses(text: str, start: int, end: int) -> list[tuple[int, int]]:
 def segment_sentences(text: str, seg: Segment, src_id: str) -> list[Sentence]:
     result: list[Sentence] = []
     inherited: frozenset[str] = frozenset()
+    prev_end = seg.start
     for bs, be in _blocks(text, seg.start, seg.end):
         is_item = bool(_UNIT_START.match(text[bs:be]))
-        if not is_item:
-            inherited = frozenset()
+        if not is_item or _BREAK.search(text, prev_end, bs):
+            inherited = frozenset()  # a lead-in reaches only the items right after it, not past a heading or code
+        prev_end = be
         for ss, se in _split_block(text, bs, be):
             for s, e in _split_clauses(text, ss, se):
                 piece = text[s:e].rstrip()

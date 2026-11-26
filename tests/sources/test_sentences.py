@@ -4,7 +4,7 @@ from dataclasses import replace
 from helpers import nt
 
 from kb.records.repo import KbRepo
-from kb.sources.segment import segment
+from kb.sources.segment import Segment, segment
 from kb.sources.sentences import (
     cues,
     is_normative,
@@ -254,3 +254,33 @@ def test_item_with_own_modal_does_not_also_inherit():
     items = [s for s in out if s.text.startswith("- ")]
     assert items[0].cues >= {"must_not"} and "must" not in items[0].cues
     assert items[1].cues == {"must"}
+
+
+def test_negated_contractions_are_must_not():
+    for t in ("Users mustn't export.", "Users mustn’t export.", "Users shouldn't export.",
+              "Users shouldn’t export.", "Users isn't allowed to export.", "Users aren't allowed to export.",
+              "Users aren’t allowed to export."):
+        assert cues(t) == {"must_not"}, t
+
+
+def test_goal_sentences_are_not_rules():
+    for t in ("The goal of this section is to explain the flow.", "Our aim is to be fast."):
+        assert "must" not in cues(t), t
+    assert "must" in cues("Invoices are to be paid within the term.")
+
+
+def _whole(md: str):
+    """One segment over the whole text (a heading inside a segment, as with a very long section)."""
+    return segment_sentences(md, Segment("seg-01", "", 1, 0, len(md), ""), "SRC-x")
+
+
+def test_lead_in_cue_does_not_leak_across_a_heading_or_a_paragraph():
+    out = _whole("The system must:\n\n## Notes\n\n- plain item one\n- plain item two\n")
+    items = [s for s in out if s.text.startswith("- ")]
+    assert len(items) == 2 and all(not s.cues for s in items)
+    out = _whole("The system must:\n\nSome paragraph.\n\n- plain item\n")
+    assert [s.cues for s in out if s.text.startswith("- ")] == [frozenset()]
+    out = _whole("The system must:\n\n```\ncode\n```\n\n- plain item\n")
+    assert [s.cues for s in out if s.text.startswith("- ")] == [frozenset()]
+    out = _whole("The system must:\n\n- log every change\n")
+    assert "must" in [s for s in out if s.text.startswith("- ")][0].cues
