@@ -184,7 +184,7 @@ records drafted in the current ingest or redraft range.
   sentences than before (`sentence.uncovered`), and an earlier decision on a sentence that now splits into clauses is
   stale, so the evaluation asks again.
 - New warnings: `requirement.statement_modality_mismatch` and `requirement.number_mismatch` (errors for drafted
-  records), `requirement.actor_not_in_quote`, and `record.duplicate_quote` (the same quote on two records of the same
+  records), `requirement.actor_not_in_quote` (only when `actor` is a TERM id: that term's name or an alias must appear in a found quote; a plain-text actor is not checked), and `record.duplicate_quote` (the same quote on two records of the same
   type).
 - `kb flag keep <REQ-id> --flag vague|conflicting|untestable --by <handle>` records "keep it flagged" in
   `kb/eval/decisions.yaml`, so `kb todo` stops asking. The question returns when the record or its cited text changes.

@@ -203,7 +203,7 @@ def _number_issue(repo: KbRepo, rec: Requirement, located: list[tuple[Quote, str
 
 def _actor_names(repo: KbRepo, actor: str) -> list[str]:
     term = repo.records.get(actor)
-    return [term.name, *term.aliases] if isinstance(term, Term) else [actor]
+    return [term.name, *term.aliases] if isinstance(term, Term) else []
 
 
 def statement_issues(repo: KbRepo, rid: str, rec: Requirement, ev: Evidence, path: str) -> list[Issue]:
@@ -223,7 +223,7 @@ def statement_issues(repo: KbRepo, rid: str, rec: Requirement, ev: Evidence, pat
         issues.append(Issue("requirement.number_mismatch",
                             f"{rid}: statement numbers not in the quote clause that says the same thing: {wrong}", "warning", path, rid))
     actor = (rec.actor or "").strip()
-    if actor and not actor.lower().endswith("system"):  # "the billing system": the product itself
+    if isinstance(repo.records.get(actor), Term):  # only an explicit entity link is checked; a plain-text actor is free text
         quoted = {w for q, *_ in located for w in _words(q.text)}
         names = _actor_names(repo, actor)
         distinctive = {w for n in names for w in _words(n) if len(w) >= 4 and w not in _GENERIC_WORDS}

@@ -201,12 +201,10 @@ def test_number_present_but_wrong_place(tmp_path):
     assert "requirement.number_mismatch" not in codes(ok)
 
 
-def test_actor_not_in_quote(tmp_path):
+def test_plain_text_actor_is_never_checked(tmp_path):
     q = "Seats must be removed at the end of the cycle."
     _, issues = _stmt(tmp_path, q, q, actor="billing admin")
-    assert "requirement.actor_not_in_quote" in codes(issues)
-    _, ok = _stmt(tmp_path / "ok", q, q, actor="seats")
-    assert "requirement.actor_not_in_quote" not in codes(ok)
+    assert "requirement.actor_not_in_quote" not in codes(issues)
 
 
 def _with_term(tmp_path, quote, name, aliases):
@@ -223,14 +221,14 @@ def test_actor_term_name_or_alias_in_quote_passes(tmp_path):
 
 
 def test_actor_plural_forms_and_generic_words(tmp_path):
-    def warns(n, actor, quote):
-        return "requirement.actor_not_in_quote" in codes(_stmt(tmp_path / n, quote, quote, actor=actor)[1])
+    def warns(n, name, quote):
+        return "requirement.actor_not_in_quote" in _with_term(tmp_path / n, quote, name, "[]")
 
-    assert not warns("a", "the billing service", "Billing must retry failed charges.")
-    assert not warns("b", "batch process", "Batch processes must run nightly.")
-    assert not warns("c", "the batch processes", "The batch process must run nightly.")
-    assert warns("d", "finance team", "Billing admins must approve refunds.")
-    assert not warns("e", "the app", "Billing admins must approve refunds.")  # only generic words: nothing to check
+    assert not warns("a", "Billing service", "Billing must retry failed charges.")
+    assert not warns("b", "Batch process", "Batch processes must run nightly.")
+    assert not warns("c", "The batch processes", "The batch process must run nightly.")
+    assert warns("d", "Finance team", "Billing admins must approve refunds.")
+    assert not warns("e", "App", "Billing admins must approve refunds.")  # only generic words: nothing to check
 
 
 def test_number_from_two_quoted_clauses_is_fine(tmp_path):
