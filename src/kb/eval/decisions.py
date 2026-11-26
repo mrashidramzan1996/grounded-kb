@@ -41,7 +41,6 @@ from kb.safepath import UnsafePath, read_regular
 from kb.safewrite import check_target, write_atomic
 from kb.sources.sentences import (
     Sentence,
-    is_normative,
     sentence_key,
     sentences,
     text_key,
@@ -783,12 +782,15 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
             and fingerprint(repo, skip=touched, skip_segments=answers) == fingerprint(base, skip=touched))
 
 
+_DECIDED_LINE = re.compile(r"^Decided by [^\n]* on [^\n]*\.[ \t]*$", re.MULTILINE)
+
+
 def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[str, str]]:
     """The segments of docs/clarifications.md (kb clarify's file of a person's answers) that the freshness fingerprint
     leaves out, with the file's fixed header: a section that is new since the evaluated commit (absent there by segment
-    id and by hash; a rewritten section never is) and whose rule-like sentences the records `rids` (pinned by a
-    decision) all quote, so that every rule in it was decided on. A section with a rule no such record quotes, or one
-    that was rewritten, needs a new evaluation."""
+    id and by hash; a rewritten section never is) and whose answer text (after the `Decided by ... on ....` line)
+    the quotes of the records `rids` (pinned by a decision) cover character for character, whitespace aside, so that
+    all of it was decided on. Any other section, fenced text or rule-less wording included, needs a new evaluation."""
     src = next((sid for sid, s in repo.sources.items() if s.original == CLARIFICATIONS), None)
     if src is None:
         return set()
@@ -799,15 +801,24 @@ def _answer_segments(repo: KbRepo, base: KbRepo, rids: set[str]) -> set[tuple[st
     old = base.segments(src) if src in base.sources else []
     ids, hashes = {seg.id for seg in old}, {seg.hash for seg in old}
     text = repo.source_text(src)
-    rules = [s for s in sentences(repo, src) if is_normative(s)]
     out: set[tuple[str, str]] = set()
     for seg in repo.segments(src):
         if seg.id in ids or seg.hash in hashes:
             continue
-        header = text[seg.start:seg.end].strip() == CLARIFICATIONS_HEADER.strip()
-        in_seg = [r for r in rules if max(r.start, seg.start) < min(r.end, seg.end)]
-        quoted_here = any(max(a, seg.start) < min(b, seg.end) for a, b in quoted)
-        if header or (quoted_here and all(any(max(a, r.start) < min(b, r.end) for a, b in quoted) for r in in_seg)):
+        body = text[seg.start:seg.end]
+        if body.strip() == CLARIFICATIONS_HEADER.strip():
+            out.add((src, seg.id))
+            continue
+        # the answer is what follows the `Decided by ... on ....` line kb clarify writes under the heading
+        m = _DECIDED_LINE.search(body)
+        if m is None:
+            continue
+        covered = [False] * len(body)
+        for a, b in quoted:
+            for i in range(max(a, seg.start) - seg.start, min(b, seg.end) - seg.start):
+                covered[i] = True
+        answer = range(m.end(), len(body))
+        if any(not body[i].isspace() for i in answer) and all(covered[i] or body[i].isspace() for i in answer):
             out.add((src, seg.id))
     return out
 

@@ -3,6 +3,8 @@ followed as written."""
 
 import re
 
+import pytest
+
 from kb.eval.decisions import _answer_segments, read_summary
 from kb.records.repo import KbRepo
 from helpers import TODO_TRIAGE, commit, invoke, ok, put, todo_json
@@ -132,3 +134,39 @@ def test_rewritten_clarification_section_makes_eval_stale(tmp_path):
     assert _answer_segments(KbRepo.load(root), base, {"REQ-F-002"}) == set()
     r = invoke(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
     assert r.exit_code == 2 and "run the evaluation again" in r.output
+
+
+STEM = ANSWER.rstrip(".")
+BYPASSES = {
+    "same_sentence": (f"{STEM}; admins must approve every refund over 500 EUR.", STEM),
+    "line_break": (f"{STEM}\nand admins must approve every refund over 500 EUR.", STEM),
+    "crosses_boundary": (f"{ANSWER} Admins approve every refund.", f"{ANSWER} Admins"),
+    "fenced_rule": (f"{ANSWER}\n\n```\nAdmins must approve every refund over 500 EUR.\n```", ANSWER),
+    "no_cue_words": (f"{ANSWER} Admins approve every refund.", ANSWER),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BYPASSES))
+def test_clarification_text_no_quote_covers_makes_eval_stale(tmp_path, case):
+    body, quote = BYPASSES[case]
+    root = drafted(tmp_path)
+    evaluate(root, (omission(root),))
+    ok(root, "clarify", "--topic", "Invoice payment", "--text", ANSWER, "--by", "@alice", "--date", "2026-11-26")
+    path = root / "docs/clarifications.md"
+    path.write_text(path.read_text().replace(f"\n{ANSWER}\n", f"\n{body}\n"))
+    ok(root, "ingest", "docs/clarifications.md")
+    ref = "SRC-clarifications#seg-02"
+    put(root, "kb/requirements/REQ-F-002.yaml", (
+        "id: REQ-F-002\nstatement: Invoices are paid by bank transfer within 30 days.\nmodality: must\n"
+        f"actor: customer\norigin: stated\nevidence:\n  quotes:\n  - source: SRC-n#seg-01\n    text: '{INVOICES}'\n"
+        f"  - source: {ref}\n    text: '{quote}'\nmodules:\n- MOD-a\n"))
+    put(root, TODO_TRIAGE, "segments:\n  seg-01: [REQ-F-001, REQ-F-002]\n")
+    put(root, "kb/sources/SRC-clarifications/triage.yaml",
+        "segments:\n  seg-01: 'none: heading: the clarifications file'\n  seg-02: [REQ-F-002]\n")
+    ok(root, "ingest", "--report")
+    r = invoke(root, "eval", "decide", "F-0123456789", "--as", "added", "--record", "REQ-F-002", "--by", "@alice")
+    assert r.exit_code == 2 and "run the evaluation again" in r.output
+    commit(root, "answer with text no quote covers")
+    assert "up to date" not in ok(root, "eval", "status").stdout
+    assert any(i.startswith("eval:extract") for i in do_ids(todo_json(root)))
+    assert invoke(root, "baseline", "freeze", "v1").exit_code == 1
