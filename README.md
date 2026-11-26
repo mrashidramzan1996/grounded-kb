@@ -124,9 +124,10 @@ of the report says where they came from (`Policy from base main at <sha>.`). `--
 branch, looked up by exact ref among local and remote-tracking branches only: a tag with the same name (or named
 like the branch's full ref), or a local branch and a remote one of that name at different commits, is an error
 (exit 2); delete the tag, or pass a full ref such as `refs/remotes/origin/main`. A change to `kb.config.yaml`, to a
-CODEOWNERS file (`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) or to the CI workflow that runs the check
-(`.github/workflows/kb.yml`, `.github/workflows/kb-claims.yml`, `.gitlab-ci.yml`) also needs the decision approvers; a rename counts as a change to both
-paths. With `kb verify --all` and a pull request, the policy comes from the branch the pull request targets (or
+CODEOWNERS file (`CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`) or to any CI workflow (every file under
+`.github/workflows/`, not only `kb.yml` and `kb-claims.yml`, and `.gitlab-ci.yml`) also needs the decision approvers: a
+new workflow with a job named `kb-policy` that always passes would otherwise satisfy the required check. A rename
+counts as a change to both paths. With `kb verify --all` and a pull request, the policy comes from the branch the pull request targets (or
 the default branch); a base branch that cannot be found is an error (exit 2). Without a pull request and without a base the working
 tree's policy applies. Only when the target branch has no `kb.config.yaml` yet does the change's own policy apply, with
 the target branch's CODEOWNERS.
@@ -135,11 +136,14 @@ the target branch's CODEOWNERS.
 
 - Make `kb-policy` (the job that runs `kb verify --skip-tests`) a required status check on the default branch (GitHub: a
   branch protection rule or ruleset; GitLab: "Pipelines must succeed"), so a pull request cannot merge while it fails.
+  A required status check matches by job name alone, so require it from the `kb.yml` workflow itself where the forge
+  can (GitHub: a ruleset's "Require workflows to pass before merging" naming `.github/workflows/kb.yml` on the default
+  branch), and protect the whole `.github/workflows/` directory with code-owner review (below).
   `kb-claims` runs the project's tests and reports claim verification; it runs pull-request code, so it is not the gate.
 - Enable "Require review from Code Owners" (GitLab: code owner approval) and give the CODEOWNERS lines `kb init`
-  writes real owners, including the gate's own files (`/kb.config.yaml`, the CODEOWNERS locations,
-  `/.github/workflows/kb.yml`, `/.github/workflows/kb-claims.yml`, `/.gitlab-ci.yml`): a pull request runs its own copy of the workflow, so only the
-  forge's code-owner review stops one that edits the workflow to skip or weaken the check.
+  writes real owners, including the gate's own files (`/kb.config.yaml`, the CODEOWNERS locations, the whole
+  `/.github/workflows/` directory and `/.gitlab-ci.yml`): a pull request runs its own copy of the workflows, so only the
+  forge's code-owner review stops one that edits a workflow to skip or weaken the check, or adds one that fakes it.
 - Restrict who can create tags (GitHub: a tag ruleset; GitLab: protected tags with `*`), so nobody can push a tag
   named like a branch. `kb verify` refuses such a tag (exit 2) rather than trusting it.
 
@@ -179,8 +183,9 @@ current ingest or redraft range.
   `origin` (stated or implied). A requirement without them warns `requirement.fields_missing`. Add them when you next
   redraft (`kb redraft <ID>`). An `implied` requirement needs a confirming quote from `docs/clarifications.md`.
 - CODEOWNERS: the block an older `kb init` wrote lacks `/kb/exclusions/`, `/kb/sources/*/triage.yaml`, `/kb/eval/` and
-  `/kb/baseline/` (for the intent approvers) and the workflow file `/.github/workflows/kb-claims.yml` (for the decision approvers). A
-  block from before 0.3.1 also lacks `/.github/workflows/kb.yml`, `/.gitlab-ci.yml` and the CODEOWNERS files. `kb init`
+  `/kb/baseline/` (for the intent approvers), and names single workflow files where the decision approvers now own the
+  whole `/.github/workflows/` directory (a pull request that adds any workflow needs them). A block from before 0.3.1
+  also lacks `/.gitlab-ci.yml` and the CODEOWNERS files. `kb init`
   does not run on a set-up repository, so replace your kb block with the one `kb init` writes now (run it in an empty
   scratch repository to see it), or add those lines to yours.
 - GitHub CI is now two workflows. `kb.yml` runs the `kb-policy` job (approvals, schema, stale context, the decision

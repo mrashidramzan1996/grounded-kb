@@ -35,8 +35,9 @@ _APPROVAL_PATHS = [
 # CI workflows that run `kb verify` (the files `kb init` writes): a change to one can drop or weaken the gate
 CLAIMS_WORKFLOW = ".github/workflows/kb-claims.yml"  # runs pull-request code: kb.yml (the gate) never does
 CI_WORKFLOWS = [".github/workflows/kb.yml", CLAIMS_WORKFLOW, ".gitlab-ci.yml"]
-# the gate itself: who decides (CODEOWNERS) and what runs the check; the decision approvers own them, as kb.config.yaml
-_GATE_PATHS = [f"/{p}" for p in (*CI_WORKFLOWS, *CODEOWNERS_LOCATIONS)]
+# the gate itself: who decides (CODEOWNERS) and what runs the check (every GitHub workflow: a new one could hold a job
+# named like the required check; and GitLab's pipeline); the decision approvers own them, as kb.config.yaml
+_GATE_PATHS = ["/.github/workflows/", "/.gitlab-ci.yml", *(f"/{p}" for p in CODEOWNERS_LOCATIONS)]
 _SAFE_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+=<>!~,\[\]-]*$")
 _SAFE_BASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _WILDCARDS = set("*?[]\\!")
@@ -169,7 +170,7 @@ def _codeowners_block() -> str:
         "# uncomment these lines and replace TODO with the approving team(s).",
     ]
     gate = [
-        "# The gate itself (the config above, CODEOWNERS and the CI workflow that runs kb verify):",
+        "# The gate itself (the config above, CODEOWNERS and every CI workflow: any of them can run or fake kb verify):",
         "# replace TODO with the decision approvers.",
     ]
     return "\n".join(lines + [f"# {p} TODO" for p in _APPROVAL_PATHS] + gate + [f"# {p} TODO" for p in _GATE_PATHS])

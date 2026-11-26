@@ -10,7 +10,7 @@ from kb.config.codeowners import owners_for, parse_codeowners
 from kb.config.load import CONFIG
 from kb.config.schema import KbConfig
 from kb.config.validate import modules_for, resolve_owner
-from kb.gitfiles import file_at, tree_symlinks
+from kb.gitfiles import file_at, read_tree_files_names, tree_symlinks
 from kb.init.scaffold import CI_WORKFLOWS, CODEOWNERS_LOCATIONS
 from kb.issues import Issue
 from kb.ports.forge import Forge, PullRequest, Review
@@ -65,14 +65,39 @@ def codeowners_rules_at(root: Path, ref: str) -> CodeownersRules | None:
 
 # The gate's own files: who decides and what runs the check. A change to one needs the decision approvers.
 POLICY_FILES = (CONFIG, *CODEOWNERS_LOCATIONS, *CI_WORKFLOWS)
+# every GitHub workflow is part of the gate: a required status check matches by job name, so a pull request that adds a
+# workflow with a job named kb-policy that always passes would satisfy it
+WORKFLOWS_DIR = ".github/workflows/"
+
+
+def is_policy_file(path: str) -> bool:
+    """Whether a change to `path` needs the decision approvers: a POLICY_FILES path, or any file under
+    .github/workflows/."""
+    return path in POLICY_FILES or path.startswith(WORKFLOWS_DIR)
+
+
+def _workflow_files(root: Path, tip: str) -> set[str]:
+    """Every path under .github/workflows/ in the working tree (files and symlinks, never followed) or at `tip`."""
+    found = set(read_tree_files_names(root, tip, WORKFLOWS_DIR))
+    top = root / WORKFLOWS_DIR
+    if os.path.lexists(top) and not top.is_symlink() and top.is_dir():
+        for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
+            here = Path(dirpath)
+            links = [d for d in dirnames if (here / d).is_symlink()]
+            dirnames[:] = [d for d in dirnames if d not in links]
+            found |= {(here / f).relative_to(root).as_posix() for f in [*filenames, *links]}
+    elif os.path.lexists(top):
+        found.add(WORKFLOWS_DIR.rstrip("/"))  # a symlink or a file where the directory belongs: changed
+    return found
 
 
 def policy_files_changed(root: Path, tip: str) -> list[str]:
-    """POLICY_FILES whose working-tree bytes differ from `tip`'s (added, edited or deleted): for `kb verify --all`
-    with a pull request, which computes no changed files. A file that cannot be read safely (a symlink) counts as
-    changed, and so does one that exists but cannot be read (too large, not a regular file)."""
+    """POLICY_FILES and the workflows under .github/workflows/ whose working-tree bytes differ from `tip`'s (added,
+    edited or deleted): for `kb verify --all` with a pull request, which computes no changed files. A file that cannot
+    be read safely (a symlink) counts as changed, and so does one that exists but cannot be read (too large, not a
+    regular file)."""
     out = []
-    for rel in POLICY_FILES:
+    for rel in [*POLICY_FILES, *sorted(_workflow_files(root, tip) - set(POLICY_FILES))]:
         try:
             data = read_regular(root, rel)
         except UnsafePath:
@@ -151,7 +176,7 @@ def required_owners(
     approvers, teams and modules decide, not the change's. `changes` None (no base): no changed files; records count
     as changed against `base_repo` (every record when that is None too). `rules`: the policy's CODEOWNERS rules taken
     earlier (None: no CODEOWNERS, module owners apply); left out, CODEOWNERS is read now. A change to kb.config.yaml,
-    a CODEOWNERS file or the kb CI workflow (POLICY_FILES: in `changes`, or in `policy_changed` when there are no
+    a CODEOWNERS file or any CI workflow (is_policy_file: in `changes`, or in `policy_changed` when there are no
     changes to diff, as policy_files_changed finds them) needs the decision approvers; with none named, NO_DECISION_APPROVERS, which never approves."""
     reasons: dict[str, set[str]] = {}
 
@@ -172,7 +197,7 @@ def required_owners(
 
     intent = _handles(config.policy.approvers.intent, config)
     decisions = _handles(config.policy.approvers.decisions, config)
-    changed_policy = {p for p in (changes.files if changes else ()) if p in POLICY_FILES} | set(policy_changed)
+    changed_policy = {p for p in (changes.files if changes else ()) if is_policy_file(p)} | set(policy_changed)
     for path in sorted(changed_policy):
         for h in decisions or [NO_DECISION_APPROVERS]:
             need(h, f"{path} changed")

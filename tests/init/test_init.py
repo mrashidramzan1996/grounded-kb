@@ -98,9 +98,12 @@ def test_codeowners_block_covers_the_gate_itself(tmp_path):
     repo = make_git_repo(None, tmp_path)
     init_repo(repo)
     text = (repo / "CODEOWNERS").read_text()
-    for p in ("/.github/workflows/kb.yml", "/.github/workflows/kb-claims.yml", "/.gitlab-ci.yml", "/CODEOWNERS", "/.github/CODEOWNERS", "/docs/CODEOWNERS"):
+    for p in ("/.github/workflows/", "/.gitlab-ci.yml", "/CODEOWNERS", "/.github/CODEOWNERS", "/docs/CODEOWNERS"):
         assert f"# {p} TODO" in text
     assert "decision approvers" in text
+    # the whole workflows directory, on the decision approvers' lines: a new workflow is part of the gate too
+    gate = text[text.index("# The gate itself"):]
+    assert "# /.github/workflows/ TODO" in gate and "/.github/workflows/kb.yml" not in text
 
 
 def test_codeowners_block_is_commented_and_user_content_kept(tmp_path):
@@ -373,9 +376,14 @@ def test_claims_workflow_is_separate_and_never_holds_a_token(tmp_path):
 
 
 def test_workflow_files_are_policy_files():
-    from kb.verify.approvals import POLICY_FILES
+    from kb.verify.approvals import POLICY_FILES, is_policy_file
 
     assert ".github/workflows/kb-claims.yml" in POLICY_FILES and ".github/workflows/kb.yml" in POLICY_FILES
+    for path in (".github/workflows/kb.yml", ".github/workflows/new.yml", ".github/workflows/a/b.yaml", ".gitlab-ci.yml",
+                 "kb.config.yaml", "CODEOWNERS", ".github/CODEOWNERS"):
+        assert is_policy_file(path), path
+    for path in (".github/dependabot.yml", "workflows/kb.yml", "src/.github/workflows/x.yml", "kb/requirements/x"):
+        assert not is_policy_file(path), path
 
 
 def test_gitlab_ci_mr_and_default_branch_jobs(tmp_path):

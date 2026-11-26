@@ -290,3 +290,17 @@ def test_unreadable_policy_file_counts_as_changed(tmp_path, make):
     else:
         (root / ".github/CODEOWNERS").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
     assert policy_files_changed(root, tip) == [".github/CODEOWNERS"]
+
+
+def test_a_new_or_deleted_workflow_counts_as_a_policy_change(tmp_path):
+    """`kb verify --all` with a pull request diffs no files: every workflow under .github/workflows/ is compared with
+    the tip, so a new workflow (say, one with a job named kb-policy that always passes) needs the decision approvers."""
+    from kb.verify.approvals import policy_files_changed
+
+    root = make_git_repo(None, tmp_path, {"kb.config.yaml": BASE_CONFIG, ".github/workflows/ci.yml": "on: push\n"})
+    tip = sha(root)
+    assert policy_files_changed(root, tip) == []
+    (root / ".github/workflows/spoof.yml").write_text("jobs:\n  kb-policy:\n    steps: []\n")
+    assert policy_files_changed(root, tip) == [".github/workflows/spoof.yml"]
+    (root / ".github/workflows/ci.yml").unlink()
+    assert policy_files_changed(root, tip) == [".github/workflows/ci.yml", ".github/workflows/spoof.yml"]

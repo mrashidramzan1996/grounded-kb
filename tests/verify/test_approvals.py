@@ -210,8 +210,12 @@ def test_ci_workflow_change_needs_decision_approvers(tmp_path):
     """The workflow that runs `kb verify` is part of the gate: a PR that edits it could drop or weaken the check."""
     req = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes(".github/workflows/kb.yml", ".gitlab-ci.yml"), [])
     assert {".github/workflows/kb.yml changed", ".gitlab-ci.yml changed"} <= set(req["@acme/tech-leads"])
-    other = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes(".github/workflows/other.yml"), [])
-    assert "@acme/tech-leads" not in other
+    # any workflow: a new one with a job named kb-policy that always passes would satisfy the required check
+    for path in (".github/workflows/other.yml", ".github/workflows/spoof.yaml", ".github/workflows/sub/x.yml"):
+        other = required_owners(tmp_path, policy_cfg(), repo_of({}), None, changes(path), [])
+        assert f"{path} changed" in other["@acme/tech-leads"], path
+    assert "@acme/tech-leads" not in required_owners(tmp_path, policy_cfg(), repo_of({}), None,
+                                                     changes(".github/dependabot.yml"), [])
 
 
 def test_moving_codeowners_needs_decision_approval(tmp_path):
