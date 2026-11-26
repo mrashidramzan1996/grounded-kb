@@ -106,6 +106,16 @@ def test_quote_spanning_two_rules_flags_merge():
     assert [i for i in gate(one) if i.code == "quote.multiple_rules"] == []
 
 
+def test_one_sentence_that_clause_splits_is_one_rule():
+    one = "A seat must be paid before use; it must not be shared, and the owner must approve it."
+    two = one + " The account owner must approve every new seat."
+    doc = f"# Seats\n\n## Adding\n\n{two}\n"
+    repo = repo_of(req("REQ-F-001", "seg-02", one), doc=doc)
+    assert [i for i in gate(repo) if i.code == "quote.multiple_rules"] == []
+    merges = [i for i in gate(repo_of(req("REQ-F-001", "seg-02", two), doc=doc)) if i.code == "quote.multiple_rules"]
+    assert [i.message for i in merges] == ["REQ-F-001: its quote spans 2 rule-like sentences; split it into one record per rule"]
+
+
 def test_triage_none_with_rule_warns():
     repo = repo_of(triage="segments:\n  seg-01: 'none: heading'\n  seg-02: 'none: background: seat basics'\n"
                           "  seg-03: 'none: heading'\n  seg-04: 'none: other'\n")

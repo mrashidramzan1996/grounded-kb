@@ -7,7 +7,13 @@ from kb.issues import Issue
 from kb.records.lifecycle import live_ids
 from kb.records.models import Decision, Exclusion, Invariant, Requirement
 from kb.records.repo import KbRepo
-from kb.sources.sentences import Sentence, is_normative, sentence_key, sentences
+from kb.sources.sentences import (
+    Sentence,
+    is_normative,
+    same_sentence,
+    sentence_key,
+    sentences,
+)
 from kb.textfmt import inline_code
 
 # the record types whose quotes cover a sentence; entity and relation quotes never do
@@ -92,8 +98,14 @@ def coverage_gate(ctx: GateContext) -> list[Issue]:
                             "warning", f"kb/sources/{src}/triage.yaml", src))
     merged: dict[str, int] = {}
     for src, found in spans.items():
+        text = repo.source_text(src) if found else ""
         for a, b, rid in found:
-            n = sum(1 for s in rules.get(src, ()) if _overlaps(s, a, b))
+            n = 0  # rule-like sentences, not clauses: the clauses of one sentence ("...; it must...") count once
+            last = None
+            for s in rules.get(src, ()):
+                if _overlaps(s, a, b):
+                    n += 0 if last is not None and same_sentence(text, last, s) else 1
+                    last = s
             if n >= 2:
                 merged[rid] = max(merged.get(rid, 0), n)
     for rid, n in sorted(merged.items()):

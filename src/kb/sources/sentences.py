@@ -150,6 +150,11 @@ def _split_clauses(text: str, start: int, end: int) -> list[tuple[int, int]]:
     return out
 
 
+def same_sentence(text: str, a: Sentence, b: Sentence) -> bool:
+    """Whether `b` (after `a`) is a clause of the sentence `a` is a clause of: only a clause separator lies between."""
+    return a.end <= b.start and bool(_CLAUSE_SEP.fullmatch(text[a.end : b.start]))
+
+
 def segment_sentences(text: str, seg: Segment, src_id: str) -> list[Sentence]:
     result: list[Sentence] = []
     inherited: frozenset[str] = frozenset()
