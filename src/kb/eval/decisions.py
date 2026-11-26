@@ -1040,6 +1040,21 @@ def _check_added(root: Path, repo: KbRepo, summary: Summary, kind: str, f: Summa
                     "passage: add the relation on the source TERM, then decide again")
 
 
+def _changed_hint(root: Path, repo: KbRepo, summary: Summary, deciding: str | None) -> str:
+    """Which records changed since the evaluated commit (ids only), and the order that avoids it: decide the finding
+    each edit fixes right after that edit, one at a time."""
+    try:
+        base = _evaluated(root, summary)
+    except (GitError, OSError, ValueError):
+        return ""
+    ids = sorted(rid for rid in (live_ids(repo) | live_ids(base)) if rid != deciding
+                 and record_bytes(base, rid) != record_bytes(repo, rid))
+    if not ids:
+        return ""
+    return (f"; records changed since then: {', '.join(ids)}. Decide the finding that each changed record fixes "
+            "(`--as fixed` / `--as added`) first, one at a time, right after each edit")
+
+
 def _check_fixed(root: Path, repo: KbRepo, summary: Summary, f: SummaryFinding, rid: str | None) -> str:
     named = finding_records(f)
     if not named:
@@ -1141,7 +1156,8 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
                      decision=decision, record=rid, record_sha256=sha, reason=why, by=by, date=day)  # type: ignore[arg-type]
     if summary is not None and not is_fresh(root, repo, summary, [*standing, entry]):
         raise EvalError(f"the knowledge base or its documents changed since {SUMMARY} was written (beyond what this "
-                        "and earlier decisions name): run the evaluation again (`kb todo`)")
+                        f"and earlier decisions name){_changed_hint(root, repo, summary, rid)}: run the evaluation again "
+                        "(`kb todo`)")
     check_target(root, DECISIONS, "file")  # never through a symlink (kb/, kb/eval/ or the file)
     data = [d.model_dump() for d in [*decisions, entry]]
     write_atomic(root, DECISIONS, dump_yaml({"decisions": data}))

@@ -750,9 +750,13 @@ def eval_decide(
     record: Annotated[str | None, typer.Option("--record", help="The record it names (added, covered, fixed).")] = None,
     reason: Annotated[str | None, typer.Option("--reason", help="Why, in one short plain sentence (not_a_rule).")] = None,
     date: Annotated[str | None, typer.Option("--date", help="When they decided, YYYY-MM-DD (default: today).")] = None,
+    more: Annotated[list[str] | None, typer.Argument(hidden=True)] = None,
 ) -> None:
     """Record a person's decision on a finding in kb/eval/decisions.yaml, after checking the knowledge base shows it."""
     root = Path(ctx.obj["root"])
+    if more or any(c in finding for c in ", \t\n"):
+        raise _fail(ValueError("decide one finding per command: kb eval decide <F-id> --as <added|covered|not_a_rule|"
+                               "product_decision|correct|fixed|ok|reopen> --by <handle>"))
     try:
         entry = record_decision(root, finding, as_, by, record, reason, date)
     except TOOL_ERRORS as e:
