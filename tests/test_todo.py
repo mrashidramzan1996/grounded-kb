@@ -198,3 +198,18 @@ def test_clean_repo_is_clean(tmp_path):
     }
     r = ok(root, "todo")
     assert r.stderr.strip() == "0 things to do, 0 questions for the user"
+
+
+def test_unrelated_change_in_a_cited_segment_is_only_a_sync_item(tmp_path):
+    """The cited segment changed, the quoted sentence did not: `kb redraft --changed` would select nothing, so
+    kb todo must not offer it."""
+    root = drafted(tmp_path)
+    put(root, "docs/n.md", DOC.replace("A seat costs 5 EUR.", "A seat costs 5 EUR. Seats are shown in the admin page."))
+    found = items(root)
+    assert "redraft:changed" not in found
+    assert "sync" in found
+    ok(root, "source", "sync")
+    found = items(root)
+    assert "redraft:changed" not in found
+    r = invoke(root, "redraft", "--changed")
+    assert "nothing to redraft" in (r.stdout + r.stderr)

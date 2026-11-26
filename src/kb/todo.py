@@ -42,7 +42,14 @@ from kb.gitfiles import (
     tag_exists,
 )
 from kb.ingest.brief import BASE_PATH, recorded_base
-from kb.ingest.redraft import REDRAFT_BASE, changed_segments, citing, new_text, unfound
+from kb.ingest.redraft import (
+    REDRAFT_BASE,
+    changed_segments,
+    citing,
+    moved,
+    new_text,
+    unfound,
+)
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
 from kb.records.models import Requirement
@@ -247,7 +254,8 @@ def _rebuilt_by_sync(i: Issue, repo: KbRepo, outdated: set[str]) -> bool:
 def _stale(repo: KbRepo, head: KbRepo | None) -> set[str]:
     """Records citing text changed since HEAD or with a quote not found: what `kb redraft --changed` selects.
     With no commits there is no HEAD to compare with: only the quotes not found count."""
-    return set(unfound(repo)) | (set(citing(repo, changed_segments(head, repo))) if head else set())
+    cited = {rid for rid in citing(repo, changed_segments(head, repo)) if moved(head, repo, rid)} if head else set()
+    return set(unfound(repo)) | cited  # a changed segment whose quoted sentences are the same needs no edit (as in select)
 
 
 def _redraft_items(repo: KbRepo, head: KbRepo | None, stale: set[str]) -> list[DoItem]:
