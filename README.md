@@ -177,15 +177,18 @@ A 0.4.0 knowledge base still passes `kb check` with warnings only. The new check
 records drafted in the current ingest or redraft range.
 
 - Rule cues are wider: `will`, `can`, `mandatory`, `forbidden`, `not permitted`, `ensure`, `limited to`, `expected to`,
-  `entitled to`, `allowed to`, number words and units (`15 min`, `24/7`, `AES-256`, `10,000 rows`). `can't` and `won't`
-  count as `must_not`. A descriptive "you can..." or "this document will..." does not count; a third-person can or will
+  `entitled to`, `allowed to`, number words and units (`15 min`, `24/7`, `AES-256`, `10,000 rows`). `can't`, `won't`, `mustn't`,
+  `shouldn't` and `isn't/aren't allowed to` count as `must_not`; `is to` ("The goal of this section is to...") is not a
+  cue, `are to` still is. A lead-in's cue does not reach items past a heading, a paragraph or a code block. A descriptive "you can..." or "this document will..." does not count; a third-person can or will
   is accepted as rule-like on purpose. A sentence splits into clauses on `; ` and on `, and/or/but ...` when the part
   holds its own modal, and list items inherit the cue of a lead-in that ends with a colon. So coverage may now flag more
   sentences than before (`sentence.uncovered`), and an earlier decision on a sentence that now splits into clauses is
   stale, so the evaluation asks again.
 - New warnings: `requirement.statement_modality_mismatch` and `requirement.number_mismatch` (errors for drafted
-  records), `requirement.actor_not_in_quote` (only when `actor` is a TERM id: that term's name or an alias must appear in a found quote; a plain-text actor is not checked), and `record.duplicate_quote` (the same quote on two records of the same
-  type).
+  records), `requirement.actor_not_in_quote` (only when `actor` is a TERM id: that term's name or an alias must appear in a
+  found quote; a plain-text actor is not checked), and `record.duplicate_quote` (the same quote on two records of the
+  same type). `quote.multiple_rules` counts sentences, so one sentence that splits into clauses is one rule. "Only an
+  Admin may ..." also says `must_not`. The header and `Decided by ... on ....` lines `kb clarify` writes are not rules.
 - `kb flag keep <REQ-id> --flag vague|conflicting|untestable --by <handle>` records "keep it flagged" in
   `kb/eval/decisions.yaml`, so `kb todo` stops asking. The question returns when the record or its cited text changes.
 - Redraft briefs show before and after sentences and list only the records whose quoted sentence changed; the others
