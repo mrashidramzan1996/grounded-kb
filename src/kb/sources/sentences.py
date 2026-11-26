@@ -3,6 +3,7 @@
 import hashlib
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from kb.quotes.match import fold
@@ -56,6 +57,7 @@ def is_normative(s: Sentence) -> bool:
     return bool(s.cues)
 
 
+@lru_cache(maxsize=1 << 16)  # pure; kb asks for the same sentence's key many times (decisions, findings, gaps)
 def text_key(text: str) -> str:
     """The sentence key of a sentence's text: what sentence_key gives for a sentence of that text."""
     body = _MARKER.sub("", text, count=1)
@@ -122,8 +124,13 @@ def segment_sentences(text: str, seg: Segment, src_id: str) -> list[Sentence]:
 
 
 def sentences(repo: "KbRepo", src_id: str) -> list[Sentence]:
-    text = repo.source_text(src_id)
-    out: list[Sentence] = []
-    for seg in repo.segments(src_id):
-        out.extend(segment_sentences(text, seg, src_id))
-    return out
+    """Every sentence of the stored source, in document order; computed once per source and repository (a fresh list
+    each call, so a caller may change it)."""
+    cache = repo.memo.setdefault("sentences", {})
+    if src_id not in cache:
+        text = repo.source_text(src_id)
+        out: list[Sentence] = []
+        for seg in repo.segments(src_id):
+            out.extend(segment_sentences(text, seg, src_id))
+        cache[src_id] = tuple(out)
+    return list(cache[src_id])

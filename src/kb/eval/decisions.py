@@ -15,6 +15,7 @@ import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -182,7 +183,10 @@ def _errors(e: ValidationError) -> str:
     return "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())
 
 
+@lru_cache(maxsize=4)  # one kb command reads the same summary several times (kb check's gates, kb todo, decide)
 def parse_summary(data: bytes) -> Summary:
+    """The summary in `data`, validated (EvalError when it is not one). The same object for the same bytes: never
+    change it."""
     doc = _load(data, SUMMARY)
     try:
         return Summary.model_validate(doc)
@@ -339,11 +343,14 @@ def _inconsistency(repo: KbRepo, d: Decision, live: set[str], f: SummaryFinding 
 
 
 def _sentence_index(repo: KbRepo) -> dict[str, list[Sentence]]:
-    """Every sentence of the stored documents, by key."""
-    out: dict[str, list[Sentence]] = {}
-    for s in _all_sentences(repo):
-        out.setdefault(sentence_key(s), []).append(s)
-    return out
+    """Every sentence of the stored documents, by key, in document order; built once per repository (do not change
+    it)."""
+    if "sentence_index" not in repo.memo:
+        out: dict[str, list[Sentence]] = {}
+        for s in _all_sentences(repo):
+            out.setdefault(sentence_key(s), []).append(s)
+        repo.memo["sentence_index"] = out
+    return repo.memo["sentence_index"]
 
 
 def _sentence_spans(index: dict[str, list[Sentence]], keys: Iterable[str]) -> list[tuple[str, int, int]]:
@@ -589,9 +596,14 @@ def canonical_records(canonical: str) -> list[str]:
     return ids if all(_RECORD_ID.fullmatch(r) for r in ids) else []
 
 
+def _bad_sources(repo: KbRepo) -> set[str]:
+    if "bad_sources" not in repo.memo:
+        repo.memo["bad_sources"] = frozenset(bad_segment_ids(repo))
+    return repo.memo["bad_sources"]
+
+
 def _all_sentences(repo: KbRepo):
-    bad = set(bad_segment_ids(repo))
-    for src in sorted(set(repo.sources) - bad):
+    for src in sorted(set(repo.sources) - _bad_sources(repo)):
         yield from sentences(repo, src)
 
 
@@ -600,7 +612,7 @@ def finding_spans(repo: KbRepo, f: SummaryFinding) -> list[tuple[str, int, int]]
     other finding's passages, found in its segment (else anywhere in its source)."""
     prefix, _, rest = f.canonical.partition(":")
     if prefix == "S" and _KEY.fullmatch(rest):
-        return [(s.ref.partition("#")[0], s.start, s.end) for s in _all_sentences(repo) if sentence_key(s) == rest]
+        return [(s.ref.partition("#")[0], s.start, s.end) for s in _sentence_index(repo).get(rest, ())]
     src, _, seg_id = f.ref.partition("#")
     text = repo.source_text(src)
     seg = next((s for s in repo.segments(src) if s.id == seg_id), None)
@@ -621,7 +633,7 @@ def span_sentences(repo: KbRepo, spans: Iterable) -> list[Sentence]:
     by_src: dict[str, list] = {}
     for s in spans:
         by_src.setdefault(s[0], []).append(tuple(s))
-    bad = set(bad_segment_ids(repo))
+    bad = _bad_sources(repo)
     out: dict[str, Sentence] = {}
     for src in sorted(by_src):
         if src not in repo.sources or src in bad:
@@ -639,7 +651,7 @@ def finding_sentences(repo: KbRepo, f: SummaryFinding | None) -> list[Sentence]:
         return []
     prefix, _, rest = f.canonical.partition(":")
     if prefix == "S" and _KEY.fullmatch(rest):
-        return next(([s] for s in _all_sentences(repo) if sentence_key(s) == rest), [])
+        return _sentence_index(repo).get(rest, [])[:1]
     if prefix == "B" and f.kind == "omission":
         return span_sentences(repo, finding_spans(repo, f))
     return []

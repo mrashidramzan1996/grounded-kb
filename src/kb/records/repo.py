@@ -66,6 +66,9 @@ class KbRepo:
         self._segments: dict[str, list[Segment]] = {}
         self._text: dict[str, str] = {}
         self._triage: dict[str, Triage] = {}
+        # derived from the stored documents, computed at most once per repository (kb.sources.sentences and
+        # kb.eval.decisions): a KbRepo is never changed after it is loaded
+        self.memo: dict = {}
 
     @classmethod
     def from_files(cls, files: dict[str, bytes], symlinks: Iterable[str] = ()) -> "KbRepo":
