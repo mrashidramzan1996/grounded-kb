@@ -128,7 +128,7 @@ def rederive(
     if differ and not moved:  # the store is the base's: the original moved on since
         issues.append(Issue("source.outdated", changed_message(original), path=yaml_path, record=src_id))
     elif differ:
-        cause = "" if base is not None else " (the store was edited, or the original changed without `kb source sync`)"
+        cause = "" if base is not None else " (the document was edited since it was stored, or the store was edited by hand)"
         issues += [
             Issue("source.tampered", f"{differs_prefix(src_id, name, original)}{cause}; {fix}",
                   path=f"{where}/{name}", record=src_id)

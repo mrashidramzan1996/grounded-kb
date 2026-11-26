@@ -165,3 +165,14 @@ def test_tampered_ingest_base_file_does_not_hide_tampering_from_check(repo):
     base.parent.mkdir(parents=True, exist_ok=True)
     base.write_text(git(repo, "rev-parse", "HEAD"))
     assert ("source.tampered", "SRC-n") in errors(repo, "--changed")
+
+
+def test_committed_document_edit_without_a_base_says_to_sync(repo):
+    """With no base nothing tells an edited document from an edited store, so it stays source.tampered (a hand-edited
+    store must be caught); the message leads with the likely cause and the cure."""
+    replace(repo, "docs/n.md", "5 EUR", "6 EUR")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "edit the document")
+    data = json.loads(invoke(repo, "check", "--format", "json").stdout)
+    msgs = [i["message"] for i in data["issues"] if i["code"] == "source.tampered"]
+    assert msgs and all("the document was edited since it was stored" in m and "run `kb source sync`" in m for m in msgs)
