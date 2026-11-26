@@ -300,7 +300,9 @@ def redraft(
             typer.echo(f"nothing to redraft{hint}", err=True)
             return
         # the segments new records may cite: those offered to draft from, and the changed ones the records cite
-        offered = sorted(set(fresh) | cited, key=ref_key)
+        # (a changed segment another, unselected record also cites is not offered: the report would reject the file)
+        mine = {r for r in cited if before is not None and set(citing(before, {r})) <= set(selection)}
+        offered = sorted(set(fresh) | mine, key=ref_key)
         write_cache(root, REDRAFT_BRIEF, build_redraft_brief(root, repo, selection, commit, fresh))
         write_cache(root, REDRAFT_BASE, commit + "\n")
         write_cache(root, REDRAFT_IDS, "".join(f"{rid}\n" for rid in selection))

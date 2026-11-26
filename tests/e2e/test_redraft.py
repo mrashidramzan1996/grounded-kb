@@ -177,3 +177,30 @@ def test_committed_sync_with_base_flow(tmp_path):
     out = invoke(repo, "redraft", "--report", "--strict")
     assert out.exit_code == 0, out.output
     assert f"Base: {pre}" in out.stdout and "## Redrafted (1)\n\n- REQ-NF-001\n" in out.stdout
+
+
+def test_report_after_changed_when_a_second_record_cites_the_changed_segment_unmoved(tmp_path):
+    """One segment holds two sentences; REQ-A quotes the one that changed, REQ-B the one that did not. `kb redraft
+    --changed` selects only REQ-A, and the report must accept the redraft instead of saying the files don't match."""
+    doc = "# Speed\n\nPages should load fast. Search should answer quickly.\n"
+    repo = make_git_repo(None, tmp_path, extra={"kb.config.yaml": CONFIG, "docs/product.md": doc})
+    assert invoke(repo, "ingest", "docs/").exit_code == 0
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          REQ.format(statement="Pages load fast.", quote="Pages should load fast.", flags=""))
+    write(repo, "kb/requirements/REQ-NF-002.yaml",
+          _req("REQ-NF-002", "Search should answer quickly.", "seg-01"))
+    write(repo, "kb/sources/SRC-product/triage.yaml", "segments:\n  seg-01: [REQ-NF-001, REQ-NF-002]\n")
+    out = invoke(repo, "ingest", "--report", "--strict")
+    assert out.exit_code == 0, out.output
+    commit(repo, "drafts")
+
+    write(repo, "docs/product.md", doc.replace("load fast.", "load in under 2 seconds."))
+    assert invoke(repo, "source", "sync").exit_code == 0
+    out = invoke(repo, "redraft", "--changed")
+    assert out.exit_code == 0, out.output
+    assert (repo / ".kb/cache/redraft/ids").read_text() == "REQ-NF-001\n"
+    write(repo, "kb/requirements/REQ-NF-001.yaml",
+          REQ.format(statement="Pages load in under 2 seconds.", quote="Pages should load in under 2 seconds.", flags=""))
+    out = invoke(repo, "redraft", "--report", "--strict")
+    assert out.exit_code == 0, out.output + out.stderr
+    assert "## Redrafted (1)\n\n- REQ-NF-001\n" in out.stdout
