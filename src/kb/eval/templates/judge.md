@@ -54,8 +54,10 @@ Does the record say what its text says? Answer each with "yes" or "no", and add 
 
 Is this a rule the knowledge base should hold, and does a record already hold it?
 
-- `verdict`: `missing` (a rule no record holds), `covered` (a live record already holds it; name it in `related`),
-  `not_a_rule` (background, an example, a heading), or `unknown`.
+- `verdict`: `missing` (a rule no record holds), `covered` (a live record already holds it; name it in `related`:
+  kb rejects `covered` unless one of those records quotes this text), `not_a_rule` (background, an example, a
+  heading), or `unknown`. A person reviews every item you judge `covered` or `not_a_rule`; when unsure, say `missing`
+  or `unknown`.
 - When missing: `kind_hint` (`requirement`, `decision`, `invariant` or `exclusion`) and `severity` (`high`, `medium`
   or `low`: how much harm missing it would do).
 - `related`: the IDs of existing records it relates to (any live record under `kb/`).
@@ -84,8 +86,8 @@ Does the text state the relation? Answer each with "yes" or "no", and add a `not
 
 Is this a named thing of the domain that the glossary should hold?
 
-- `verdict`: `missing` (no glossary term holds it), `covered` (a live term already does; name it in `related`),
-  `not_an_entity`, or `unknown`.
+- `verdict`: `missing` (no glossary term holds it), `covered` (a live term already does; name it in `related`: kb
+  rejects `covered` unless that term carries the entity's name or alias), `not_an_entity`, or `unknown`.
 - `related`: the IDs of existing glossary terms (`TERM-…`) it relates to.
 - When missing, the `span` must contain the entity's name.
 
@@ -93,8 +95,8 @@ Is this a named thing of the domain that the glossary should hold?
 
 Does the text state this relation between two entities, and should the glossary hold it?
 
-- `verdict`: `missing`, `covered` (name the term that holds it in `related`), `not_an_entity` (no such relation), or
-  `unknown`.
+- `verdict`: `missing`, `covered` (name the source term that holds it in `related`: kb rejects `covered` unless that
+  term holds a relation to the other entity's term), `not_an_entity` (no such relation), or `unknown`.
 - `related`: the IDs of existing glossary terms (`TERM-…`) it relates to.
 - When missing, the `span` must name both entities, at separate places.
 

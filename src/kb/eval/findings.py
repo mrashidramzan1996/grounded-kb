@@ -113,6 +113,49 @@ def build_findings(items: list[dict], verdicts: list[dict], alignment: Alignment
     return sorted(found.values(), key=lambda f: (_RANK[f.severity], -f.supporters, f.canonical))
 
 
+# a dismissal: an item kb (or run B) flagged that the judge said needs no record. Only a person settles it (kb todo's
+# `dismissed` ask): the judge alone never dismisses a rule-like sentence kb flagged
+DISMISSING = {"uncovered": ("covered", "not_a_rule"), "only_b": ("covered", "not_a_rule"),
+              "entity_missing": ("covered", "not_an_entity"), "relation_missing": ("covered", "not_an_entity")}
+_DISMISSED_KIND = {"uncovered": "omission", "only_b": "omission", "entity_missing": "entity",
+                   "relation_missing": "relation"}
+
+
+@dataclass(frozen=True)
+class Dismissed:
+    id: str  # the item's public id: what `kb eval decide <id> --as reopen` names
+    canonical: str
+    kind: str  # omission, entity or relation: the finding it becomes when a person reopens it
+    ref: str
+    text: str
+    verdict: str  # covered, not_a_rule or not_an_entity
+    related: tuple[str, ...]
+    note: str
+    ends: tuple[tuple[str, ...], ...] = ()  # as Finding.ends
+
+
+def build_dismissed(items: list[dict], verdicts: list[dict]) -> list[Dismissed]:
+    """Every S, B, E or N item the validated `verdicts` dismiss (covered, not a rule, not an entity), in item order."""
+    by_id = {v["id"]: v for v in verdicts}
+    out = []
+    for item in items:
+        v = by_id.get(item["id"])
+        if v is None or v.get("verdict") not in DISMISSING.get(item["kind"], ()):
+            continue
+        ends: tuple[tuple[str, ...], ...] = ()
+        if item["kind"] == "entity_missing":
+            ends = (tuple(item.get("names", ())),)
+        elif item["kind"] == "relation_missing":
+            ends = tuple(tuple(e) for e in item.get("ends", ()))
+        out.append(Dismissed(item["public"], item["id"], _DISMISSED_KIND[item["kind"]], item["ref"], item["text"],
+                             v["verdict"], tuple(v.get("related", ())), v.get("note", ""), ends))
+    return out
+
+
+def dismissed_dict(d: Dismissed) -> dict:
+    return asdict(d) | {"related": list(d.related), "ends": [list(e) for e in d.ends]}
+
+
 def fingerprint(repo: KbRepo, skip: Iterable[str] = ()) -> str:
     """What was evaluated: sha256 over the live records (id and raw bytes, by id) and every stored source's segment
     hashes, first 16 hex characters. kb/eval/ holds no record, so the summary and decisions never change it. `skip`
@@ -133,11 +176,13 @@ def finding_dict(f: Finding) -> dict:
     return asdict(f) | {"related": list(f.related), "ends": [list(e) for e in f.ends]}
 
 
-def summary(commit: str, fp: str, salt: str, coverage: dict, agreement: dict, findings: list[Finding], judged_at: str) -> dict:
+def summary(commit: str, fp: str, salt: str, coverage: dict, agreement: dict, findings: list[Finding], judged_at: str,
+            dismissed: Sequence[Dismissed] = ()) -> dict:
     """The committed summary, in its key order. `salt` (hex) keys the cycle's public ids; later commands resolve an id
-    through `open_findings` (id and canonical), never by recomputing it."""
+    through `open_findings` and `dismissed` (id and canonical), never by recomputing it."""
     return {"commit": commit, "fingerprint": fp, "salt": salt, "coverage": coverage, "agreement": agreement,
-            "open_findings": [finding_dict(f) for f in findings], "judged_at": judged_at}
+            "open_findings": [finding_dict(f) for f in findings], "dismissed": [dismissed_dict(d) for d in dismissed],
+            "judged_at": judged_at}
 
 
 def write_summary(root: Path, data: dict) -> None:
@@ -167,8 +212,17 @@ def _finding_line(f: Finding) -> str:
     return "- " + " · ".join(parts)
 
 
+def _dismissed_line(d: Dismissed) -> str:
+    parts = [inline_code(d.id), d.verdict.replace("_", " "), inline_code(d.ref), inline_code(d.text)]
+    if d.related:
+        parts.append("related " + ", ".join(inline_code(r) for r in d.related))
+    if d.note:
+        parts.append("note " + inline_code(d.note))
+    return "- " + " · ".join(parts)
+
+
 def render_eval_report(coverage: dict, agreement: dict, findings: list[Finding], issues: list[Issue],
-                       run_b_issues: Sequence[Issue] = ()) -> str:
+                       run_b_issues: Sequence[Issue] = (), dismissed: Sequence[Dismissed] = ()) -> str:
     """Markdown; every piece of untrusted text (item ids, document text, notes, messages) is one-line inline code."""
     out = ["# Extraction evaluation", "", "## Coverage", ""]
     rules = f"{coverage['covered']} of {coverage['normative']} ({_pct(coverage['covered'], coverage['normative'])})"
@@ -180,6 +234,7 @@ def render_eval_report(coverage: dict, agreement: dict, findings: list[Finding],
     out += [f"## Findings ({len(findings)})", ""]
     for kind, title in _SECTIONS:
         out += section(title, [_finding_line(f) for f in findings if f.kind == kind], "###")
+    out += section("Dismissed by the judge, for a person to agree with", [_dismissed_line(d) for d in dismissed])
     out += section("Rejected verdicts", issue_lines([i for i in issues if i.code == "eval.verdict_invalid"]))
     out += section("Missing verdicts", issue_lines([i for i in issues if i.code == "eval.verdict_missing"]))
     if run_b_issues:

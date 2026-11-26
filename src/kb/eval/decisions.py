@@ -1,16 +1,20 @@
 """A person's decisions on the findings of an evaluation (kb/eval/decisions.yaml), and the summary they resolve against.
 
 `kb eval decide` validates a decision against the knowledge base and appends it atomically. A finding is named by its
-public id (F-…, from kb/eval/summary.yaml's open_findings, never recomputed) or by the pseudo-finding `categories`.
+public id (F-…, from kb/eval/summary.yaml's open_findings, never recomputed) or by the pseudo-finding `categories`. The
+items the judge dismissed (summary.yaml's `dismissed`: judged covered, not a rule or not an entity) are settled only by
+a person: the pseudo-finding `dismissed` (`--as ok`, pinned to the exact list) agrees with them, and `--as reopen` on
+one's public id turns it into an open omission finding of the same id.
 A decision that a sentence is added, covered or not a rule keys on the sentence (sentence_key), so it keeps suppressing
 that sentence after a later `kb eval judge` cycle gives its finding another public id.
 """
 
 import datetime
 import hashlib
+import json
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -39,8 +43,9 @@ from kb.yamlio import YamlError, dump_yaml, load_yaml_strict
 
 DECISIONS = "kb/eval/decisions.yaml"
 CATEGORIES = "categories"  # the pseudo-finding of the categories ask: no document states some kinds of requirement
+DISMISSED = "dismissed"  # the pseudo-finding of the dismissed ask: the judge's dismissals, agreed with as one list
 PUBLIC_ID = re.compile(r"F-[0-9a-f]{10}")
-DECISION_VALUES = ("added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok")
+DECISION_VALUES = ("added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok", "reopen")
 SUPPRESSING = frozenset({"added", "covered", "not_a_rule"})  # decisions that settle a sentence: it stops warning
 # what changes a record: a decision naming such a record also settles that change (the summary stays current)
 _CHANGING = frozenset({"added", "fixed"})
@@ -51,7 +56,7 @@ _RECORD_ID = re.compile(rf"(?:{REQ_ID}|{EXCL_ID}|{FEAT_ID}|{ADR_ID}|{INV_ID}|{CO
 _SHA = re.compile(r"[0-9a-f]{40}")
 _KEY = re.compile(r"[0-9a-f]{12}")
 
-Kind = Literal["omission", "entity", "relation", "unfaithful", "granularity", "categories"]
+Kind = Literal["omission", "entity", "relation", "unfaithful", "granularity", "categories", "dismissed", "dismissal"]
 # the decisions each kind of finding takes
 ALLOWED: dict[str, tuple[str, ...]] = {
     "omission": ("added", "covered", "not_a_rule", "product_decision"),
@@ -60,6 +65,8 @@ ALLOWED: dict[str, tuple[str, ...]] = {
     "unfaithful": ("fixed", "correct"),
     "granularity": ("fixed", "ok"),
     "categories": ("not_a_rule",),
+    "dismissed": ("ok",),  # the judge's dismissals, as one list: a person agrees
+    "dismissal": ("reopen",),  # one dismissed item: a person disagrees, and it becomes an open omission finding
 }
 
 
@@ -84,13 +91,14 @@ class SentenceRef(BaseModel):
 class Decision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    finding: str = Field(pattern=rf"^(?:{PUBLIC_ID.pattern}|{CATEGORIES})$")
+    finding: str = Field(pattern=rf"^(?:{PUBLIC_ID.pattern}|{CATEGORIES}|{DISMISSED})$")
     canonical: str
     sentences: list[SentenceRef] = []  # an S or B omission's: every sentence it settles
-    decision: Literal["added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok"]
+    decision: Literal["added", "covered", "not_a_rule", "product_decision", "correct", "fixed", "ok", "reopen"]
     record: str | None = Field(default=None, pattern=rf"^{_RECORD_ID.pattern}$")
     # the sha256 of the record file's bytes when the person decided: of `record`, or (a correct or ok on a record's
-    # finding) of the finding's records (records_sha256). A decision stops applying once they change.
+    # finding) of the finding's records (records_sha256). A decision stops applying once they change. For `dismissed`,
+    # the dismissed list it agrees with (dismissed_sha256): a new judge cycle's list is asked again.
     record_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     reason: str | None = Field(default=None, max_length=MAX_REASON)
     by: str = Field(max_length=MAX_BY)
@@ -127,6 +135,22 @@ class SummaryFinding(BaseModel):
     ends: list[list[str]] = []  # an entity omission's names; a relation omission's source names and target names
 
 
+class DismissedItem(BaseModel):
+    """One item the judge dismissed, as kb/eval/summary.yaml holds it (findings.dismissed_dict)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=rf"^{PUBLIC_ID.pattern}$")
+    canonical: str
+    kind: Literal["omission", "entity", "relation"]
+    ref: str
+    text: str
+    verdict: Literal["covered", "not_a_rule", "not_an_entity"]
+    related: list[str]
+    note: str
+    ends: list[list[str]] = []
+
+
 class Summary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -136,6 +160,7 @@ class Summary(BaseModel):
     coverage: dict
     agreement: dict
     open_findings: list[SummaryFinding]
+    dismissed: list[DismissedItem] = []  # a summary from before the dismissed list: none
     judged_at: str
 
     @field_validator("judged_at", mode="before")
@@ -238,22 +263,59 @@ def canonical_kind(canonical: str) -> str | None:
     """The kind of finding a canonical id names (as finding_kind), or None when it names none."""
     if canonical == CATEGORIES:
         return "categories"
+    if canonical == DISMISSED:
+        return "dismissed"
     return {"S": "omission", "B": "omission", "E": "entity", "N": "relation", "R": "unfaithful", "T": "unfaithful",
             "L": "unfaithful", "M": "granularity"}.get(canonical.partition(":")[0] if ":" in canonical else "")
 
 
-def _inconsistency(repo: KbRepo, d: Decision, live: set[str], f: SummaryFinding | None) -> str | None:
+_PSEUDO = (CATEGORIES, DISMISSED)
+
+
+def _reopen_problem(d: Decision, dis: "DismissedItem | None") -> str | None:
+    """Why a `reopen` entry cannot stand, or None: it names one dismissed item (for one of the current summary's, by
+    that item's canonical id), and carries no sentence key, record or hash."""
+    if d.finding in _PSEUDO or canonical_kind(d.canonical) not in ("omission", "entity", "relation"):
+        return "`reopen` names one item the evaluation dismissed"
+    if dis is not None and dis.canonical != d.canonical:
+        return "it names an item the current summary dismissed, but not that item's canonical id"
+    if d.sentences or d.record or d.record_sha256:
+        return "`reopen` carries no sentence key, no record and no record_sha256"
+    return _reason_problem(d)
+
+
+def _reason_problem(d: Decision) -> str | None:
+    if d.reason is not None:
+        try:
+            _plain("reason", d.reason, MAX_REASON)
+        except ClarifyError as e:
+            return str(e)
+    return None
+
+
+def _inconsistency(repo: KbRepo, d: Decision, live: set[str], f: SummaryFinding | None,
+                   dis: "DismissedItem | None" = None) -> str | None:
     """Why `d` cannot stand as a person's decision, or None: what `kb eval decide` would not have written. `f` is the
-    current summary's finding of that public id: its canonical id must be the entry's, and the decision one it takes."""
+    current summary's finding of that public id (an open finding, or a dismissed item a person reopened): its
+    canonical id must be the entry's, and the decision one it takes. `dis` is the current summary's dismissed item of
+    that public id: only `reopen` names one that is not reopened."""
+    if d.decision == "reopen":
+        return _reopen_problem(d, dis)
+    if f is None and dis is not None:
+        return "it names an item the evaluation dismissed: reopen it first (`--as reopen`)"
     if f is not None and f.canonical != d.canonical:
         return "it names a finding of the current summary, but not that finding's canonical id"
     kind = finding_kind(f) if f is not None else canonical_kind(d.canonical)
-    if (d.finding == CATEGORIES) != (d.canonical == CATEGORIES) or kind is None:
+    if (d.finding in _PSEUDO or d.canonical in _PSEUDO) and d.finding != d.canonical or kind is None:
         return "its finding and canonical id do not name one finding"
-    if kind == "categories" and (d.sentences or d.record or d.record_sha256):
+    if kind in ("categories", "dismissed") and (d.sentences or d.record):
+        return f"`{d.finding}` carries no sentence key and no record"
+    if kind == "categories" and d.record_sha256:
         return "`categories` carries no sentence key and no record"
     if d.decision not in ALLOWED[kind]:
         return f"`{d.decision}` is not a decision this finding takes"
+    if kind == "dismissed":
+        return "it pins no dismissed list (record_sha256)" if d.record_sha256 is None else _reason_problem(d)
     prefix, _, rest = d.canonical.partition(":")
     if prefix == "S" and [x.key for x in d.sentences] != [rest]:
         return "its sentence key is not its finding's"
@@ -273,12 +335,7 @@ def _inconsistency(repo: KbRepo, d: Decision, live: set[str], f: SummaryFinding 
         return "it has no record_sha256"
     if d.decision in ("not_a_rule", "product_decision") and d.reason is None:
         return "it has no reason"
-    if d.reason is not None:
-        try:
-            _plain("reason", d.reason, MAX_REASON)
-        except ClarifyError as e:
-            return str(e)
-    return None
+    return _reason_problem(d)
 
 
 def _sentence_index(repo: KbRepo) -> dict[str, list[Sentence]]:
@@ -403,21 +460,27 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
     live = live_ids(repo)
     index = _sentence_index(repo)
     summary = _summary_of(repo)
-    current = {f.id: f for f in summary.open_findings} if summary else {}
+    dismissed = {x.id: x for x in summary.dismissed} if summary else {}
+    # the findings of the current summary: its open findings, and the dismissed items a person reopened
+    current = {f.id: f for f in summary_findings(summary, [e for e in entries if isinstance(e, Decision)])} if summary else {}
     evaluated = _Evaluated(root, repo, summary)
     out: list[Decision] = []
     issues: list[Issue] = []
-    seen: set[str] = set()
+    seen: set[tuple] = set()
     for n, d in enumerate(entries, 1):
         stale = False
         if isinstance(d, str):
             why = f"invalid: {inline_code(d)}"
-        elif d.finding in seen:
-            why = f"{_shown_id(d.finding)} is decided twice; only the first counts"
+        elif _seen_key(d) in seen:
+            why = (f"{_shown_id(d.finding)} is reopened twice; only the first counts" if d.decision == "reopen"
+                   else f"{_shown_id(d.finding)} is decided twice; only the first counts")
+        elif d.decision == "reopen":
+            why = _reopen_problem(d, dismissed.get(d.finding))
+            why = f"{_shown_id(d.finding)}: {why}" if why is not None else None
         else:
             f = current.get(d.finding)  # the finding it names, if the current summary has it
             kind = finding_kind(f) if f is not None else canonical_kind(d.canonical)
-            why = _inconsistency(repo, d, live, f)
+            why = _inconsistency(repo, d, live, f, dismissed.get(d.finding))
             if why is None and canonical_kind(d.canonical) == "omission" and not d.sentences:
                 why = "it lists no sentence, so it settles nothing"
             if why is None and any(text_key(x.text) != x.key for x in d.sentences):
@@ -442,10 +505,20 @@ def check_decisions(repo: KbRepo, entries: list[Decision | str],
         if why is not None:
             issues.append(_invalid(f"{DECISIONS}: decision {n} is dropped, it settles nothing: {why}"))
             continue
-        seen.add(d.finding)  # type: ignore[union-attr]
+        seen.add(_seen_key(d))  # type: ignore[arg-type]
         if not stale:  # its sentence changed in the document: nothing to settle any more
             out.append(d)  # type: ignore[arg-type]
     return out, issues
+
+
+def _seen_key(d: Decision) -> tuple:
+    """What one decision decides: a finding (once), a dismissed item's reopening (once, besides the decision on the
+    finding it becomes), or one dismissed list (once per list)."""
+    if d.decision == "reopen":
+        return (d.finding, "reopen")
+    if d.finding == DISMISSED:
+        return (d.finding, d.record_sha256)
+    return (d.finding,)
 
 
 def decisions_of(repo: KbRepo, root: Path | None = None) -> tuple[list[Decision], list[Issue]]:
@@ -603,9 +676,51 @@ def is_decided(repo: KbRepo, f: SummaryFinding, decisions: list[Decision], keys:
     return bool(found) and all(k in settled for k in found)
 
 
+def reopened_finding(x: DismissedItem) -> SummaryFinding:
+    """The open omission finding a dismissed item becomes once a person reopens it: same public and canonical id."""
+    note = f"the evaluation agent judged it {x.verdict.replace('_', ' ')}; a person reopened it"
+    return SummaryFinding(id=x.id, canonical=x.canonical, kind="omission", ref=x.ref, text=x.text, severity="medium",
+                          supporters=1, related=x.related, note=note + (f": {x.note}" if x.note else ""),
+                          kind_hint=x.kind if x.kind in ("entity", "relation") else None, ends=x.ends)
+
+
+def reopened_ids(summary: Summary, decisions: Iterable[Decision]) -> set[str]:
+    """The summary's dismissed items a `reopen` decision (one that stands) names."""
+    dismissed = {x.id: x for x in summary.dismissed}
+    return {d.finding for d in decisions
+            if d.decision == "reopen" and d.finding in dismissed and _reopen_problem(d, dismissed[d.finding]) is None}
+
+
+def summary_findings(summary: Summary, decisions: Iterable[Decision]) -> list[SummaryFinding]:
+    """Every finding of the summary: its open findings, then the dismissed items a person reopened."""
+    ids = reopened_ids(summary, decisions)
+    return [*summary.open_findings, *(reopened_finding(x) for x in summary.dismissed if x.id in ids)]
+
+
 def open_findings(repo: KbRepo, summary: Summary, decisions: list[Decision]) -> list[SummaryFinding]:
     keys = suppressed_keys(decisions)
-    return [f for f in summary.open_findings if not is_decided(repo, f, decisions, keys)]
+    return [f for f in summary_findings(summary, decisions) if not is_decided(repo, f, decisions, keys)]
+
+
+def dismissed_sha256(items: Iterable[DismissedItem]) -> str:
+    """The pin of a `dismissed` decision: sha256 over the dismissed items' public ids and texts, sorted by id."""
+    return hashlib.sha256(json.dumps(sorted([x.id, x.text] for x in items), ensure_ascii=False).encode()).hexdigest()
+
+
+def dismissed_agreed(summary: Summary, decisions: Iterable[Decision]) -> bool:
+    """Whether a person agreed with exactly this summary's dismissed list (vacuously, when it dismissed nothing)."""
+    pin = dismissed_sha256(summary.dismissed)
+    return not summary.dismissed or any(d.finding == DISMISSED and d.decision == "ok" and d.record_sha256 == pin
+                                        for d in decisions)
+
+
+def dismissed_open(summary: Summary, decisions: Iterable[Decision]) -> list[DismissedItem]:
+    """The dismissed items no one has settled: not reopened, and the list not agreed with."""
+    decisions = list(decisions)
+    if dismissed_agreed(summary, decisions):
+        return []
+    ids = reopened_ids(summary, decisions)
+    return [x for x in summary.dismissed if x.id not in ids]
 
 
 # --- is the summary current? -------------------------------------------------------------------------------------
@@ -617,7 +732,7 @@ def is_fresh(root: Path, repo: KbRepo, summary: Summary, decisions: list[Decisio
     evaluation."""
     if summary.fingerprint == fingerprint(repo):
         return True
-    by_id = {f.id: f for f in summary.open_findings}
+    by_id = {f.id: f for f in summary_findings(summary, decisions)}
     # only an entry consistent with the finding it names pins: that finding's canonical id, and for `fixed` one of its
     # records; an earlier cycle's entry (its id in no current finding) never does
     pins: list[tuple[Decision, SummaryFinding]] = []
@@ -650,34 +765,61 @@ class EvalStatus:
     decisions: list[Decision]
     fresh: bool
     open: list[SummaryFinding]
+    findings: list[SummaryFinding] = field(default_factory=list)  # every finding: open ones and reopened dismissals
+    dismissed: list[DismissedItem] = field(default_factory=list)  # the dismissed items no one has settled yet
 
 
 def eval_status(root: Path, repo: KbRepo) -> EvalStatus:
     """The summary, the decisions that stand (kb/eval/decisions.yaml as `repo` holds it), whether the summary is
-    current and its findings no one has decided. EvalError when the summary is unusable."""
+    current, its findings no one has decided, and its dismissed items no one has settled. EvalError when the summary is
+    unusable."""
     summary = read_summary(root)
     decisions, _ = decisions_of(repo, root)  # those that stand; kb check reports the others
     if summary is None:
         return EvalStatus(None, decisions, False, [])
-    return EvalStatus(summary, decisions, is_fresh(root, repo, summary, decisions), open_findings(repo, summary, decisions))
+    return EvalStatus(summary, decisions, is_fresh(root, repo, summary, decisions), open_findings(repo, summary, decisions),
+                      summary_findings(summary, decisions), dismissed_open(summary, decisions))
 
 
 # --- deciding ----------------------------------------------------------------------------------------------------
 
 def _shown_id(value: str) -> str:
     """A finding id as an error may show it: only a public id or `categories`, never anything else given."""
-    return inline_code(value) if PUBLIC_ID.fullmatch(value) or value == CATEGORIES else "this finding id"
+    return inline_code(value) if PUBLIC_ID.fullmatch(value) or value in _PSEUDO else "this finding id"
 
 
-def _resolve(summary: Summary | None, fid: str) -> SummaryFinding:
-    if not PUBLIC_ID.fullmatch(fid):
-        raise EvalError("a finding is named by its public id (F- and 10 hex digits, as `kb todo` and `kb eval report` "
-                        "show it) or by `categories`")
+def _summary_or_fail(summary: Summary | None) -> Summary:
     if summary is None:
         raise EvalError(f"no evaluation summary ({SUMMARY}): run `kb eval report --write` first")
-    found = next((f for f in summary.open_findings if f.id == fid), None)
+    return summary
+
+
+def _resolve(summary: Summary | None, fid: str, decisions: list[Decision]) -> SummaryFinding:
+    """The finding `fid` names: an open finding of the summary, or a dismissed item a person reopened."""
+    if not PUBLIC_ID.fullmatch(fid):
+        raise EvalError("a finding is named by its public id (F- and 10 hex digits, as `kb todo` and `kb eval report` "
+                        "show it), by `categories` or by `dismissed`")
+    summary = _summary_or_fail(summary)
+    found = next((f for f in summary_findings(summary, decisions) if f.id == fid), None)
+    if found is None and any(x.id == fid for x in summary.dismissed):
+        raise EvalError(f"{inline_code(fid)} is an item the evaluation agent dismissed: reopen it first "
+                        f"(`kb eval decide {fid} --as reopen`), or agree with every dismissal "
+                        "(`kb eval decide dismissed --as ok`)")
     if found is None:
         raise EvalError(f"{inline_code(fid)} is not an open finding of {SUMMARY}")
+    return found
+
+
+def _dismissal(summary: Summary | None, fid: str) -> DismissedItem:
+    """The dismissed item `fid` names, for `--as reopen`."""
+    if not PUBLIC_ID.fullmatch(fid):
+        raise EvalError("`--as reopen` names one dismissed item by its public id (F- and 10 hex digits, as "
+                        "`kb todo` and `kb eval status` show it)")
+    summary = _summary_or_fail(summary)
+    found = next((x for x in summary.dismissed if x.id == fid), None)
+    if found is None:
+        raise EvalError(f"{inline_code(fid)} is not an item the evaluation dismissed in {SUMMARY}; `--as reopen` "
+                        "takes only those")
     return found
 
 
@@ -800,7 +942,8 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
     (and nothing written) when the finding is not open in the summary, the decision does not fit its kind, or the
     knowledge base does not show it: `added` needs a live record quoting the finding's sentence (a TERM carrying the
     entity's name, or a source TERM holding the relation), `covered` a live record, `fixed` a record changed since the
-    evaluated commit, `not_a_rule` a reason."""
+    evaluated commit, `not_a_rule` a reason. `dismissed --as ok` agrees with the summary's whole dismissed list (pinned
+    to it); `--as reopen` names one dismissed item, which becomes an open omission finding of the same id."""
     root = Path(root)
     if decision not in DECISION_VALUES:
         raise EvalError(f"--as must be one of {', '.join(DECISION_VALUES)}")
@@ -813,18 +956,32 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
     why = _reason(reason, decision in ("not_a_rule", "product_decision"))
     decisions = read_decisions(root)
     repo = KbRepo.load(root)
+    standing, _ = decisions_of(repo, root)
+    pin: str | None = None
     if fid == CATEGORIES:
         summary, kind, canonical, f = None, "categories", CATEGORIES, None
+    elif fid == DISMISSED:
+        summary, kind, canonical, f = _summary_or_fail(read_summary(root)), "dismissed", DISMISSED, None
+        if not summary.dismissed:
+            raise EvalError("the evaluation dismissed nothing: there is nothing to agree with")
+        pin = dismissed_sha256(summary.dismissed)
+    elif decision == "reopen":
+        summary, kind, f = read_summary(root), "dismissal", None
+        canonical = _dismissal(summary, fid).canonical
     else:
         summary = read_summary(root)
-        f = _resolve(summary, fid)
+        f = _resolve(summary, fid, standing)
         kind, canonical = finding_kind(f), f.canonical
-    if any(d.finding == fid for d in decisions):
+    if decision == "reopen" and any(d.finding == fid and d.decision == "reopen" for d in decisions):
+        raise EvalError(f"{_shown_id(fid)} is reopened already; decide the finding it became")
+    if fid == DISMISSED and any(d.finding == fid and d.record_sha256 == pin for d in decisions):
+        raise EvalError(f"`dismissed` is decided already for this list; edit {DECISIONS} to change a decision")
+    if decision != "reopen" and fid != DISMISSED and any(d.finding == fid and d.decision != "reopen" for d in decisions):
         raise EvalError(f"{_shown_id(fid)} is decided already; edit {DECISIONS} to change a decision")
     if decision not in ALLOWED[kind]:
         raise EvalError(f"this finding takes one of: {', '.join(ALLOWED[kind])}")
     rid = record
-    if decision in ("not_a_rule", "product_decision", "correct", "ok"):
+    if decision in ("not_a_rule", "product_decision", "correct", "ok", "reopen"):
         if record is not None:
             raise EvalError(f"`--as {decision}` takes no `--record`")
     elif decision == "added":
@@ -835,7 +992,9 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
             raise EvalError(f"{rid} is not a glossary term (TERM)")
     elif decision == "fixed":
         rid = _check_fixed(root, repo, summary, f, record)  # type: ignore[arg-type]
-    if rid is not None:
+    if pin is not None:
+        sha = pin
+    elif rid is not None:
         sha = records_sha256(repo, [rid])
     elif f is not None and decision in ("correct", "ok"):
         sha = records_sha256(repo, finding_records(f)) if finding_records(f) else None
@@ -846,11 +1005,9 @@ def decide(root: Path, fid: str, decision: str, by: str, record: str | None = No
         raise EvalError("this finding's text is no longer a sentence of the documents: run the evaluation again (`kb todo`)")
     entry = Decision(finding=fid, canonical=canonical, sentences=settles,
                      decision=decision, record=rid, record_sha256=sha, reason=why, by=by, date=day)  # type: ignore[arg-type]
-    if summary is not None:
-        standing, _ = decisions_of(repo, root)
-        if not is_fresh(root, repo, summary, [*standing, entry]):
-            raise EvalError(f"the knowledge base or its documents changed since {SUMMARY} was written (beyond what this "
-                            "and earlier decisions name): run the evaluation again (`kb todo`)")
+    if summary is not None and not is_fresh(root, repo, summary, [*standing, entry]):
+        raise EvalError(f"the knowledge base or its documents changed since {SUMMARY} was written (beyond what this "
+                        "and earlier decisions name): run the evaluation again (`kb todo`)")
     check_target(root, DECISIONS, "file")  # never through a symlink (kb/, kb/eval/ or the file)
     data = [d.model_dump() for d in [*decisions, entry]]
     write_atomic(root, DECISIONS, dump_yaml({"decisions": data}))

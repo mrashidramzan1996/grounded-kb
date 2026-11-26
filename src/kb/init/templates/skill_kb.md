@@ -27,6 +27,10 @@ Once nothing else is left to do, `kb todo` lists the evaluation's `eval:` items,
 Each finding the report keeps is then an `ask` item (`finding:F-…`), and an open finding blocks the freeze. Put them
 to the user with the other questions. Do what the chosen option's `then` says: for "Add it as a new record", write
 the record, run `kb ingest --report`, then run `kb eval decide F-… --as added --record <new id> --by <their handle>`.
+The items the judge dismissed (judged covered, not a rule or not an entity) are one `ask` item, `dismissed`, which
+also blocks: show the user the whole list. If they agree, run `kb eval decide dismissed --as ok --by <their handle>`;
+for each item they disagree with, `kb eval decide F-… --as reopen --by <their handle>` makes it an open finding, asked
+like the others.
 Commit `kb/eval/decisions.yaml` with the records. Never run `kb eval decide` for an answer the user did not give.
 After the baseline, paste the output of `kb eval sample` into each pull request's description, so the reviewer can
 check a few records against their quotes.

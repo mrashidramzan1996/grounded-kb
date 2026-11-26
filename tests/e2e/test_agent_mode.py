@@ -408,7 +408,7 @@ class LiteralAgent:
                 assert key == "freeze" and "never merge it yourself" in option["then"]
                 self.freeze(ask_id.removeprefix("freeze:"))
                 continue
-            if by_id[ask_id]["kind"] in ("categories", "unfaithful"):  # step 6: the person's answer, by its handle
+            if by_id[ask_id]["kind"] in ("categories", "dismissed", "unfaithful"):  # step 6: the person's answer, by its handle
                 self.decide(option["then"], fact)
                 continue
             assert key == "target" and "one `kb redraft" in option["then"] and "then commit" in option["then"]
@@ -474,12 +474,14 @@ def session(repo: Path, agent: LiteralAgent, replies: list) -> tuple[int, dict]:
 
 
 def evaluation_answers(asks: list[dict]) -> dict[str, tuple[str, str]]:
-    """The person's answer to the evaluation's questions: no security, privacy or availability requirements apply, and
-    the over-flagged record is correct. They are asked before the freeze: an open finding blocks it."""
-    assert sorted(a["kind"] for a in asks) == ["categories", "unfaithful"]
+    """The person's answer to the evaluation's questions: no security, privacy or availability requirements apply, they
+    agree with what the judge dismissed, and the over-flagged record is correct. They are asked before the freeze: an
+    open finding, or a dismissal no one agreed with, blocks it."""
+    assert sorted(a["kind"] for a in asks) == ["categories", "dismissed", "unfaithful"]
     (finding,) = (a for a in asks if a["kind"] == "unfaithful")
     assert finding["evidence"]["record"] == OVERFLAGGED and "Search must be quick." in finding["evidence"]["quote"]
-    return {"categories": ("none_apply", "An internal checkout with no such needs."), finding["id"]: ("correct", "")}
+    return {"categories": ("none_apply", "An internal checkout with no such needs."), "dismissed": ("agree", ""),
+            finding["id"]: ("correct", "")}
 
 
 def test_agent_follows_playbook_literally(tmp_path):
@@ -491,7 +493,7 @@ def test_agent_follows_playbook_literally(tmp_path):
         {"owner:modules.MOD-checkout.owner": ("handle", "@acme/checkout"),  # "1a, 2a, 3a ... I am @acme/product"
          "vague:REQ-NF-001": ("target", TARGET),
          "vague:REQ-NF-002": ("target", SEARCH_TARGET)},
-        evaluation_answers,  # the evaluation's questions: "1a none apply, 2b it is correct"
+        evaluation_answers,  # the evaluation's questions: "1a none apply, 2a I agree, 3b it is correct"
         {"freeze:v1": ("freeze", "")},
     ]
     rounds, _ = session(repo, agent, replies)
@@ -509,8 +511,8 @@ def test_agent_follows_playbook_literally(tmp_path):
         "kb baseline v1",
     ]
     decisions = load_yaml_strict((repo / "kb/eval/decisions.yaml").read_text())["decisions"]
-    assert [(d["finding"] == "categories", d["decision"], d["by"]) for d in decisions] == [
-        (True, "not_a_rule", USER), (False, "correct", USER)]
+    assert [(d["finding"] if d["finding"] in ("categories", "dismissed") else "F-", d["decision"], d["by"])
+            for d in decisions] == [("categories", "not_a_rule", USER), ("dismissed", "ok", USER), ("F-", "correct", USER)]
     assert agent.pull_requests == ["baseline-v1"]
     assert git(repo, "status", "--porcelain") == ""
     assert (repo / "kb/baseline/v1.yaml").is_file()
@@ -528,13 +530,21 @@ def test_agent_follows_playbook_literally(tmp_path):
     main = git(repo, "rev-parse", "main").strip()
     write(repo, "docs/refund-policy.md", REFUND)
     agent = LiteralAgent(repo)
-    rounds, first = session(repo, agent, [])
+
+    def agree(asks: list[dict]) -> dict[str, tuple[str, str]]:
+        """The new evaluation's only question: the judge's dismissals, a new list, so asked again."""
+        assert [a["kind"] for a in asks] == ["dismissed"]
+        return {"dismissed": ("agree", "")}
+
+    rounds, first = session(repo, agent, [agree])
     assert do_ids(first) == ["branch", "ingest:docs/refund-policy.md"] and first["ask"] == []
     (branch,) = agent.pull_requests
     assert first["do"][0]["command"] == f"git switch -c {branch}" and re.fullmatch(r"kb/update-\d{8}", branch)
-    # the new document is evaluated too; the person's earlier decision on the over-flagged record still stands
-    assert rounds == 6 and agent.commits == ["kb ingest: report passed", "kb: commit the knowledge-base changes"]
-    assert not any(a["id"].startswith(("finding:", "categories")) for a in todo(repo)["ask"])
+    # the new document is evaluated too; the person's earlier decision on the over-flagged record still stands, and
+    # they agree with the new judge run's dismissals
+    assert rounds == 7 and agent.commits == ["kb ingest: report passed", "kb: commit the knowledge-base changes",
+                                             "kb: commit the knowledge-base changes"]
+    assert not any(a["id"].startswith(("finding:", "categories", "dismissed")) for a in todo(repo)["ask"])
     assert git(repo, "branch", "--show-current").strip() == branch and git(repo, "status", "--porcelain") == ""
     assert git(repo, "rev-parse", "main").strip() == main  # main is unchanged: nothing committed there
     assert git(repo, "ls-tree", "--name-only", "main", "kb/requirements/REQ-F-002.yaml", "docs/refund-policy.md") == ""

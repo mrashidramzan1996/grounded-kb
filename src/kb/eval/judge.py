@@ -21,7 +21,8 @@ from kb.eval import EvalError
 from kb.eval.align import Alignment, align, kb_items
 from kb.eval.extract import EVAL_BASE, load_run_b
 from kb.gates.coverage import uncovered
-from kb.gates.entities import mentions, names_both
+from kb.gates.entities import mentions, names_both, normalise_name
+from kb.gates.entities import names as entity_names
 from kb.gates.quotes import MIN_QUOTE_CHARS, located_quotes, too_short
 from kb.gitfiles import head_commit
 from kb.graph import entity_candidates
@@ -430,6 +431,38 @@ def _related(repo: KbRepo, live: set[str], kind: str, value) -> list[str]:
     return list(dict.fromkeys(value))
 
 
+def _spans_overlap(a: list, b: list) -> bool:
+    return any(x[0] == y[0] and max(x[1], y[1]) < min(x[2], y[2]) for x in a for y in b)
+
+
+_NOT_SHOWN = {
+    "uncovered": "`covered` names no record that quotes this text (its found quotes do not overlap it)",
+    "only_b": "`covered` names no record that quotes this text (its found quotes do not overlap it)",
+    "entity_missing": "`covered` names no term that carries the entity's name or alias",
+    "relation_missing": "`covered` names no term that holds a relation between the two entities",
+}
+
+
+def _shows(repo: KbRepo, live: set[str], item: dict, rec) -> bool:
+    """Whether the live record `rec` shows what a `covered` verdict on `item` claims, as kb can check it: for a rule
+    gap, one of its found quotes (located_quotes) overlaps the item's text; for an entity, the TERM carries one of its
+    names; for a relation, the TERM is named by one end and holds a relation to a live TERM named by the other."""
+    kind = item["kind"]
+    if kind in _GAPS:
+        ev = getattr(rec, "evidence", None)
+        quoted = [[src, a, b] for _, src, a, b in located_quotes(repo, ev)] if ev is not None else []
+        return _spans_overlap(item["spans"], quoted)
+    if not isinstance(rec, Term):
+        return False
+    if kind == "entity_missing":
+        return bool({normalise_name(n) for n in item["names"]} & set(entity_names(rec)))
+    source, target = ({normalise_name(n) for n in end} for end in item["ends"])
+    if not source & set(entity_names(rec)):
+        return False
+    return any(r.target in live and isinstance(t := repo.records.get(r.target), Term) and target & set(entity_names(t))
+               for r in rec.relations)
+
+
 def _check(repo: KbRepo, live: set[str], item: dict, entry: dict) -> dict:
     """The verdict `entry` for `item`, normalised, or _Bad."""
     kind = item["kind"]
@@ -458,8 +491,11 @@ def _check(repo: KbRepo, live: set[str], item: dict, entry: dict) -> dict:
             out[field] = _one_of(field, value, allowed)
     if kind in _GAPS + _ENTITY_GAPS:
         out["related"] = _related(repo, live, kind, entry.get("related"))
-        if out["verdict"] == "covered" and not out["related"]:
-            raise _Bad("`covered` needs the ID of the record that covers it in `related`")
+        if out["verdict"] == "covered":
+            if not out["related"]:
+                raise _Bad("`covered` needs the ID of the record that covers it in `related`")
+            if not any(_shows(repo, live, item, repo.records[r]) for r in out["related"]):
+                raise _Bad(_NOT_SHOWN[kind] + ": " + ", ".join(inline_code(r) for r in out["related"]))
     if out.get("verdict") == "missing":
         span = out["span"]
         if kind == "entity_missing" and not mentions(span, _names_term(item["names"])):

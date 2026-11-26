@@ -175,7 +175,7 @@ def test_module_title_is_inline_code_in_text(tmp_path):
 
 
 FREEZE_V1 = {
-    "id": "freeze:v1", "kind": "freeze", "question": "The knowledge base has no errors. Freeze baseline v1?",
+    "id": "freeze:v1", "kind": "freeze", "question": "The knowledge base has no errors. Freeze baseline v1? The evaluation agent dismissed no item.",
     "evidence": {},
     "options": [
         {"key": "freeze", "label": "Freeze it",
@@ -320,7 +320,7 @@ def test_freeze_next_version_after_v1(tmp_path):
     commit(root, "edit REQ-F-001")
     evaluated(root)
     item = asks(root)["freeze:v2"]
-    assert item["question"] == "The knowledge base has no errors. Freeze baseline v2?"
+    assert item["question"] == "The knowledge base has no errors. Freeze baseline v2? The evaluation agent dismissed no item."
     assert item["options"][0]["then"] == (
         "`kb baseline freeze v2`, then commit `kb/baseline/v2.yaml` on a new branch (not named kb-baseline-v2) "
         "and open a pull request for review; never merge it yourself"
@@ -411,7 +411,7 @@ def test_todo_text_shows_each_options_then(tmp_path):
     text = ok(root, "todo").stdout.split("Ask the user:\n", 1)[1]
     assert text == "".join(
         f"{line}\n" for line in [
-            "1. The knowledge base has no errors. Freeze baseline v1?",
+            "1. The knowledge base has no errors. Freeze baseline v1? The evaluation agent dismissed no item.",
             "   (a) Freeze it",
             f"       then: {found['freeze:v1']['options'][0]['then']}",
             "   (b) Not yet",

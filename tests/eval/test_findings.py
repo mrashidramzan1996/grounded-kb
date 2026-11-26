@@ -179,7 +179,13 @@ def test_report_write_produces_summary(tmp_path):
     verdicts, _ = validate_verdicts(root, repo)
     expected = [dataclasses.asdict(f) | {"related": list(f.related), "ends": [list(e) for e in f.ends]}
                 for f in build_findings(state.items, verdicts, state.alignment)]
-    assert list(summary) == ["commit", "fingerprint", "salt", "coverage", "agreement", "open_findings", "judged_at"]
+    assert list(summary) == ["commit", "fingerprint", "salt", "coverage", "agreement", "open_findings", "dismissed",
+                             "judged_at"]
+    # the rule gaps judged not a rule are dismissed, for a person to agree with: each by its public id, with its text
+    gaps = [i for i in state.items if i["kind"] in ("uncovered", "only_b")]
+    assert [(d["id"], d["canonical"], d["kind"], d["text"], d["verdict"]) for d in summary["dismissed"]] == [
+        (i["public"], i["id"], "omission", i["text"], "not_a_rule") for i in gaps]
+    assert "## Dismissed by the judge, for a person to agree with (" in out
     assert summary["commit"] == (root / EVAL_BASE).read_text().strip()
     assert summary["fingerprint"] == fingerprint(repo)
     assert summary["coverage"]["normative"] == 3 and set(summary["agreement"]) >= {"matched", "span_f1", "estimated_total"}

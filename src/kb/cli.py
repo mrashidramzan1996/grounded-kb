@@ -40,7 +40,7 @@ from kb.forge import ForgeError, forge_from_option
 from kb.eval import EvalError
 from kb.eval.align import agreement
 from kb.eval.extract import EVAL_BASE, EXTRACT_BRIEF, build_extract_brief, clear_run_b
-from kb.eval.findings import SUMMARY, build_findings, fingerprint, render_eval_report, summary, write_summary
+from kb.eval.findings import SUMMARY, build_dismissed, build_findings, fingerprint, render_eval_report, summary, write_summary
 from kb.eval.judge import (
     JUDGE_BRIEF, JUDGE_ITEMS, SALT, VERDICTS, check_items_file, check_verdicts, judge_state, read_salt, require_eval_base,
     write_judge,
@@ -714,8 +714,9 @@ def eval_report(
     except TOOL_ERRORS as e:
         raise _fail(e) from e
     findings = build_findings(state.items, verdicts, state.alignment)
+    dismissed = build_dismissed(state.items, verdicts)
     agr = agreement(state.alignment, state.kb_count, state.b_count)
-    typer.echo(render_eval_report(coverage, agr, findings, issues, state.run_b_issues))
+    typer.echo(render_eval_report(coverage, agr, findings, issues, state.run_b_issues, dismissed))
     if issues:
         if write:
             typer.echo(f"{SUMMARY} not written: {len(issues)} verdict(s) missing or invalid; fix {VERDICTS}, then run "
@@ -724,7 +725,7 @@ def eval_report(
     if write:
         try:
             write_summary(root, summary(commit, fingerprint(repo), read_salt(root).hex(), coverage, agr, findings,
-                                        datetime.date.today().isoformat()))
+                                        datetime.date.today().isoformat(), dismissed))
         except TOOL_ERRORS as e:
             raise _fail(e) from e
         typer.echo(f"wrote {SUMMARY}")
@@ -733,8 +734,8 @@ def eval_report(
 @eval_app.command("decide")
 def eval_decide(
     ctx: typer.Context,
-    finding: Annotated[str, typer.Argument(help="The finding's id (F-…, as `kb todo` shows it), or `categories`.")],
-    as_: Annotated[str, typer.Option("--as", help="added, covered, not_a_rule, product_decision, correct, fixed or ok.")],
+    finding: Annotated[str, typer.Argument(help="The finding's id (F-…, as `kb todo` shows it), `categories` or `dismissed`.")],
+    as_: Annotated[str, typer.Option("--as", help="added, covered, not_a_rule, product_decision, correct, fixed, ok or reopen.")],
     by: Annotated[str, typer.Option("--by", help="Who decided: @handle or @org/team.")],
     record: Annotated[str | None, typer.Option("--record", help="The record it names (added, covered, fixed).")] = None,
     reason: Annotated[str | None, typer.Option("--reason", help="Why, in one short plain sentence (not_a_rule).")] = None,
@@ -797,7 +798,15 @@ def eval_status_cmd(ctx: typer.Context) -> None:
     typer.echo(f"coverage: {_count_of(cov, 'covered')} of {_count_of(cov, 'normative')} rule-like sentences quoted{pct}")
     typer.echo(f"agreement: {_count_of(agr, 'matched')} matched; span F1 {_f1(agr.get('span_f1'))}; "
                f"entity F1 {_f1(agr.get('entity_f1'))}; relation F1 {_f1(agr.get('relation_f1'))}")
-    typer.echo(f"findings: {len(st.open)} open, {len(s.open_findings) - len(st.open)} decided")
+    typer.echo(f"findings: {len(st.open)} open, {len(st.findings) - len(st.open)} decided")
+    # every item the judge dismissed, by public id: what `kb eval decide <F-id> --as reopen` names
+    reopened = {f.id for f in st.findings} - {f.id for f in s.open_findings}
+    waiting = {x.id for x in st.dismissed}
+    typer.echo(f"dismissed by the evaluation agent: {len(s.dismissed)}"
+               + (f", {len(waiting)} waiting for a person (`kb eval decide dismissed --as ok`)" if waiting else ""))
+    for x in s.dismissed:
+        state = "reopened" if x.id in reopened else "waiting" if x.id in waiting else "agreed"
+        typer.echo(f"- {inline_code(x.id)} {x.verdict.replace('_', ' ')} ({state}) {inline_code(x.ref)} {inline_code(x.text)}")
     typer.echo("up to date" if st.fresh else "stale: the knowledge base or its documents changed since; run `kb eval extract`")
     # every decision that stands, with the sentences it silences, for the reviewer of kb/eval/decisions.yaml
     typer.echo(f"decisions ({len(st.decisions)}):" if st.decisions else "decisions: none")

@@ -17,6 +17,8 @@ from kb.config.schema import KbConfig
 from kb.eval import EvalError
 from kb.eval.decisions import (
     CATEGORIES,
+    DISMISSED,
+    DismissedItem,
     EvalStatus,
     SummaryFinding,
     decisions_of,
@@ -72,7 +74,7 @@ class Option:
 @dataclass(frozen=True)
 class AskItem:
     id: str  # stable, e.g. "vague:REQ-NF-001", "owner:policy.approvers.intent", "freeze:v1", "finding:F-0123456789"
-    # vague | conflicting | untestable | owner | secret | unreadable | freeze | implied | categories, or a finding's:
+    # vague | conflicting | untestable | owner | secret | unreadable | freeze | implied | categories | dismissed, or a finding's:
     # omission | entity | relation | unfaithful | split | merge | granularity
     kind: str
     question: str  # raw, for JSON
@@ -444,7 +446,8 @@ def _baseline_requirements(root: Path, version: str) -> object:
     return data.get("requirements") if isinstance(data, dict) else None
 
 
-def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pending: bool) -> list[AskItem]:
+def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pending: bool,
+                 status: EvalStatus | None = None) -> list[AskItem]:
     """Offer the next baseline when nothing else is left (no error, no do item, no ask but flag asks: keeping a
     flag is a valid answer), there is a live requirement, HEAD is the tip of the default branch with kb/ and
     kb.config.yaml committed (once a baseline exists, also checked out by name: never on a pull-request branch, even
@@ -469,7 +472,11 @@ def _freeze_asks(root: Path, repo: KbRepo, latest: str | None, errors: int, pend
     version = f"v{int(latest[1:]) + 1}" if latest else "v1"
     if tag_exists(root, f"kb-baseline-{version}"):  # frozen already, its file not merged yet
         return []
-    question = _question(f"The knowledge base has no errors. Freeze baseline {version}?")
+    summary = status.summary if status is not None else None
+    n = len(summary.dismissed) if summary is not None else 0
+    told = ("" if summary is None else f" A person agreed with the {plural(n, 'item')} the evaluation agent judged as "
+            "not needing a record." if n else " The evaluation agent dismissed no item.")
+    question = _question(f"The knowledge base has no errors. Freeze baseline {version}?{told}")
     return [AskItem(
         f"freeze:{version}", "freeze", question[0], {},
         (
@@ -618,6 +625,33 @@ def _implied_asks(issues: list[Issue], repo: KbRepo) -> list[AskItem]:
     return list(out.values())
 
 
+_SHOWN_DISMISSED = 50
+
+
+def _dismissed_ask(status: EvalStatus | None) -> list[AskItem]:
+    """While the summary is current: one blocking question for every item the judge dismissed (judged covered, not a
+    rule or not an entity) that no person has settled. The judge alone never settles a sentence kb flagged."""
+    if status is None or not status.fresh or not status.dismissed:
+        return []
+    items: list[DismissedItem] = status.dismissed
+    shown = items[:_SHOWN_DISMISSED]
+    more = len(items) - len(shown)
+    tail = f" … and {more} more, see `kb eval status`" if more else ""
+    raw = "; ".join(f"{x.id} ({x.verdict.replace('_', ' ')}) \"{x.text}\"" for x in shown) + tail
+    text = "; ".join(f"{x.id} ({x.verdict.replace('_', ' ')}) {inline_code(x.text)}" for x in shown) + tail
+    lead = f"The evaluation agent judged these {len(items)} items as not needing a record: "
+    end = ". Do you agree?"
+    return [AskItem(
+        DISMISSED, "dismissed", lead + raw + end, {},
+        (
+            Option("agree", "Agree", _decide(DISMISSED, "--as ok")),
+            Option("review", "No, review them",
+                   "for each one you disagree with, `kb eval decide <F-id> --as reopen --by <handle>`"),
+        ),
+        lead + text + end,
+    )]
+
+
 _ASKED_CATEGORIES = ("security", "privacy", "availability")
 
 
@@ -671,7 +705,9 @@ def build_todo(root: Path) -> Todo:
     if not do and dirty:
         do.append(COMMIT)
     findings = [_finding_ask(f, repo) for f in status.open] if status is not None and status.fresh else []
-    # owners, secrets, unreadable documents, open findings and unconfirmed implied requirements block; flag, freeze
+    findings += _dismissed_ask(status)
+    # owners, secrets, unreadable documents, open findings, the judge's unsettled dismissals and unconfirmed implied
+    # requirements block; flag, freeze
     # and categories asks are optional decisions ("keep it flagged", "not yet" and "none apply" are answers), so they
     # never make the KB unclean
     blocking = (_owner_asks(issues, config) + _secret_asks(issues, repo) + _unreadable_asks(unreadable)
@@ -690,7 +726,7 @@ def build_todo(root: Path) -> Todo:
     if do and frozen and (branch := _on_default_branch(root)) is not None:
         do.insert(0, _branch_item(root, branch))
     ask = (_flag_asks(repo) + blocking + _categories_ask(repo, status)
-           + _freeze_asks(root, repo, latest, errors, bool(do or blocking)))
+           + _freeze_asks(root, repo, latest, errors, bool(do or blocking), status))
     state = {
         "initialized": True, "sources": len(repo.sources), "records": len(repo.records), "errors": errors,
         "warnings": len(issues) - errors, "baseline": latest, "clean": not errors and not do and not blocking,

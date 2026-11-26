@@ -62,6 +62,14 @@ checks everything they write.
    and is not asked again in later evaluations. A decision on a record stops applying once the record changes. Once
    there is an evaluation and no live REQ-NF has the category security, privacy or availability, `kb todo` also asks
    whether none apply (`categories`, optional; `kb eval decide categories --as not_a_rule --reason "…" --by @handle`).
+5. The judge alone never settles an item kb or run B flagged. A `covered` verdict must name a record whose found
+   quotes overlap the text (for an entity, a TERM carrying its name; for a relation, a TERM holding a relation to
+   the other entity's TERM), or it is rejected. Every item judged `covered`, `not_a_rule` or `not_an_entity` is listed
+   under `dismissed:` in `kb/eval/summary.yaml`, and `kb todo` asks about them all in one blocking question
+   (`dismissed`, at most 50 shown; `kb eval status` lists every one). The person agrees with
+   `kb eval decide dismissed --as ok --by @handle`, which is pinned to that exact list (a new judge run asks again), or
+   reopens each item they disagree with by `kb eval decide F-… --as reopen --by @handle`: it becomes an open omission
+   finding of the same id, decided like any other.
 
 `kb todo` lists the steps as `eval:extract`, `eval:run-b`, `eval:judge` and `eval:verdicts`, one at a time. They come
 only when there is no other `do` item and no blocking question, and again whenever the records or the documents change
@@ -221,8 +229,8 @@ does not rewrite an existing setup), and see the prerequisites under [Approvals]
 | `kb eval extract` | Write the blind brief for a second extraction (run B) to `.kb/cache/eval/extract.md`, clearing the last run B. |
 | `kb eval judge` | Align run B with the knowledge base and write the judge brief (`.kb/cache/eval/judge.md`), one item per question. |
 | `kb eval report [--write]` | Check the verdicts and print coverage, agreement and the ranked findings; `--write` writes `kb/eval/summary.yaml`. Exit 1 when a verdict is missing or invalid. |
-| `kb eval decide F-… --as <decision> --by @handle [--record ID] [--reason "…"]` | Record a person's decision on a finding in `kb/eval/decisions.yaml`, after checking the knowledge base shows it. |
-| `kb eval status` | The last evaluation: coverage, agreement, open and decided findings, whether it is current, and the decisions. |
+| `kb eval decide F-… --as <decision> --by @handle [--record ID] [--reason "…"]` | Record a person's decision on a finding in `kb/eval/decisions.yaml`, after checking the knowledge base shows it. `kb eval decide dismissed --as ok` agrees with the judge's dismissals; `--as reopen` on a dismissed item makes it an open finding. |
+| `kb eval status` | The last evaluation: coverage, agreement, open and decided findings, every item the judge dismissed, whether it is current, and the decisions. |
 | `kb eval sample [--n 10]` | A QC checklist for the pull-request description: records with their quotes and unquoted sentences, seeded by HEAD. |
 | `kb status` | Per module: how many live requirements are built (`r[impl]`) and tested (`r[verify]`). |
 | `kb baseline freeze v1` | Record the agreed requirement set on the default branch's tip (refused while `kb check` reports errors). |
