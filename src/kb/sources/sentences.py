@@ -21,23 +21,29 @@ _FENCE = re.compile(r"\s*(?:```|~~~)")
 _SEPARATOR = re.compile(r"\|?[\s:|-]+\|?")
 _HEADING_LINE = re.compile(r"#{1,6} ")
 
-# "can" and "will" in descriptive prose ("You can find...", "This document will describe...") are not rules
-_NOT_RULE_SUBJECT = r"(?<!\byou )(?<!\bwe )(?<!this document )(?<!this section )(?<!this guide )(?<!this page )"
+# "can" and "will" in descriptive prose ("You can find...", "This document will describe...") are not rules.
+# Third-person uses ("The tool can parse YAML") are accepted false positives: a missed rule costs more than a dismissed item.
+_NOT_RULE_SUBJECT = (r"(?<!\byou\s)(?<!\bwe\s)(?<!this\sdocument\s)(?<!this\ssection\s)(?<!this\sguide\s)(?<!this\spage\s)")
+# lowercase "will", or a sentence-initial "Will" followed by a lowercase word (not the name "Will Smith")
+_WILL = r"(?-i:will|Will(?=\s+[a-z]))"
 _NUMBER_WORDS = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen"
                  r"|seventeen|eighteen|nineteen|twenty|hundred|thousand)")
 _UNITS = (r"(?:seconds?|minutes?|mins?|hours?|hrs?|h|days?|weeks?|months?|years?|ms|s|KB|MB|GB|TB|seats?|users?"
-          r"|requests?|times|per)")
+          r"|requests?|times|per|rows?|items?|records?|characters?|invoices?|attempts?)")
 
 NORMATIVE_CUES: dict[str, re.Pattern] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
         "must": r"\b(?:must(?!\s+(?:not|never)\b)|shall(?!\s+not\b)|required|requires?|is required to|has to|needs to"
-                r"|" + _NOT_RULE_SUBJECT + r"will(?!\s+(?:not|never)\b)|mandatory|ensures?|(?:is|are)\s+to)\b",
-        "must_not": r"\b(?:must\s+not|shall\s+not|may\s+not|can\s*not|never|prohibited|forbidden|not\s+permitted|not\s+allowed"
-                    r"|no\s+longer|" + _NOT_RULE_SUBJECT + r"will\s+not)\b",
+                r"|limited\s+to|expected\s+to|entitled\s+to"
+                r"|" + _NOT_RULE_SUBJECT + _WILL + r"(?!\s+(?:not|never)\b)|mandatory|ensures?|(?:is|are)\s+to)\b",
+        "must_not": r"\b(?:must\s+not|shall\s+not|may\s+not|can\s*not|can['\u2019]t|won['\u2019]t|never|prohibited|forbidden"
+                    r"|not\s+(?:be\s+)?permitted|not\s+allowed|no\s+longer|" + _NOT_RULE_SUBJECT + _WILL + r"\s+not)\b",
         "should": r"\b(?:should|recommended)\b",
-        "may": r"\bmay\b(?!\s+not\b)|" + _NOT_RULE_SUBJECT + r"\bcan\b(?!\s*not\b)|\boptional\b|(?<!not )(?<!not\n)\bpermitted\b",
-        "limit": r"\b(?:at least|at most|no more than|no less than|up to|within|maximum|minimum|only)\b",
+        "may": r"\bmay\b(?!\s+not\b)|" + _NOT_RULE_SUBJECT + r"\bcan\b(?!\s*not\b|['\u2019]t)|\boptional\b"
+               r"|(?:is|are)\s+allowed\s+to\b"
+               r"|(?<!not\s)(?<!never\s)(?<!longer\s)(?<!not\sbe\s)(?<!never\sbe\s)(?<!longer\sbe\s)\bpermitted\b",
+        "limit": r"\b(?:at least|at most|no more than|no less than|up to|within|maximum|minimum|only|limited\s+to)\b",
         # a quantity: a number with a currency, a percentage or a unit (a bare year, page or section number is not one)
         "number": r"(?:[$€£]\s?|\b(?:EUR|USD|GBP)\s?)\d+(?:[.,]\d+)*"
                   r"|\b\d+(?:[.,]\d+)*(?:\s?(?:%|[$€£])|\s?(?:EUR|USD|GBP|" + _UNITS[3:-1] + r")\b)"
@@ -156,7 +162,9 @@ def segment_sentences(text: str, seg: Segment, src_id: str) -> list[Sentence]:
                 if not piece:
                     continue
                 e = s + len(piece)
-                c = cues(piece) | inherited if is_item else cues(piece)
+                c = cues(piece)
+                if is_item and c.isdisjoint(_MODAL):
+                    c = c | inherited  # an item with a modal of its own keeps only that one
                 result.append(Sentence(f"{src_id}#{seg.id}", len(result), s, e, piece, c))
         if not is_item and text[bs:be].rstrip().endswith(":"):
             inherited = frozenset(result[-1].cues & set(_MODAL))

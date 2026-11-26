@@ -190,7 +190,9 @@ def test_clause_units():
 def test_clause_units_slice_exactly():
     n, out = _units("The service must retry three times; it must email the owner, and refunds above $500 require approval.\n"
                     "- Admins can remove seats, or users must ask.\n")
-    assert len(out) >= 4
+    assert [s.text for s in out] == [
+        "The service must retry three times", "it must email the owner", "refunds above $500 require approval.",
+        "- Admins can remove seats", "users must ask."]
     for s in out:
         assert n.text[s.start : s.end] == s.text
 
@@ -204,3 +206,51 @@ def test_list_items_inherit_lead_in_cue():
 def test_more_abbreviations():
     _, out = _units("Dr. Smith approves. Acme Inc. pays.\n")
     assert [s.text for s in out] == ["Dr. Smith approves.", "Acme Inc. pays."]
+
+
+def test_contractions_are_must_not():
+    for t in ("Users can't export.", "Users can\u2019t export.", "Users won't export.", "Users won\u2019t export."):
+        assert cues(t) == {"must_not"}, t
+
+
+def test_negated_permitted_is_only_must_not():
+    for t in ("Exports shall not be permitted.", "Exports are never permitted.", "Exports are no longer permitted.",
+              "Exports will not be permitted.", "Exports are not permitted."):
+        assert cues(t) == {"must_not"}, t
+    assert cues("Exports are permitted.") == {"may"}
+
+
+def test_capitalised_will_needs_a_lowercase_follower():
+    assert "must" not in cues("Will Smith approves.")
+    assert "must" in cues("Will be issued on the 1st.")
+    assert "must" in cues("Invoices will be issued.")
+
+
+def test_subject_exclusion_survives_a_line_wrap():
+    assert cues("You\nwill see it.") == set()
+    assert cues("You\ncan find it.") == set()
+
+
+def test_more_rule_phrases_and_count_units():
+    assert {"must", "limit", "number"} <= cues("Exports are limited to 10,000 rows.")
+    assert "must" in cues("Admins are expected to review.")
+    assert "must" in cues("Customers are entitled to a refund.")
+    assert "may" in cues("Admins are allowed to remove seats.")
+    assert cues("Admins are not allowed to remove seats.") == {"must_not"}
+    for t in ("Keep 5 items.", "Store 100 records.", "Use 20 characters.", "Send 3 invoices.", "Try 3 attempts."):
+        assert "number" in cues(t), t
+
+
+def test_accepted_third_person_false_positives():
+    # Intended trade-off: a missed rule costs wrong ground truth; a false positive costs one judge item that is
+    # dismissed later in a batch. Only you/we/this document/section/guide/page are excluded as subjects.
+    assert "may" in cues("The tool can parse YAML files.")
+    assert "must" in cues("The parser will read the file.")
+    assert "must" in cues("The tool ensures a stable order.")
+
+
+def test_item_with_own_modal_does_not_also_inherit():
+    _, out = _units("The system must:\n- never delete logs, it must not retry\n- keep logs\n")
+    items = [s for s in out if s.text.startswith("- ")]
+    assert items[0].cues >= {"must_not"} and "must" not in items[0].cues
+    assert items[1].cues == {"must"}
