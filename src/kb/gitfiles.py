@@ -247,20 +247,32 @@ def read_tree_files(root: Path, ref: str, prefix: str) -> dict[str, bytes]:
     return dict(zip((p for p, _ in entries), _cat_file_batch(root, [o for _, o in entries]), strict=True))
 
 
-def file_at(root: Path, ref: str, path: str) -> bytes | None:
-    """The bytes of `path` at `ref` (a symlink entry gives its target), or None when it is not in that tree. A path that
-    exists there as anything else (a submodule, a directory) is a GitError: callers read policy files this way, and
-    must fail closed rather than treat it as absent."""
-    out = _git(root, "ls-tree", "-z", ref, "--", path).stdout
-    for entry in _split(out):
+def _entry_at(root: Path, ref: str, path: str) -> tuple[str, str] | None:
+    """(type, object id) of the exact `path` at `ref`, or None when it is not in that tree."""
+    for entry in _split(_git(root, "ls-tree", "-z", ref, "--", path).stdout):
         meta, _, found = entry.partition("\t")
-        if found != path:
-            continue
-        _mode, kind, oid = meta.split(" ")
-        if kind != "blob":
-            raise GitError(f"{path} at {ref} is not a file")
-        return _cat_file_batch(root, [oid])[0]
+        if found == path:
+            _mode, kind, oid = meta.split(" ")
+            return kind, oid
     return None
+
+
+def file_at(root: Path, ref: str, path: str) -> bytes | None:
+    """The bytes of `path` at `ref` (a symlink entry gives its target), or None when it is not a file in that tree
+    (absent, or a submodule or directory)."""
+    entry = _entry_at(root, ref, path)
+    return _cat_file_batch(root, [entry[1]])[0] if entry and entry[0] == "blob" else None
+
+
+def policy_file_at(root: Path, ref: str, path: str) -> bytes | None:
+    """file_at for files that decide policy (kb.config.yaml, CODEOWNERS, the gate's files): a path that exists at `ref`
+    as a submodule or directory is a GitError, so the caller fails closed instead of treating it as absent."""
+    entry = _entry_at(root, ref, path)
+    if entry is None:
+        return None
+    if entry[0] != "blob":
+        raise GitError(f"{path} at {ref} is not a file")
+    return _cat_file_batch(root, [entry[1]])[0]
 
 
 def tree_symlinks(root: Path, ref: str, prefix: str) -> set[str]:

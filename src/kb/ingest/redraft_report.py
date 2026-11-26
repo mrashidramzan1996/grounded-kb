@@ -7,7 +7,7 @@ from pathlib import Path
 from kb.config.load import load_config
 from kb.gates.quotes import numbers
 from kb.gates.triage import not_quoted_issue, quotes_ref, unquoted_entries
-from kb.gitfiles import GitError, file_at, require_commit, rev_parse
+from kb.gitfiles import GitError, policy_file_at, require_commit, rev_parse
 from kb.ingest.brief import recorded_base
 from kb.ingest.redraft import (
     REDRAFT_BASE,
@@ -277,7 +277,7 @@ def _flag_issues(head: KbRepo, before: KbRepo, offered: set[str]) -> list[Issue]
 
 
 def _config_issues(root: Path, ref: str) -> list[Issue]:
-    if file_at(root, ref, CONFIG) == _read(root, CONFIG):
+    if policy_file_at(root, ref, CONFIG) == _read(root, CONFIG):
         return []
     return [Issue("ingest.config_changed", f"{CONFIG} changed; a redraft does not change the config", path=CONFIG)]
 

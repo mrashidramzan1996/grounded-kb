@@ -10,7 +10,7 @@ from kb.config.codeowners import owners_for, parse_codeowners
 from kb.config.load import CONFIG
 from kb.config.schema import KbConfig
 from kb.config.validate import modules_for, resolve_owner
-from kb.gitfiles import file_at, read_tree_files_names, tree_symlinks
+from kb.gitfiles import policy_file_at, read_tree_files_names, tree_symlinks
 from kb.init.scaffold import CI_WORKFLOWS, CODEOWNERS_LOCATIONS
 from kb.issues import Issue
 from kb.ports.forge import Forge, PullRequest, Review
@@ -57,7 +57,7 @@ def codeowners_rules_at(root: Path, ref: str) -> CodeownersRules | None:
     for rel in _CODEOWNERS:
         if rel in tree_symlinks(root, ref, rel):
             continue
-        data = file_at(root, ref, rel)
+        data = policy_file_at(root, ref, rel)
         if data is not None:
             return parse_codeowners(data.decode("utf-8", errors="replace"))
     return None
@@ -104,7 +104,7 @@ def policy_files_changed(root: Path, tip: str) -> list[str]:
             data = b"\0unreadable"  # never equal to a tracked file's bytes as git stores a symlink
         if data is None and os.path.lexists(root / rel):
             data = b"\0unreadable"  # exists but too large or not a regular file: changed, not "absent"
-        if data != file_at(root, tip, rel) or rel in tree_symlinks(root, tip, rel):
+        if data != policy_file_at(root, tip, rel) or rel in tree_symlinks(root, tip, rel):
             out.append(rel)
     return out
 

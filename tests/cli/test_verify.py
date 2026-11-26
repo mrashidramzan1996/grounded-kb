@@ -298,3 +298,13 @@ def test_skip_tests_runs_no_tests_and_checks_approvals(verify_repo, tmp_path):
     assert claim["status"] == "unverified" and "tests not run (--skip-tests)" in claim["reasons"]
     assert {"code": "missing_owner_approval", "record": None} in json.loads(r.stdout)["blocking"]
     assert "broken" not in {v["status"] for v in verdicts(r.stdout).values()}
+
+
+def test_a_submodule_pointer_update_does_not_break_verify(verify_repo):
+    git(verify_repo, "update-index", "--add", "--cacheinfo", f"160000,{git(verify_repo, 'rev-parse', 'HEAD').strip()},vendor/sub")
+    git(verify_repo, "commit", "-q", "-m", "add submodule")
+    git(verify_repo, "checkout", "-q", "-b", "feature")
+    git(verify_repo, "update-index", "--cacheinfo", f"160000,{'1' * 40},vendor/sub")
+    git(verify_repo, "commit", "-q", "-m", "bump submodule")
+    r = invoke(verify_repo, "verify", "--base", "main", "--forge", "none")
+    assert r.exit_code != 2, r.output
