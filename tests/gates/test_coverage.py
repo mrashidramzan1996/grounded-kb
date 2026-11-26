@@ -173,3 +173,19 @@ def test_located_quotes_give_text_offsets():
     ev = repo.records["REQ-F-001"].evidence
     ((q, src, start, end),) = located_quotes(repo, ev)
     assert (q, src, repo.source_text(SRC)[start:end]) == (ev.quotes[0], SRC, text)
+
+
+def test_kb_written_clarifications_boilerplate_is_not_a_rule():
+    from kb.clarify import _HEADER
+
+    doc = _HEADER + "\n## Retries\n\nDecided by @alice on 2026-01-02.\n\nRetries must be three.\n"
+    plain = repo_of(doc=doc)
+    files = {}
+    for p, data in plain.raw.items():
+        files[p.replace("SRC-spec", "SRC-clarifications")] = data.replace(b"id: SRC-spec", b"id: SRC-clarifications")
+    repo = KbRepo.from_files(files)
+    assert "SRC-clarifications" in repo.sources
+    # the answer itself is still a rule; the header and the "Decided by" line are not
+    assert [s.text for s in uncovered(repo)] == ["Retries must be three."]
+    flagged = [i.message for i in gate(repo) if i.code == "sentence.uncovered"]
+    assert len(flagged) == 1 and "Retries must be three." in flagged[0]

@@ -1,5 +1,7 @@
 """Sentence-level coverage: every rule-like sentence of a stored document should be quoted by a record (0.4.0)."""
 
+import re
+
 from kb.gates.base import GateContext
 from kb.gates.quotes import located_quotes
 from kb.gates.sources import bad_segment_ids
@@ -37,10 +39,28 @@ def _overlaps(s: Sentence, start: int, end: int) -> bool:
     return max(s.start, start) < min(s.end, end)
 
 
+_DECIDED_LINE = re.compile(r"Decided by \S+ on \S+\.")
+
+
+def _clarify_boilerplate() -> set[str]:
+    """The sentences `kb clarify` writes itself: the header of docs/clarifications.md."""
+    from kb.clarify import _HEADER
+
+    return {" ".join(t.split()) for t in re.split(r"(?<=[.!?])\s+", _HEADER.partition("\n\n")[2].strip())}
+
+
+def _kb_written(src: str, s: Sentence, boilerplate: set[str]) -> bool:
+    """A sentence of the clarifications source that kb wrote (its header, a `Decided by ... on ....` line), not a person."""
+    flat = " ".join(s.text.split())
+    return src == "SRC-clarifications" and (flat in boilerplate or bool(_DECIDED_LINE.fullmatch(flat)))
+
+
 def _normative(repo: KbRepo) -> dict[str, list[Sentence]]:
     """Rule-like sentences by source; a source whose segment ids are invalid is skipped (the source gate reports it)."""
     bad = set(bad_segment_ids(repo))
-    return {src: [s for s in sentences(repo, src) if is_normative(s)] for src in sorted(set(repo.sources) - bad)}
+    boilerplate = _clarify_boilerplate()
+    return {src: [s for s in sentences(repo, src) if is_normative(s) and not _kb_written(src, s, boilerplate)]
+            for src in sorted(set(repo.sources) - bad)}
 
 
 def _uncovered(rules: dict[str, list[Sentence]], spans: dict[str, list[Span]], decided) -> list[Sentence]:
