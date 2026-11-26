@@ -1,6 +1,7 @@
 ## The rules for redrafting
 
-1. Edit only the records listed under "Records to redraft".
+1. Edit only the records listed under "Records to redraft". Where a record shows `before` and `after` text, the
+   cited sentence changed from the first to the second; redraft the record to match the `after` text.
 2. Keep every record's ID and file.
 3. Quote word for word from the current segment text below.
 3b. Keep or add the four fields when you edit a record: keep or add the four fields (`modality`, `actor`, `category`
@@ -17,7 +18,8 @@
    `supersedes: <id>`, using the next free ID.
 7. If the cited text is gone and no replacement exists, set `status: rejected` on the requirement or exclusion.
    For an ADR or INV, report it and do not draft.
-8. Update `triage.yaml` entries for segments you now cite.
+8. Update `triage.yaml` entries for segments you now cite. If a record cites a new `SRC-clarifications` segment,
+   add or update the triage entry for exactly that segment.
 9. Set `drafted_by: "agent:<your name> via kb redraft brief $version"` on what you change.
 
 ## Records to redraft

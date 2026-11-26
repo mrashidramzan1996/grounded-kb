@@ -458,3 +458,39 @@ def test_redraft_rejects_modality_mismatch(kb):
 def test_redraft_accepts_matching_fields(kb):
     r = _redrafted_with(kb, lambda y: y.replace("modality: must", "modality: should"))
     assert r.rejected == [] and r.redrafted == ["REQ-NF-001"]
+
+
+def clarified(kb):
+    """REQ-F-003 cites a clarification answer, committed; its segments have no triage entry."""
+    assert invoke(kb, "clarify", "--topic", "Price", "--text", "A seat costs 5 EUR for members.", "--by", "@alice").exit_code == 0
+    assert invoke(kb, "clarify", "--topic", "Kids", "--text", "Children enter for free on Sundays.", "--by", "@alice").exit_code == 0
+    text = req_yaml("REQ-F-003", "A seat costs 5 EUR for members.").replace("SRC-n#seg-01", "SRC-clarifications#seg-01")
+    put(kb, "kb/requirements/REQ-F-003.yaml", text)
+    commit(kb)
+
+
+def test_clarification_triage_allowed_in_redraft(kb):
+    clarified(kb)
+    redraft(kb, "REQ-NF-001")
+    tri = "kb/sources/SRC-clarifications/triage.yaml"
+    put(kb, tri, "segments:\n  seg-01: [REQ-F-003]\n")
+    r = redraft_report(kb, None)
+    assert [i for i in r.rejected if i.code == "redraft.out_of_scope"] == []
+    # a clarification segment no record cites stays out of scope, and so does another source's triage
+    put(kb, tri, "segments:\n  seg-01: [REQ-F-003]\n  seg-02: 'none: other: x'\n")
+    r = redraft_report(kb, None)
+    assert [(i.code, i.message.split(':')[0]) for i in r.rejected if i.code == "redraft.out_of_scope"] == [
+        ("redraft.out_of_scope", "SRC-clarifications#seg-02")]
+    put(kb, tri, "segments:\n  seg-01: [REQ-F-003]\n")
+    put(kb, "kb/sources/SRC-n/triage.yaml", "segments:\n  seg-01: [REQ-F-001]\n")
+    r = redraft_report(kb, None)
+    assert any(i.code == "redraft.out_of_scope" and "SRC-n#seg-01" in i.message for i in r.rejected)
+
+
+def test_segment_untriaged_cited_message_gives_next_step(kb):
+    clarified(kb)
+    redraft(kb, "REQ-NF-001")
+    r = redraft_report(kb, None)
+    msgs = [i.message for i in r.flagged if i.code == "segment.untriaged_cited" and "SRC-clarifications" in i.message]
+    assert msgs == ["SRC-clarifications#seg-01 is cited by REQ-F-003 but has no triage entry; "
+                    "add a triage entry for SRC-clarifications#seg-01 in the same redraft"]

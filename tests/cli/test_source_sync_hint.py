@@ -18,7 +18,7 @@ def test_sync_prints_hint_naming_flagged_citers(md_repo_ingested):
         "2 records cite changed text: REQ-F-002, REQ-NF-001 (vague).",
         "Before committing, run `kb redraft --changed` to redraft them.",
         "warning segment.untriaged_cited: SRC-n#seg-01 is cited by REQ-F-002, REQ-NF-001 but has no triage entry; "
-        "add one by hand",
+        "add a triage entry for SRC-n#seg-01 in the same redraft",
     ]
 
 

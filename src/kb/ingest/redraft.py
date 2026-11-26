@@ -4,13 +4,15 @@ from importlib.resources import files
 from pathlib import Path
 from string import Template
 
-from kb.gates.quotes import quote_results
+from kb.gates.quotes import located_quotes, quote_results
+from kb.gitfiles import GitError
 from kb.ingest.brief import BRIEF_VERSION, INJECTION_FLAG, _fence, _segments, next_ids
 from kb.issues import Issue
 from kb.records.lifecycle import live_ids
 from kb.records.models import QUOTED_TYPES, Decision, Exclusion, Invariant, Requirement
 from kb.records.repo import KbRepo
 from kb.sources.guard import has_injection
+from kb.sources.sentences import segment_sentences
 from kb.textfmt import inline_code
 
 REDRAFT_BRIEF = ".kb/cache/redraft/brief.md"
@@ -78,7 +80,8 @@ def untriaged_cited(repo: KbRepo, base: KbRepo, refs: set[str] | None = None) ->
         if ref in cited and (refs is None or ref in refs):
             src = ref.partition("#")[0]
             issues.append(Issue("segment.untriaged_cited",
-                                f"{ref} is cited by {', '.join(cited[ref])} but has no triage entry; add one by hand",
+                                f"{ref} is cited by {', '.join(cited[ref])} but has no triage entry; "
+                                f"add a triage entry for {ref} in the same redraft",
                                 "warning", path=f"kb/sources/{src}/triage.yaml", record=src))
     return issues
 
@@ -121,6 +124,20 @@ def check_named(repo: KbRepo, rid: str) -> None:
         raise RedraftError(f"{rid} is not live")
 
 
+def _found_text(repo: KbRepo, rid: str) -> list[tuple[str, str]]:
+    """(source ref, found quote text) of each found quote of `rid` in `repo`; empty when it is absent."""
+    rec = repo.records.get(rid)
+    if rec is None or not getattr(rec, "evidence", None):
+        return []
+    return [(q.source, repo.source_text(src)[a:b]) for q, src, a, b in located_quotes(repo, rec.evidence)]
+
+
+def moved(before: KbRepo, repo: KbRepo, rid: str) -> bool:
+    """Whether the text `rid` quotes changed since `before`: its found quote text differs, or a quote is no longer found."""
+    now = _found_text(repo, rid)
+    return now != _found_text(before, rid) or len(now) < len(repo.records[rid].evidence.quotes)  # type: ignore[union-attr]
+
+
 def select(repo: KbRepo, ids: list[str], *, flagged_: bool, changed: bool, before: KbRepo | None) -> dict[str, list[str]]:
     """id -> sorted reasons, from: "named", "flagged <flag>" per flag, "cites changed text <ref>", "quote not found <ref>".
     changed=True uses changed_segments(before, repo) when before is given plus unfound(repo).
@@ -143,7 +160,8 @@ def select(repo: KbRepo, ids: list[str], *, flagged_: bool, changed: bool, befor
         if before is not None:
             for ref in changed_segments(before, repo):
                 for rid in citing(repo, {ref}):
-                    add(rid, f"cites changed text {ref}")
+                    if moved(before, repo, rid):  # a changed segment whose quoted text is identical needs no edit
+                        add(rid, f"cites changed text {ref}")
         for rid in unfound(repo):
             for q in quote_results(repo, cited[rid].evidence)[1]:
                 add(rid, f"quote not found {q.source}")
@@ -164,14 +182,57 @@ def changed_text(before: KbRepo, repo: KbRepo) -> tuple[set[str], set[str]]:
     return cited, stored - cited
 
 
-def _record_section(repo: KbRepo, rid: str, why: list[str]) -> str:
+def _cited_sentences(repo: KbRepo, rid: str, ref: str) -> str:
+    """The sentences of segment `ref` that the found quotes of `rid` in it overlap, one per line."""
+    rec = repo.records.get(rid)
+    src, _, seg_id = ref.partition("#")
+    seg = next((s for s in repo.segments(src) if s.id == seg_id), None) if src in repo.sources else None
+    if seg is None or not getattr(rec, "evidence", None):
+        return ""
+    spans = [(a, b) for q, s_, a, b in located_quotes(repo, rec.evidence) if q.source == ref]
+    sents = segment_sentences(repo.source_text(src), seg, src)
+    return "\n".join(s.text for s in sents if any(s.start < b and s.end > a for a, b in spans))
+
+
+def _new_sentences(repo: KbRepo, before: KbRepo, ref: str) -> str:
+    """The sentences of segment `ref` that were not in it at base: where a record's quote moved to, when it is no longer found."""
+    src, _, seg_id = ref.partition("#")
+
+    def of(r: KbRepo) -> list[str]:
+        seg = next((s for s in r.segments(src) if s.id == seg_id), None) if src in r.sources else None
+        return [s.text for s in segment_sentences(r.source_text(src), seg, src)] if seg else []
+
+    old = set(of(before))
+    return "\n".join(t for t in of(repo) if t not in old)
+
+
+def _diff_blocks(repo: KbRepo, before: KbRepo, rid: str) -> list[str]:
+    """For each changed segment `rid` cites: the cited sentence(s) at base and now, as `before` and `after` fenced blocks."""
+    changed = changed_segments(before, repo)
+    quotes = repo.records[rid].evidence.quotes if repo.records[rid].evidence else []
+    lines: list[str] = []
+    for ref in sorted({q.source for q in quotes} & changed):
+        lines += [f"Quoted text changed in {ref}:", ""]
+        for label, side, none in (("before", before, "(not found at the base)"), ("after", repo, "(no new text found)")):
+            text = _cited_sentences(side, rid, ref) or (_new_sentences(repo, before, ref) if side is repo else "")
+            lines += [f"{label}:", ""]
+            if not text:
+                lines += [none, ""]
+                continue
+            fence = _fence(text)
+            lines += [*([INJECTION_FLAG] if has_injection(text) else []), f"{fence}\n{text}\n{fence}", ""]
+    return lines
+
+
+def _record_section(repo: KbRepo, rid: str, why: list[str], before: KbRepo | None = None) -> str:
     path = repo.paths[rid]
     content = repo.raw[path].decode("utf-8", errors="replace")
     lang = "markdown" if path.endswith(".md") else "yaml"
     fence = _fence(content)
     # the file holds copied quotes, so it is source text too: flagged like a segment
     flag = [INJECTION_FLAG] if has_injection(content) else []
-    lines = [f"## {rid}", "", "Reasons: " + "; ".join(why), "", f"Current file {inline_code(path)}:", "", *flag, f"{fence}{lang}\n{content}{fence}", ""]
+    diff = _diff_blocks(repo, before, rid) if before is not None and any(w.startswith("cites changed text") for w in why) else []
+    lines = [f"## {rid}", "", "Reasons: " + "; ".join(why), "", *diff, f"Current file {inline_code(path)}:", "", *flag, f"{fence}{lang}\n{content}{fence}", ""]
     quotes = repo.records[rid].evidence.quotes if repo.records[rid].evidence else []
     refs = sorted({q.source for q in quotes})
     if not refs:
@@ -201,12 +262,29 @@ def _template(name: str) -> Template:
     return Template(files("kb.ingest").joinpath("templates", name).read_text(encoding="utf-8"))
 
 
+def _base_repo(root: Path, base: str) -> KbRepo | None:
+    try:
+        return KbRepo.at_ref(root, base)
+    except (GitError, OSError, ValueError):  # an unknown base: the brief just shows no before text
+        return None
+
+
+def _unmoved(repo: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
+    """Live records citing a changed segment whose quoted text did not move, and that are not selected."""
+    ids = {rid for ref in changed_segments(before, repo) for rid in citing(repo, {ref})}
+    return sorted(rid for rid in ids - selected if not moved(before, repo, rid))
+
+
 def build_redraft_brief(root: Path, repo: KbRepo, selection: dict[str, list[str]], base: str, new: list[str] | None = None) -> str:
     """The brief for the selected records (part 1) and the segments `new` to draft from (part 2); deterministic
     for the same repo state, selection and segments."""
     parts = []
     if selection:
-        records = "\n\n".join(_record_section(repo, rid, selection[rid]) for rid in sorted(selection))
+        before = _base_repo(root, base) if any(w.startswith("cites changed text") for ws in selection.values() for w in ws) else None
+        records = "\n\n".join(_record_section(repo, rid, selection[rid], before) for rid in sorted(selection))
+        same = _unmoved(repo, before, set(selection)) if before is not None else []
+        if same:
+            records += "\n\nUnchanged quotes: " + ", ".join(same) + " (their segment changed but the quoted text did not; do not edit them)"
         parts.append(_template("redraft_records.md").substitute(version=BRIEF_VERSION, records=records))
     if new:
         parts.append(_template("redraft_new.md").substitute(

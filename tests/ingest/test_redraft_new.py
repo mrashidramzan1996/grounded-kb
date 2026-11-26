@@ -332,7 +332,7 @@ def test_shared_segment_cannot_drop_unselected_mapping(kb):
     assert redraft_report(kb, None).rejected == []
 
 
-UNTRIAGED_CITED = "SRC-n#seg-02 is cited by REQ-NF-001 but has no triage entry; add one by hand"
+UNTRIAGED_CITED = "SRC-n#seg-02 is cited by REQ-NF-001 but has no triage entry; add a triage entry for SRC-n#seg-02 in the same redraft"
 
 
 def untriaged_cited_seg02(kb) -> None:

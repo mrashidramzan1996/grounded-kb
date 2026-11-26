@@ -17,6 +17,7 @@ from kb.ingest.redraft import (
     RedraftError,
     changed_segments,
     check_named,
+    citers,
     citing,
     present,
     ref_key,
@@ -186,17 +187,18 @@ def _cited(repo: KbRepo, ids: set[str]) -> set[str]:
 
 
 def _triage_scope(head: KbRepo, before: KbRepo, src: str, path: str, at_base: set[str], at_head: set[str],
-                  fresh: set[str], selected: set[str]) -> list[Issue]:
+                  fresh: set[str], selected: set[str], clarified: set[str]) -> list[Issue]:
     """Triage entries changed since base, per segment id. An entry may change freely for an offered segment with no
     records (new, or changed and uncited). For a segment the selection cited at base, the only ids it may lose are
     selected ones (a superseded id is a selected one). For one cited only at head, ids may only be added (a
-    "none: ..." entry may become a list). Any other change is out of scope."""
+    "none: ..." entry may become a list). A segment of SRC-clarifications that a live record cites at head may change
+    freely: the answer was recorded for that record, and only the redraft can triage it. Any other change is out of scope."""
     now, then = head.triage(src), before.triage(src)
     a, b = (now.segments if now else {}), (then.segments if then else {})
     issues = []
     for seg in sorted(set(a) | set(b)):
         old, new, ref = b.get(seg), a.get(seg), f"{src}#{seg}"
-        if old == new or ref in fresh:
+        if old == new or ref in fresh or ref in clarified:
             continue
         if ref in at_base and _ids(old) - _ids(new) <= selected:
             continue
@@ -218,11 +220,12 @@ def _scope_issues(head: KbRepo, before: KbRepo, drafted: set[str], allowed: set[
     at_head, at_base = {p: r for r, p in head.id_paths}, {p: r for r, p in before.id_paths}
     # superseding and drafted records are new, so at base only the selected records cite anything
     cited_base, cited_head = _cited(before, selected), _cited(head, allowed)
+    clarified = {ref for ref in citers(head) if ref.partition("#")[0] == "SRC-clarifications"}
     issues = []
     for path in sorted(drafted):
         rid = at_head.get(path) or at_base.get(path)
         if rid is None and (m := _TRIAGE.fullmatch(path)):
-            issues.extend(_triage_scope(head, before, m.group(1), path, cited_base, cited_head, fresh, selected))
+            issues.extend(_triage_scope(head, before, m.group(1), path, cited_base, cited_head, fresh, selected, clarified))
         elif rid is None:
             issues.append(Issue("redraft.out_of_scope", f"{path} is not in this redraft; redraft only the listed records", path=path))
         elif at_base.get(path) not in selected and rid not in allowed:
