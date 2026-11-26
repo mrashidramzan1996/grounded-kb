@@ -1,4 +1,4 @@
-# Agent-driven mode demo, 0.4.0 (to be run by the user)
+# Agent-driven mode demo, 0.4.1 (to be run by the user)
 
 Status: **to be run by the user.** None of the steps below has been run against `/Users/dev/projects/acme-billing`. The
 same flow runs automatically in `tests/e2e/test_agent_mode.py`: a scripted agent sets up a docs-only repository using
@@ -11,13 +11,13 @@ In agent-driven mode you talk only to your coding agent. You type no `kb` comman
 agent runs `kb todo`, does every `do` item itself, and brings you the `ask` items, the decisions only a person can
 make. You answer them in a few words.
 
-## 0. Install 0.4.0
+## 0. Install 0.4.1
 
 ```sh
 cd /Users/dev/projects/kb
 uv build --wheel --out-dir /tmp/kb-dist
-uv tool install --force /tmp/kb-dist/grounded_kb-0.4.0-py3-none-any.whl
-kb version                      # prints 0.4.0
+uv tool install --force /tmp/kb-dist/grounded_kb-0.4.1-py3-none-any.whl
+kb version                      # prints 0.4.1
 kb todo --help                  # lists --format
 kb clarify --help               # lists --topic, --text, --by, --date
 kb eval --help                  # lists extract, judge, report, decide, sample, status
@@ -180,7 +180,7 @@ Setup (steps 1 to 4):
 
 | Check | Expected | Observed |
 | --- | --- | --- |
-| `kb version` | 0.4.0 | |
+| `kb version` | 0.4.1 | |
 | `## kb to-do` at session start | present | |
 | `kb` commands you typed after step 1 | none | |
 | Questions asked in one message, numbered, with evidence and options | yes | |

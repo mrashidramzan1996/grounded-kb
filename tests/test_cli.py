@@ -103,6 +103,10 @@ def test_readme_covers_the_evaluation_and_the_040_upgrade():
                  "kb-policy", "teams.<name>.members", "unreadable_teams: defer"):
         assert text in upgrade, text
     assert f"grounded-kb=={__version__}" in readme and f"grounded-kb@v{__version__}" in readme
+    new = readme.split("## Upgrading to 0.4.1\n", 1)[1].split("\n## ", 1)[0]
+    for text in ("requirement.statement_modality_mismatch", "requirement.number_mismatch", "requirement.actor_not_in_quote",
+                 "record.duplicate_quote", "kb flag keep", "Unchanged quotes", "cat-file --batch", "coverage may now flag more"):
+        assert text in " ".join(new.split()), text
     kb_readme = (root / "src/kb/init/templates/kb_readme.md").read_text()
     assert "## Evaluating the extraction\n" in kb_readme and "eval.decisions_invalid" in kb_readme
     for cmd in ("kb eval extract", "kb eval judge", "kb eval report --write", "kb eval decide", "kb eval status",

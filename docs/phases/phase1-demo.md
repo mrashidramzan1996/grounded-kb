@@ -11,8 +11,8 @@ The sample repo is a git repository whose `docs/` holds `pricing-spec-v3.pdf`, `
 ```sh
 cd /Users/dev/projects/kb
 uv build --wheel --out-dir /tmp/kb-dist
-uv tool install --force /tmp/kb-dist/grounded_kb-0.4.0-py3-none-any.whl
-kb version                      # prints 0.4.0
+uv tool install --force /tmp/kb-dist/grounded_kb-0.4.1-py3-none-any.whl
+kb version                      # prints 0.4.1
 ```
 
 ## 1. Init

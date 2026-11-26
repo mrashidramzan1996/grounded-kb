@@ -98,11 +98,11 @@ Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Either from PyPI or f
 
 ```sh
 uv tool install grounded-kb                                                       # from PyPI
-uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.4.0'     # a pinned tag
+uv tool install 'git+https://github.com/mrashidramzan1996/grounded-kb@v0.4.1'     # a pinned tag
 kb version
 ```
 
-For CI, `kb init --install-spec 'grounded-kb==0.4.0'` (or the pinned git spec above) writes it into the workflow;
+For CI, `kb init --install-spec 'grounded-kb==0.4.1'` (or the pinned git spec above) writes it into the workflow;
 without `--install-spec` the CI job only warns.
 
 The generated GitHub setup has two workflows (`kb.yml` and `kb-claims.yml`), so the approval gate never runs pull-request code. `kb-policy` runs
@@ -170,6 +170,29 @@ teams:
 
 Set `policy.unreadable_teams: defer` to restore the old behaviour (any approval is accepted with an
 `owner_approval.deferred` warning, leaving the check to branch protection's required code-owner review).
+
+## Upgrading to 0.4.1
+
+A 0.4.0 knowledge base still passes `kb check` with warnings only. The new checks are warnings, and errors only for
+records drafted in the current ingest or redraft range.
+
+- Rule cues are wider: `will`, `can`, `mandatory`, `forbidden`, `not permitted`, `ensure`, `limited to`, `expected to`,
+  `entitled to`, `allowed to`, number words and units (`15 min`, `24/7`, `AES-256`, `10,000 rows`). `can't` and `won't`
+  count as `must_not`. A descriptive "you can..." or "this document will..." does not count; a third-person can or will
+  is accepted as rule-like on purpose. A sentence splits into clauses on `; ` and on `, and/or/but ...` when the part
+  holds its own modal, and list items inherit the cue of a lead-in that ends with a colon. So coverage may now flag more
+  sentences than before (`sentence.uncovered`), and an earlier decision on a sentence that now splits into clauses is
+  stale, so the evaluation asks again.
+- New warnings: `requirement.statement_modality_mismatch` and `requirement.number_mismatch` (errors for drafted
+  records), `requirement.actor_not_in_quote`, and `record.duplicate_quote` (the same quote on two records of the same
+  type).
+- `kb flag keep <REQ-id> --flag vague|conflicting|untestable --by <handle>` records "keep it flagged" in
+  `kb/eval/decisions.yaml`, so `kb todo` stops asking. The question returns when the record or its cited text changes.
+- Redraft briefs show before and after sentences and list only the records whose quoted sentence changed; the others
+  go on one "Unchanged quotes" line. A redraft may add triage entries (list values only) for new `SRC-clarifications`
+  segments that its own records cite. The `segment.untriaged_cited` message names the exact action.
+- Git trees are read with one `cat-file --batch` stream, so `kb todo` is faster. The policy files (`kb.config.yaml`,
+  `CODEOWNERS`) at the target tip must be regular files: a submodule or directory there stops `kb verify` with exit 2.
 
 ## Upgrading to 0.4.0
 
