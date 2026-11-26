@@ -529,3 +529,24 @@ def test_segment_untriaged_cited_message_gives_next_step(kb):
     msgs = [i.message for i in r.flagged if i.code == "segment.untriaged_cited" and "SRC-clarifications" in i.message]
     assert msgs == ["SRC-clarifications#seg-01 is cited by REQ-F-003 but has no triage entry; "
                     "add a triage entry for SRC-clarifications#seg-01 in the same redraft"]
+
+
+TERM = ("id: {id}\nname: seat\nkind: concept\ndefinition: A paid place.\nevidence:\n  quotes:\n"
+        "  - source: SRC-n#seg-01\n    text: A seat costs 5 EUR.\ndrafted_by: agent:test via kb redraft brief v1\n")
+
+
+def test_new_glossary_term_is_in_scope(kb):
+    """The redraft brief tells the agent to record terms: a NEW term file is not out of scope."""
+    redraft(kb, "REQ-NF-001")
+    put(kb, "kb/glossary/TERM-seat.yaml", TERM.format(id="TERM-seat"))
+    r = redraft_report(kb, None)
+    assert not [i for i in r.rejected if i.code == "redraft.out_of_scope"], r.rejected
+
+
+def test_editing_an_existing_glossary_term_stays_out_of_scope(kb):
+    put(kb, "kb/glossary/TERM-seat.yaml", TERM.format(id="TERM-seat"))
+    commit(kb, "term")
+    redraft(kb, "REQ-NF-001")
+    put(kb, "kb/glossary/TERM-seat.yaml", TERM.format(id="TERM-seat").replace("A paid place.", "A chair."))
+    r = redraft_report(kb, None)
+    assert ("TERM-seat", "redraft.out_of_scope") in rejected(r)

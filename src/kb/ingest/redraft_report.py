@@ -36,7 +36,7 @@ from kb.ingest.report import (
 from kb.issues import Issue, issue_key
 from kb.records.ids import ADR_ID, EXCL_ID, INV_ID, REQ_ID, SOURCE_REF
 from kb.records.lifecycle import live_ids
-from kb.records.models import QUOTED_TYPES, Decision, Invariant, Requirement
+from kb.records.models import QUOTED_TYPES, Decision, Invariant, Requirement, Term
 from kb.records.repo import KbRepo
 from kb.safepath import UnsafePath, read_regular
 from kb.textfmt import inline_code
@@ -131,6 +131,12 @@ def _superseding(head: KbRepo, before: KbRepo, selected: set[str]) -> list[str]:
         if isinstance(rec, (Decision, Invariant)) and rid not in before.records and rec.supersedes in selected
         and type(head.records.get(rec.supersedes)) is type(rec)
     )
+
+
+def _new_terms(head: KbRepo, before: KbRepo) -> set[str]:
+    """Glossary terms that exist at head and not at base: the brief tells the agent to add them. An existing term
+    stays out of scope; the term gates (quotes, name, relations) and the intent approval still apply."""
+    return {rid for rid, rec in head.records.items() if isinstance(rec, Term) and rid not in before.records}
 
 
 def _drafting(head: KbRepo, before: KbRepo, segments: set[str]) -> list[str]:
@@ -312,7 +318,7 @@ def redraft_report(root: Path, base: str | None) -> RedraftReport:
     caused = [i for i in g.caused if i not in demoted]
     rejected = (
         [i for i in mine if i.severity == "error"]
-        + _scope_issues(head, before, g.drafted, chosen | set(superseding) | set(drafting), chosen, fresh)
+        + _scope_issues(head, before, g.drafted, chosen | set(superseding) | set(drafting) | _new_terms(head, before), chosen, fresh)
         + [i for i in flags if i.severity == "error"]
         + _config_issues(root, ref)
         + [i for i in sources if i.severity == "error" and i.code != "source.secret_in_original"]
